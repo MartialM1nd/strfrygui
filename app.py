@@ -507,9 +507,7 @@ def init_db():
                 print("No users found. Please register at /register")
 
 
-@app.before_first_request
-def initialize_database():
-    init_db()
+init_db()
 
 
 if __name__ == '__main__':
