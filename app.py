@@ -60,14 +60,42 @@ class UserEditForm(FlaskForm):
     is_active = SelectField('Active', choices=[('true', 'Yes'), ('false', 'No')], validators=[DataRequired()])
 
 
-class FilterForm(FlaskForm):
-    filter_json = TextAreaField('Nostr Filter (JSON)', validators=[DataRequired()])
-    limit = IntegerField('Limit', validators=[DataRequired()], default=100)
-
-
 class DeleteForm(FlaskForm):
     filter_json = TextAreaField('Nostr Filter (JSON)', validators=[DataRequired()])
     confirm_delete = StringField('Type DELETE to confirm', validators=[DataRequired()])
+
+
+class EventSearchForm(FlaskForm):
+    search_type = SelectField('Search Type', choices=[
+        ('all', 'All Events'),
+        ('pubkey', 'By Pubkey'),
+        ('kind', 'By Kind'),
+        ('timerange', 'By Time Range'),
+        ('tag', 'By Tag'),
+        ('advanced', 'Advanced (JSON)')
+    ])
+    pubkey = StringField('Pubkey', validators=[Optional()])
+    kind = SelectField('Kind', choices=[
+        ('', 'Select Kind...'),
+        ('0', 'Metadata (kind 0)'),
+        ('1', 'Text Note (kind 1)'),
+        ('2', 'Recommend Relay (kind 2)'),
+        ('3', 'Contacts (kind 3)'),
+        ('4', 'Encrypted DM (kind 4)'),
+        ('5', 'Event Deletion (kind 5)'),
+        ('6', 'Repost (kind 6)'),
+        ('7', 'Reaction (kind 7)'),
+        ('10000', 'Mute List (kind 10000)'),
+        ('10001', 'Pin List (kind 10001)'),
+        ('30000', 'NIP-51 Mute List'),
+        ('30001', 'NIP-51 Pin List'),
+    ], validators=[Optional()])
+    since = StringField('Since (Unix timestamp)', validators=[Optional()])
+    until = StringField('Until (Unix timestamp)', validators=[Optional()])
+    tag_name = StringField('Tag Name (e.g., p, e)', validators=[Optional()])
+    tag_value = StringField('Tag Value', validators=[Optional()])
+    filter_json = TextAreaField('Custom Filter (JSON)', validators=[Optional()])
+    limit = IntegerField('Limit', default=25)
 
 
 class ExportForm(FlaskForm):
@@ -198,18 +226,68 @@ def register():
 @app.route('/events', methods=['GET', 'POST'])
 @moderator_required
 def events():
-    form = FilterForm()
+    form = EventSearchForm()
     events_list = []
     error = None
+    current_filter = {}
     
-    if request.method == 'POST' and form.validate_on_submit():
-        try:
-            filter_obj = validate_filter_json(form.filter_json.data)
-            events_list = scan_events(filter_obj, limit=form.limit.data)
-        except (ValueError, StrfryError) as e:
-            error = str(e)
+    if request.method == 'POST':
+        if 'search' in request.form and form.validate():
+            try:
+                current_filter = build_filter_from_form(form)
+                events_list = scan_events(current_filter, limit=form.limit.data or 25)
+            except (ValueError, StrfryError) as e:
+                error = str(e)
+        elif 'delete_selected' in request.form:
+            event_ids = request.form.getlist('event_ids')
+            if event_ids:
+                try:
+                    id_filter = {'ids': event_ids}
+                    delete_events(id_filter)
+                    flash(f'Deleted {len(event_ids)} event(s) successfully', 'success')
+                    log_audit('event_delete', f'Deleted {len(event_ids)} events via UI')
+                    if form.validate():
+                        try:
+                            current_filter = build_filter_from_form(form)
+                            events_list = scan_events(current_filter, limit=form.limit.data or 25)
+                        except:
+                            pass
+                except (ValueError, StrfryError) as e:
+                    error = str(e)
     
-    return render_template('events.html', form=form, events=events_list, error=error)
+    return render_template('events.html', form=form, events=events_list, error=error, current_filter=current_filter)
+
+
+def build_filter_from_form(form):
+    filter_obj = {}
+    
+    search_type = form.search_type.data
+    
+    if search_type == 'all':
+        pass
+    elif search_type == 'pubkey' and form.pubkey.data:
+        filter_obj['authors'] = [form.pubkey.data.strip()]
+    elif search_type == 'kind' and form.kind.data:
+        filter_obj['kinds'] = [int(form.kind.data)]
+    elif search_type == 'timerange':
+        if form.since.data:
+            try:
+                filter_obj['since'] = int(form.since.data)
+            except ValueError:
+                pass
+        if form.until.data:
+            try:
+                filter_obj['until'] = int(form.until.data)
+            except ValueError:
+                pass
+    elif search_type == 'tag' and form.tag_name.data and form.tag_value.data:
+        tag_name = form.tag_name.data.strip()
+        if tag_name:
+            filter_obj['#' + tag_name[0]] = [form.tag_value.data.strip()]
+    elif search_type == 'advanced' and form.filter_json.data:
+        return validate_filter_json(form.filter_json.data)
+    
+    return filter_obj
 
 
 @app.route('/events/delete', methods=['GET', 'POST'])
@@ -259,7 +337,7 @@ def import_export():
                     kwargs['fried'] = True
                 
                 export_data = export_events(**kwargs)
-                export_success = f'Exported events (size: {len(export_data)} bytes)'
+                export_success = f'Exported events (size: {len(export_data) if export_data else 0} bytes)'
                 log_audit('export', f'Exported events with params: {kwargs}')
             except StrfryError as e:
                 export_error = str(e)
@@ -298,7 +376,7 @@ def db_management():
     except StrfryError as e:
         negentropy_error = str(e)
     
-    negentropy_add_form = FilterForm()
+    negentropy_add_form = EventSearchForm()
     negentropy_add_form.limit.data = 0
     
     if request.method == 'POST':
