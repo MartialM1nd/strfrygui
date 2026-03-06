@@ -9,6 +9,22 @@ class StrfryError(Exception):
     pass
 
 
+def npub_to_hex(npub):
+    try:
+        import bech32
+        hrp, data = bech32.bech32_decode(npub)
+        if hrp != 'npub':
+            raise ValueError(f"Invalid npub prefix: {hrp}")
+        if not data:
+            raise ValueError("Empty npub data")
+        converted = bech32.convertbits(data, 5, 8, False)
+        if converted is None:
+            raise ValueError("Failed to convert bits")
+        return ''.join(f'{b:02x}' for b in converted)
+    except Exception as e:
+        raise ValueError(f"Invalid npub: {e}")
+
+
 def validate_filter_json(filter_str):
     try:
         obj = json.loads(filter_str)

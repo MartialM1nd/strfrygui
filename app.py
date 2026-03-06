@@ -17,7 +17,7 @@ from utils.strfry import (
     scan_events, delete_events, export_events, import_events,
     compact_database, negentropy_list, negentropy_add, negentropy_build,
     negentropy_delete, dict_list, get_config, update_config, StrfryError,
-    validate_filter_json
+    validate_filter_json, npub_to_hex
 )
 from utils.metrics import get_summary, MetricsError
 from utils.auth import admin_required, moderator_required, viewer_or_higher, permission_required
@@ -266,7 +266,12 @@ def build_filter_from_form(form):
     if search_type == 'all':
         pass
     elif search_type == 'pubkey' and form.pubkey.data:
-        filter_obj['authors'] = [form.pubkey.data.strip()]
+        pubkey_input = form.pubkey.data.strip()
+        try:
+            pubkey_hex = npub_to_hex(pubkey_input)
+        except ValueError:
+            pubkey_hex = pubkey_input
+        filter_obj['authors'] = [pubkey_hex]
     elif search_type == 'kind' and form.kind.data:
         filter_obj['kinds'] = [int(form.kind.data)]
     elif search_type == 'timerange':
