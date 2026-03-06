@@ -1,0 +1,151 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - StrfryGUI{% endblock %}
+
+{% block content %}
+<h2 class="mb-4"><i class="bi bi-speedometer2"></i> Relay Dashboard</h2>
+
+{% if metrics.error %}
+<div class="alert alert-danger">
+    <h5><i class="bi bi-exclamation-triangle"></i> Error fetching metrics</h5>
+    <p>{{ metrics.error }}</p>
+    <p class="mb-0">Make sure strfry is running and the metrics endpoint is accessible at <code>{{ config.STRFRY_METRICS_URL }}</code></p>
+</div>
+{% else %}
+<div class="row mb-4">
+    <div class="col-md-4">
+        <div class="card text-center h-100">
+            <div class="card-body">
+                <h5 class="card-title text-muted">Total Events</h5>
+                <h2 class="display-4">{{ "{:,}".format(metrics.total_events) }}</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card text-center h-100">
+            <div class="card-body">
+                <h5 class="card-title text-muted">Client Messages</h5>
+                <h2 class="display-4">{{ "{:,}".format(metrics.total_client_messages) }}</h2>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card text-center h-100">
+            <div class="card-body">
+                <h5 class="card-title text-muted">Relay Messages</h5>
+                <h2 class="display-4">{{ "{:,}".format(metrics.total_relay_messages) }}</h2>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mb-4">
+    <div class="col-md-6">
+        <div class="card h-100">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-arrow-down-circle"></i> Client Messages by Verb</h5>
+            </div>
+            <div class="card-body">
+                <table class="table table-sm">
+                    <thead>
+                        <tr>
+                            <th>Verb</th>
+                            <th class="text-end">Count</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for verb, count in metrics.client_messages_breakdown.items() %}
+                        <tr>
+                            <td><span class="badge bg-primary">{{ verb }}</span></td>
+                            <td class="text-end">{{ "{:,}".format(count) }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="card h-100">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-arrow-up-circle"></i> Relay Messages by Verb</h5>
+            </div>
+            <div class="card-body">
+                <table class="table table-sm">
+                    <thead>
+                        <tr>
+                            <th>Verb</th>
+                            <th class="text-end">Count</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for verb, count in metrics.relay_messages_breakdown.items() %}
+                        <tr>
+                            <td><span class="badge bg-success">{{ verb }}</span></td>
+                            <td class="text-end">{{ "{:,}".format(count) }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h5 class="mb-0"><i class="bi bi-pie-chart"></i> Events by Kind (Top 10)</h5>
+    </div>
+    <div class="card-body">
+        <table class="table table-striped">
+            <thead>
+                <tr>
+                    <th>Kind</th>
+                    <th>Description</th>
+                    <th class="text-end">Count</th>
+                    <th class="text-end">%</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for kind, count in metrics.top_event_kinds %}
+                <tr>
+                    <td><span class="badge bg-info">{{ kind }}</span></td>
+                    <td>
+                        {% if kind == '0' %}Metadata
+                        {% elif kind == '1' %}Text Note
+                        {% elif kind == '2' %}Recommend Relay
+                        {% elif kind == '3' %}Contacts
+                        {% elif kind == '4' %}Encrypted Direct Message
+                        {% elif kind == '5' %}Event Deletion
+                        {% elif kind == '6' %}Repost
+                        {% elif kind == '7' %}Reaction
+                        {% elif kind == '8' %}Badge Award
+                        {% elif kind == '9' %}Channel Create
+                        {% elif kind == '10' %}Channel Message
+                        {% elif kind == '11' %}Channel Hide Message
+                        {% elif kind == '12' %}Channel Mute User
+                        {% elif kind == '13' %}Channel Metadata
+                        {% elif kind == '40' %}Channel Creation
+                        {% elif kind == '41' %}Channel Metadata
+                        {% elif kind == '42' %}Channel Message
+                        {% elif kind == '1063' %}File Metadata
+                        {% elif kind == '1984' %}Reporting
+                        {% elif kind == '9735' %}Zap Request
+                        {% elif kind == '9734' %}Zap Invoice
+                        {% elif kind == '10002' %}NIP-65 Relay List
+                        {% elif kind == '30000' %}NIP-51 Mute List
+                        {% elif kind == '30001' %}NIP-51 Pin List
+                        {% elif kind == '30023' %}NIP-51 Interest List
+                        {% elif kind == '30078' %}Application-Specific Data
+                        {% else %}Unknown{% endif %}
+                    </td>
+                    <td class="text-end">{{ "{:,}".format(count) }}</td>
+                    <td class="text-end">{{ "%.2f"|format((count / metrics.total_events * 100) if metrics.total_events > 0 else 0) }}%</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+{% endblock %}

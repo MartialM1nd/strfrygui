@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+
+{% block title %}Database Management - StrfryGUI{% endblock %}
+
+{% block content %}
+<h2 class="mb-4"><i class="bi bi-database"></i> Database Management</h2>
+
+<div class="row">
+    <div class="col-md-6">
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-diagram-3"></i> Negentropy Trees</h5>
+            </div>
+            <div class="card-body">
+                {% if negentropy_error %}
+                <div class="alert alert-danger">
+                    <p>{{ negentropy_error }}</p>
+                </div>
+                {% endif %}
+                
+                {% if negentropy_success %}
+                <div class="alert alert-success">
+                    <p>{{ negentropy_success }}</p>
+                </div>
+                {% endif %}
+                
+                <h6>Current Trees</h6>
+                {% if trees %}
+                <table class="table table-sm">
+                    <thead>
+                        <tr>
+                            <th>ID</th>
+                            <th>Filter</th>
+                            <th>Size</th>
+                            <th>Fingerprint</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for tree in trees %}
+                        <tr>
+                            <td>{{ tree.id }}</td>
+                            <td><code>{{ tree.filter }}</code></td>
+                            <td>{{ tree.size }}</td>
+                            <td><code class="small">{{ tree.fingerprint }}</code></td>
+                            <td>
+                                <form method="POST" class="d-inline">
+                                    <input type="hidden" name="tree_id" value="{{ tree.id }}">
+                                    <button type="submit" name="negentropy_build" class="btn btn-sm btn-outline-primary" title="Build tree">
+                                        <i class="bi bi-arrow-repeat"></i>
+                                    </button>
+                                </form>
+                                <form method="POST" class="d-inline">
+                                    <input type="hidden" name="tree_id" value="{{ tree.id }}">
+                                    <button type="submit" name="negentropy_delete" class="btn btn-sm btn-outline-danger" title="Delete tree">
+                                        <i class="bi bi-trash"></i>
+                                    </button>
+                                </form>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+                {% else %}
+                <p class="text-muted">No negentropy trees configured.</p>
+                {% endif %}
+                
+                <hr>
+                
+                <h6>Add New Tree</h6>
+                <form method="POST">
+                    {{ negentropy_add_form.hidden_tag() }}
+                    <div class="mb-3">
+                        {{ negentropy_add_form.filter_json.label(class="form-label") }}
+                        {{ negentropy_add_form.filter_json(class="form-control font-monospace", rows="2", placeholder='{"kinds":[0]}') }}
+                    </div>
+                    <button type="submit" name="negentropy_add" class="btn btn-primary btn-sm">
+                        <i class="bi bi-plus"></i> Add Tree
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-md-6">
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-file-zip"></i> Compression Dictionaries</h5>
+            </div>
+            <div class="card-body">
+                {% if dict_error %}
+                <div class="alert alert-danger">
+                    <p>{{ dict_error }}</p>
+                </div>
+                {% endif %}
+                
+                {% if dict_output %}
+                <pre class="bg-light p-3">{{ dict_output }}</pre>
+                {% else %}
+                <p class="text-muted">No compression dictionaries found.</p>
+                {% endif %}
+            </div>
+        </div>
+        
+        <div class="card mb-4 border-warning">
+            <div class="card-header bg-warning text-dark">
+                <h5 class="mb-0"><i class="bi bi-hdd"></i> Database Compaction</h5>
+            </div>
+            <div class="card-body">
+                <p>Compaction reclaims disk space by removing fragmentation. The relay should be stopped during compaction.</p>
+                <form method="POST">
+                    <button type="submit" name="compact" class="btn btn-warning">
+                        <i class="bi bi-hdd"></i> Compact Database
+                    </button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

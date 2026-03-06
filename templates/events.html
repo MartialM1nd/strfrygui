@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+
+{% block title %}Events - StrfryGUI{% endblock %}
+
+{% block content %}
+<h2 class="mb-4"><i class="bi bi-search"></i> Event Search</h2>
+
+<div class="card mb-4">
+    <div class="card-header">
+        <h5 class="mb-0">Search Filter (NIP-01)</h5>
+    </div>
+    <div class="card-body">
+        <form method="POST">
+            {{ form.hidden_tag() }}
+            <div class="mb-3">
+                {{ form.filter_json.label(class="form-label") }}
+                {{ form.filter_json(class="form-control font-monospace", rows="4", placeholder='{"kinds":[1], "limit": 100}') }}
+                <div class="form-text">Enter a Nostr filter as JSON. Examples: <code>{"kinds":[0]}</code>, <code>{"authors":["..."]}</code>, <code>{"#p":["..."]}</code></div>
+                {% if form.filter_json.errors %}
+                    <div class="text-danger">
+                        {% for error in form.filter_json.errors %}{{ error }}{% endfor %}
+                    </div>
+                {% endif %}
+            </div>
+            <div class="row">
+                <div class="col-md-3">
+                    {{ form.limit.label(class="form-label") }}
+                    {{ form.limit(class="form-control") }}
+                </div>
+                <div class="col-md-6 d-flex align-items-end">
+                    <button type="submit" class="btn btn-primary">
+                        <i class="bi bi-search"></i> Search
+                    </button>
+                </div>
+            </div>
+        </form>
+    </div>
+</div>
+
+{% if error %}
+<div class="alert alert-danger">
+    <h5><i class="bi bi-exclamation-triangle"></i> Error</h5>
+    <p>{{ error }}</p>
+</div>
+{% endif %}
+
+{% if events %}
+<div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <h5 class="mb-0">Results ({{ events|length }} events)</h5>
+    </div>
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table table-sm table-hover">
+                <thead>
+                    <tr>
+                        <th>Kind</th>
+                        <th>Created</th>
+                        <th>Pubkey</th>
+                        <th>Tags</th>
+                        <th>Content</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for event in events %}
+                    <tr>
+                        <td><span class="badge bg-info">{{ event.get('kind', '?') }}</span></td>
+                        <td><small>{{ event.get('created_at', 0)|datetime }}</small></td>
+                        <td><code class="text-truncate d-inline-block" style="max-width: 100px;" title="{{ event.get('pubkey', '') }}">{{ event.get('pubkey', '')|truncate(16) }}</code></td>
+                        <td>
+                            {% if event.get('tags') %}
+                            <span class="badge bg-secondary">{{ event.tags|length }} tags</span>
+                            {% else %}
+                            -
+                            {% endif %}
+                        </td>
+                        <td>
+                            <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#content-{{ loop.index }}">
+                                <i class="bi bi-eye"></i> View
+                            </button>
+                        </td>
+                    </tr>
+                    <tr class="collapse" id="content-{{ loop.index }}">
+                        <td colspan="5">
+                            <div class="bg-light p-3 rounded">
+                                <strong>ID:</strong> <code>{{ event.get('id', '') }}</code><br>
+                                <strong>Pubkey:</strong> <code>{{ event.get('pubkey', '') }}</code><br>
+                                <strong>Created:</strong> {{ event.get('created_at', 0) }}<br>
+                                <strong>Kind:</strong> {{ event.get('kind', '') }}<br>
+                                <strong>Tags:</strong>
+                                <pre class="mt-2 mb-0">{{ event.get('tags', [])|tojson }}</pre>
+                                <strong>Content:</strong>
+                                <pre class="mt-2 mb-0">{{ event.get('content', '') }}</pre>
+                                <strong>Sig:</strong> <code class="text-break">{{ event.get('sig', '') }}</code>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+    document.querySelectorAll('.font-monospace').forEach(el => {
+        el.style.fontFamily = 'monospace';
+    });
+</script>
+{% endblock %}

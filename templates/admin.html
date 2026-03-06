@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+
+{% block title %}Admin - StrfryGUI{% endblock %}
+
+{% block content %}
+<h2 class="mb-4"><i class="bi bi-people"></i> User Management</h2>
+
+<div class="card mb-4">
+    <div class="card-header">
+        <h5 class="mb-0">Create New User</h5>
+    </div>
+    <div class="card-body">
+        <form method="POST" action="{{ url_for('create_user') }}">
+            <div class="row">
+                <div class="col-md-3">
+                    <input type="text" name="username" class="form-control" placeholder="Username" required>
+                </div>
+                <div class="col-md-3">
+                    <input type="password" name="password" class="form-control" placeholder="Password" required>
+                </div>
+                <div class="col-md-3">
+                    <select name="role" class="form-select">
+                        <option value="admin">Admin</option>
+                        <option value="moderator">Moderator</option>
+                        <option value="viewer" selected>Viewer</option>
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <button type="submit" class="btn btn-primary">
+                        <i class="bi bi-person-plus"></i> Create User
+                    </button>
+                </div>
+            </div>
+        </form>
+    </div>
+</div>
+
+<div class="card mb-4">
+    <div class="card-header">
+        <h5 class="mb-0">Users</h5>
+    </div>
+    <div class="card-body">
+        <table class="table">
+            <thead>
+                <tr>
+                    <th>Username</th>
+                    <th>Role</th>
+                    <th>Status</th>
+                    <th>Created</th>
+                    <th>Last Login</th>
+                    <th>Actions</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for user in users %}
+                <tr>
+                    <td>
+                        <strong>{{ user.username }}</strong>
+                        {% if user.id == current_user.id %}
+                        <span class="badge bg-info ms-1">You</span>
+                        {% endif %}
+                    </td>
+                    <td>
+                        <span class="badge bg-{% if user.role == 'admin' %}danger{% elif user.role == 'moderator' %}warning{% else %}secondary{% endif %}">
+                            {{ user.role }}
+                        </span>
+                    </td>
+                    <td>
+                        {% if user.is_active %}
+                        <span class="badge bg-success">Active</span>
+                        {% else %}
+                        <span class="badge bg-secondary">Inactive</span>
+                        {% endif %}
+                    </td>
+                    <td>{{ user.created_at.strftime('%Y-%m-%d %H:%M') if user.created_at else '-' }}</td>
+                    <td>{{ user.last_login.strftime('%Y-%m-%d %H:%M') if user.last_login else 'Never' }}</td>
+                    <td>
+                        <form method="POST" action="{{ url_for('edit_user', user_id=user.id) }}" class="d-inline">
+                            <input type="hidden" name="username" value="{{ user.username }}">
+                            <select name="role" class="form-select form-select-sm d-inline-block" style="width: auto;">
+                                <option value="admin" {% if user.role == 'admin' %}selected{% endif %}>Admin</option>
+                                <option value="moderator" {% if user.role == 'moderator' %}selected{% endif %}>Moderator</option>
+                                <option value="viewer" {% if user.role == 'viewer' %}selected{% endif %}>Viewer</option>
+                            </select>
+                            <select name="is_active" class="form-select form-select-sm d-inline-block" style="width: auto;">
+                                <option value="true" {% if user.is_active %}selected{% endif %}>Active</option>
+                                <option value="false" {% if not user.is_active %}selected{% endif %}>Inactive</option>
+                            </select>
+                            <button type="submit" class="btn btn-sm btn-outline-primary">
+                                <i class="bi bi-check"></i>
+                            </button>
+                        </form>
+                        {% if user.id != current_user.id %}
+                        <form method="POST" action="{{ url_for('delete_user', user_id=user.id) }}" class="d-inline">
+                            <button type="submit" class="btn btn-sm btn-outline-danger" onclick="return confirm('Are you sure?')">
+                                <i class="bi bi-trash"></i>
+                            </button>
+                        </form>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h5 class="mb-0">Audit Log</h5>
+    </div>
+    <div class="card-body">
+        <table class="table table-sm">
+            <thead>
+                <tr>
+                    <th>Time</th>
+                    <th>User</th>
+                    <th>Action</th>
+                    <th>Details</th>
+                    <th>IP Address</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for log in audit_logs %}
+                <tr>
+                    <td><small>{{ log.timestamp.strftime('%Y-%m-%d %H:%M:%S') if log.timestamp else '-' }}</small></td>
+                    <td><small>{{ log.user.username if log.user else 'system' }}</small></td>
+                    <td><span class="badge bg-{% if 'login' in log.action %}success{% elif 'delete' in log.action or 'remove' in log.action %}danger{% elif 'create' in log.action or 'add' in log.action %}primary{% else %}secondary{% endif %}"><small>{{ log.action }}</small></span></td>
+                    <td><small>{{ log.details|truncate(50) if log.details else '-' }}</small></td>
+                    <td><small><code>{{ log.ip_address if log.ip_address else '-' }}</code></small></td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endblock %}

@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+
+{% block title %}Connections - StrfryGUI{% endblock %}
+
+{% block content %}
+<h2 class="mb-4"><i class="bi bi-hdd-network"></i> Connections & Status</h2>
+
+{% if metrics.error %}
+<div class="alert alert-danger">
+    <h5><i class="bi bi-exclamation-triangle"></i> Error</h5>
+    <p>{{ metrics.error }}</p>
+</div>
+{% else %}
+<div class="row mb-4">
+    <div class="col-md-12">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0">Real-time Metrics</h5>
+            </div>
+            <div class="card-body">
+                <p class="text-muted">
+                    <i class="bi bi-info-circle"></i> 
+                    Metrics are fetched from <code>{{ config.STRFRY_METRICS_URL }}</code>.
+                    These values are cumulative since the last strfry restart.
+                </p>
+                <div class="row text-center">
+                    <div class="col-md-4">
+                        <div class="p-3">
+                            <h3 class="text-primary">{{ "{:,}".format(metrics.total_events) }}</h3>
+                            <p class="text-muted mb-0">Total Events</p>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="p-3">
+                            <h3 class="text-success">{{ "{:,}".format(metrics.total_client_messages) }}</h3>
+                            <p class="text-muted mb-0">Client Messages</p>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="p-3">
+                            <h3 class="text-info">{{ "{:,}".format(metrics.total_relay_messages) }}</h3>
+                            <p class="text-muted mb-0">Relay Messages</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-md-6">
+        <div class="card h-100">
+            <div class="card-header">
+                <h5 class="mb-0">Incoming Messages (Clients)</h5>
+            </div>
+            <div class="card-body">
+                <table class="table table-sm">
+                    <thead>
+                        <tr>
+                            <th>Message Type</th>
+                            <th class="text-end">Count</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for verb, count in metrics.client_messages_breakdown.items() %}
+                        <tr>
+                            <td><span class="badge bg-primary">{{ verb }}</span></td>
+                            <td class="text-end">{{ "{:,}".format(count) }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="card h-100">
+            <div class="card-header">
+                <h5 class="mb-0">Outgoing Messages (To Clients)</h5>
+            </div>
+            <div class="card-body">
+                <table class="table table-sm">
+                    <thead>
+                        <tr>
+                            <th>Message Type</th>
+                            <th class="text-end">Count</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for verb, count in metrics.relay_messages_breakdown.items() %}
+                        <tr>
+                            <td><span class="badge bg-success">{{ verb }}</span></td>
+                            <td class="text-end">{{ "{:,}".format(count) }}</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card mt-4">
+    <div class="card-header">
+        <h5 class="mb-0">NIP-11 Relay Info</h5>
+    </div>
+    <div class="card-body">
+        <p>For detailed relay information, clients can request NIP-11 from the relay directly:</p>
+        <code>wss://relay.nostr.place/.well-known/nostr.json</code>
+    </div>
+</div>
+{% endif %}
+{% endblock %}

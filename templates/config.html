@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+
+{% block title %}Configuration - StrfryGUI{% endblock %}
+
+{% block content %}
+<h2 class="mb-4"><i class="bi bi-gear"></i> Relay Configuration</h2>
+
+{% if error %}
+<div class="alert alert-danger">
+    <h5>Error</h5>
+    <p>{{ error }}</p>
+</div>
+{% endif %}
+
+{% if success %}
+<div class="alert alert-success">
+    <h5>Success</h5>
+    <p>{{ success }}</p>
+</div>
+{% endif %}
+
+<div class="card mb-4">
+    <div class="card-header">
+        <h5 class="mb-0">Relay Info (NIP-11)</h5>
+    </div>
+    <div class="card-body">
+        <form method="POST">
+            {{ form.hidden_tag() }}
+            <div class="row">
+                <div class="col-md-6 mb-3">
+                    {{ form.relay_name.label(class="form-label") }}
+                    {{ form.relay_name(class="form-control", placeholder="My Nostr Relay") }}
+                </div>
+                <div class="col-md-6 mb-3">
+                    {{ form.relay_description.label(class="form-label") }}
+                    {{ form.relay_description(class="form-control", placeholder="A nostr relay") }}
+                </div>
+            </div>
+            <div class="row">
+                <div class="col-md-6 mb-3">
+                    {{ form.relay_pubkey.label(class="form-label") }}
+                    {{ form.relay_pubkey(class="form-control", placeholder="npub...") }}
+                </div>
+                <div class="col-md-6 mb-3">
+                    {{ form.relay_contact.label(class="form-label") }}
+                    {{ form.relay_contact(class="form-control", placeholder="mailto:admin@example.com") }}
+                </div>
+            </div>
+            <button type="submit" class="btn btn-primary">
+                <i class="bi bi-save"></i> Save Changes
+            </button>
+        </form>
+    </div>
+</div>
+
+<div class="card mb-4">
+    <div class="card-header">
+        <h5 class="mb-0">Network Settings</h5>
+    </div>
+    <div class="card-body">
+        <form method="POST">
+            {{ form.hidden_tag() }}
+            <div class="row">
+                <div class="col-md-6 mb-3">
+                    {{ form.relay_bind.label(class="form-label") }}
+                    {{ form.relay_bind(class="form-control", placeholder="0.0.0.0") }}
+                    <div class="form-text">Use 0.0.0.0 for external connections, 127.0.0.1 for localhost only</div>
+                </div>
+                <div class="col-md-6 mb-3">
+                    {{ form.relay_port.label(class="form-label") }}
+                    {{ form.relay_port(class="form-control", placeholder="7777") }}
+                </div>
+            </div>
+            <button type="submit" class="btn btn-primary">
+                <i class="bi bi-save"></i> Save Changes
+            </button>
+        </form>
+    </div>
+</div>
+
+{% if current_config %}
+<div class="card">
+    <div class="card-header">
+        <h5 class="mb-0">Current Configuration</h5>
+    </div>
+    <div class="card-body">
+        <pre class="bg-light p-3">{{ current_config }}</pre>
+    </div>
+</div>
+{% endif %}
+{% endblock %}

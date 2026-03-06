@@ -1,0 +1,113 @@
+{% extends "base.html" %}
+
+{% block title %}Import/Export - StrfryGUI{% endblock %}
+
+{% block content %}
+<h2 class="mb-4"><i class="bi bi-upload-download"></i> Import / Export</h2>
+
+<div class="row">
+    <div class="col-md-6">
+        <div class="card mb-4">
+            <div class="card-header bg-success text-white">
+                <h5 class="mb-0"><i class="bi bi-download"></i> Export Events</h5>
+            </div>
+            <div class="card-body">
+                <form method="POST">
+                    {{ export_form.hidden_tag() }}
+                    <div class="mb-3">
+                        {{ export_form.since.label(class="form-label") }}
+                        {{ export_form.since(class="form-control", placeholder="Unix timestamp (optional)") }}
+                    </div>
+                    <div class="mb-3">
+                        {{ export_form.until.label(class="form-label") }}
+                        {{ export_form.until(class="form-control", placeholder="Unix timestamp (optional)") }}
+                    </div>
+                    <div class="mb-3">
+                        {{ export_form.reverse.label(class="form-label") }}
+                        {{ export_form.reverse(class="form-select") }}
+                    </div>
+                    <div class="mb-3">
+                        {{ export_form.fried.label(class="form-label") }}
+                        {{ export_form.fried(class="form-select") }}
+                        <div class="form-text">Fried exports include precomputed data for faster re-import.</div>
+                    </div>
+                    <button type="submit" name="export_submit" class="btn btn-success">
+                        <i class="bi bi-download"></i> Export
+                    </button>
+                </form>
+                
+                {% if export_error %}
+                <div class="alert alert-danger mt-3">
+                    <h5>Error:</h5>
+                    <p>{{ export_error }}</p>
+                </div>
+                {% endif %}
+                
+                {% if export_success %}
+                <div class="alert alert-success mt-3">
+                    <h5>Success:</h5>
+                    <p>{{ export_success }}</p>
+                </div>
+                {% endif %}
+                
+                {% if export_data %}
+                <div class="mt-3">
+                    <label class="form-label">Export Data (copy or download):</label>
+                    <textarea class="form-control font-monospace" rows="10" readonly>{{ export_data[:10000] }}{% if export_data|length > 10000 %}... (truncated, {{ export_data|length }} bytes total){% endif %}</textarea>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+    
+    <div class="col-md-6">
+        <div class="card mb-4">
+            <div class="card-header bg-primary text-white">
+                <h5 class="mb-0"><i class="bi bi-upload"></i> Import Events</h5>
+            </div>
+            <div class="card-body">
+                <form method="POST">
+                    {{ import_form.hidden_tag() }}
+                    <div class="mb-3">
+                        {{ import_form.file.label(class="form-label") }}
+                        {{ import_form.file(class="form-control font-monospace", rows="10", placeholder='{"id":"...","pubkey":"...","created_at":...,"kind":1,"tags":[],"content":"Hello","sig":"..."}') }}
+                        <div class="form-text">Paste JSONL data (one JSON object per line)</div>
+                    </div>
+                    <div class="mb-3">
+                        {{ import_form.no_verify.label(class="form-label") }}
+                        {{ import_form.no_verify(class="form-select") }}
+                    </div>
+                    <button type="submit" name="import_submit" class="btn btn-primary">
+                        <i class="bi bi-upload"></i> Import
+                    </button>
+                </form>
+                
+                {% if import_error %}
+                <div class="alert alert-danger mt-3">
+                    <h5>Error:</h5>
+                    <p>{{ import_error }}</p>
+                </div>
+                {% endif %}
+                
+                {% if import_success %}
+                <div class="alert alert-success mt-3">
+                    <h5>Success:</h5>
+                    <p>{{ import_success }}</p>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h5 class="mb-0">JSONL Format</h5>
+    </div>
+    <div class="card-body">
+        <p>Events should be in JSONL format (one JSON object per line):</p>
+        <pre class="bg-light p-3">{"id":"abc123","pubkey":"def456","created_at":1699999999,"kind":1,"tags":[],"content":"Hello world","sig":"signature"}
+{"id":"xyz789","pubkey":"uvw012","created_at":1700000000,"kind":1,"tags":[],"content":"Another note","sig":"signature"}</pre>
+    </div>
+</div>
+{% endblock %}
