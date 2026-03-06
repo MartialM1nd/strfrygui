@@ -8,7 +8,11 @@ class MetricsError(Exception):
 
 def fetch_metrics():
     try:
-        response = requests.get(Config.STRFRY_METRICS_URL, timeout=5)
+        response = requests.get(
+            Config.STRFRY_METRICS_URL,
+            timeout=5,
+            headers={"Accept": "text/plain"}
+        )
         response.raise_for_status()
         return response.text
     except requests.RequestException as e:
