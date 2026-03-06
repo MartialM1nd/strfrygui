@@ -48,8 +48,9 @@ def run_strfry_command(args, input_data=None, capture_output=True):
 
 
 def scan_events(filter_json, limit=100):
-    filter_str = json.dumps(filter_json)
-    cmd = ['scan', '--limit', str(limit), filter_str]
+    filter_with_limit = {**filter_json, 'limit': limit}
+    filter_str = json.dumps(filter_with_limit)
+    cmd = ['scan', filter_str]
     output = run_strfry_command(cmd)
     
     events = []
@@ -66,7 +67,7 @@ def scan_events(filter_json, limit=100):
 
 def count_events(filter_json):
     filter_str = json.dumps(filter_json)
-    cmd = ['scan', '--limit', '0', filter_str]
+    cmd = ['scan', filter_str]
     output = run_strfry_command(cmd)
     
     count = 0
