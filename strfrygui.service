@@ -8,8 +8,6 @@ User=www-data
 Group=www-data
 WorkingDirectory=/opt/strfrygui
 Environment="PATH=/opt/strfrygui/venv/bin:/usr/local/bin:/usr/bin:/bin"
-Environment="STRFRY_BINARY=/usr/local/bin/strfry"
-Environment="STRFRY_CONFIG=/etc/strfry.conf"
 ExecStart=/opt/strfrygui/venv/bin/python -m flask run --host=127.0.0.1 --port=5000
 Restart=always
 RestartSec=10
