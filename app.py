@@ -96,6 +96,17 @@ def inject_user():
     return dict(User=User)
 
 
+@app.template_filter('datetime')
+def datetime_filter(ts):
+    from datetime import datetime
+    if not ts:
+        return ''
+    try:
+        return datetime.fromtimestamp(ts).strftime('%Y-%m-%d %H:%M:%S')
+    except:
+        return str(ts)
+
+
 def log_audit(action, details=None):
     if current_user.is_authenticated:
         log = AuditLog(
