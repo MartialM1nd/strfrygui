@@ -48,26 +48,29 @@ A web-based management portal for [strfry](https://github.com/hoytech/strfry), a
 
 ## Installation
 
-1. **Clone the repository:**
+The app installs to `/opt/strfrygui` and runs as the `www-data` user.
+
+1. **Clone and install to /opt/:**
    ```bash
-   git clone https://github.com/MartialM1nd/strfrygui.git
-   cd strfrygui
+   sudo git clone https://github.com/MartialM1nd/strfrygui.git /opt/strfrygui
+   cd /opt/strfrygui
    ```
 
-2. **Install dependencies:**
+2. **Create virtual environment:**
    ```bash
-   pip install -r requirements.txt
+   sudo python3 -m venv venv
+   sudo ./venv/bin/pip install -r requirements.txt
    ```
 
-3. **Configure environment:**
+3. **Copy and edit configuration:**
    ```bash
-   cp .env.example .env
-   # Edit .env with your strfry paths
+   sudo cp .env.example .env
+   sudo nano .env  # Edit SECRET_KEY at minimum
    ```
 
-4. **Get SSL certificate:**
+4. **Edit nginx.conf with your domain:**
    ```bash
-   sudo certbot certonly --standalone -d strfrygui.your-domain.com
+   sudo nano nginx.conf  # Replace YOUR_DOMAIN.COM with your actual domain
    ```
 
 5. **Configure nginx:**
@@ -77,29 +80,53 @@ A web-based management portal for [strfry](https://github.com/hoytech/strfry), a
    sudo nginx -t && sudo systemctl reload nginx
    ```
 
-6. **Install systemd service:**
+6. **Get SSL certificate:**
+   ```bash
+   sudo certbot certonly --standalone -d strfrygui.YOUR_DOMAIN.COM
+   ```
+
+7. **Set permissions:**
+   ```bash
+   sudo chown -R www-data:www-data /opt/strfrygui
+   ```
+
+8. **Install systemd service:**
    ```bash
    sudo cp strfrygui.service /etc/systemd/system/
    sudo systemctl daemon-reload
+   sudo systemctl enable strfrygui
    sudo systemctl start strfrygui
    ```
 
-7. **First-time setup:**
-   - Visit `https://strfrygui.your-domain.com`
+9. **First-time setup:**
+   - Visit `https://strfrygui.YOUR_DOMAIN.COM`
    - Register the first admin user at `/register`
    - Create additional users as needed
 
 ## Configuration
 
-Edit the `.env` file with your settings:
+Edit `/opt/strfrygui/.env` with your settings:
 
 ```env
-SECRET_KEY=your-random-secret-key
+SECRET_KEY=change-this-to-a-random-secret-key
+DATABASE_URL=sqlite:////opt/strfrygui/strfrygui.db
 STRFRY_BINARY=/usr/local/bin/strfry
 STRFRY_CONFIG=/etc/strfry.conf
 STRFRY_DB_PATH=/var/lib/strfry
 STRFRY_METRICS_URL=http://localhost:7777/metrics
 ```
+
+Generate a secure SECRET_KEY:
+```bash
+python3 -c "import secrets; print(secrets.token_hex(32))"
+```
+
+## Files You Must Edit After Cloning
+
+| File | What to change |
+|------|----------------|
+| `.env` | `SECRET_KEY` (required), database path if desired |
+| `nginx.conf` | `strfrygui.YOUR_DOMAIN.COM`, SSL certificate paths |
 
 ## User Roles
 
@@ -113,8 +140,25 @@ STRFRY_METRICS_URL=http://localhost:7777/metrics
 
 Run in development mode:
 ```bash
+cd /opt/strfrygui
+source venv/bin/activate
 flask run --debug
 ```
+
+## Troubleshooting
+
+**Service won't start:**
+```bash
+sudo systemctl status strfrygui
+sudo journalctl -u strfrygui -n 50
+```
+
+**Can't connect:**
+- Check nginx is running: `sudo systemctl status nginx`
+- Check firewall: `sudo ufw status`
+
+**Database issues:**
+- Delete `/opt/strfrygui/strfrygui.db` and restart to reset users
 
 ## License
 
