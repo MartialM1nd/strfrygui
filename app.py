@@ -91,6 +91,11 @@ class ConfigForm(FlaskForm):
     relay_port = StringField('Port', validators=[Optional()])
 
 
+@app.context_processor
+def inject_user():
+    return dict(User=User)
+
+
 def log_audit(action, details=None):
     if current_user.is_authenticated:
         log = AuditLog(
@@ -490,14 +495,22 @@ def internal_error(error):
     return render_template('error.html', error='500 - Internal Server Error'), 500
 
 
+_db_initialized = False
+
 def init_db():
-    with app.app_context():
-        db.create_all()
-        
-        if User.query.count() == 0:
-            print("No users found. Please register at /register")
+    global _db_initialized
+    if not _db_initialized:
+        with app.app_context():
+            db.create_all()
+            _db_initialized = True
+            if User.query.count() == 0:
+                print("No users found. Please register at /register")
+
+
+@app.before_first_request
+def initialize_database():
+    init_db()
 
 
 if __name__ == '__main__':
-    init_db()
     app.run(host='127.0.0.1', port=5000, debug=False)
