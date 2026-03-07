@@ -10,8 +10,9 @@ A web-based management portal for [strfry](https://github.com/hoytech/strfry), a
 
 ## Features
 
-- **Real-time Metrics Dashboard** - View Prometheus metrics including events by kind, client/relay message counts
-- **Event Management** - Combined search and delete UI with dropdown selectors for pubkey, kind, time range, tag, or advanced filters
+- **Real-time Metrics Dashboard** - Live line charts showing events, client messages, and relay message rates with 5-second auto-refresh
+- **Event Management** - Combined search and delete UI with dropdown selectors for pubkey (supports npub), kind, time range, tag, or advanced filters
+- **Dark Mode** - Toggle between light and dark themes, with automatic system preference detection
 - **Data Import/Export** - Import and export events in JSONL format, with fried export support for faster re-imports
 - **Negentropy Trees** - Create, build, and manage negentropy sync trees
 - **Compression Dictionaries** - View compression dictionary statistics
