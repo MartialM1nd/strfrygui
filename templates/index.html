@@ -14,26 +14,35 @@
 {% else %}
 <div class="row mb-4">
     <div class="col-md-4">
-        <div class="card text-center h-100">
+        <div class="card text-center h-100 border-primary">
             <div class="card-body">
-                <h5 class="card-title text-muted">Total Events</h5>
-                <h2 class="display-4">{{ "{:,}".format(metrics.total_events) }}</h2>
+                <div class="mb-2">
+                    <span class="badge bg-primary p-3"><i class="bi bi-lightning-event fs-4"></i></span>
+                </div>
+                <h6 class="card-title text-muted">Total Events</h6>
+                <h2 class="display-4 text-primary">{{ "{:,}".format(metrics.total_events) }}</h2>
             </div>
         </div>
     </div>
     <div class="col-md-4">
-        <div class="card text-center h-100">
+        <div class="card text-center h-100 border-success">
             <div class="card-body">
-                <h5 class="card-title text-muted">Client Messages</h5>
-                <h2 class="display-4">{{ "{:,}".format(metrics.total_client_messages) }}</h2>
+                <div class="mb-2">
+                    <span class="badge bg-success p-3"><i class="bi bi-arrow-down-circle fs-4"></i></span>
+                </div>
+                <h6 class="card-title text-muted">Client Messages</h6>
+                <h2 class="display-4 text-success">{{ "{:,}".format(metrics.total_client_messages) }}</h2>
             </div>
         </div>
     </div>
     <div class="col-md-4">
-        <div class="card text-center h-100">
+        <div class="card text-center h-100 border-warning">
             <div class="card-body">
-                <h5 class="card-title text-muted">Relay Messages</h5>
-                <h2 class="display-4">{{ "{:,}".format(metrics.total_relay_messages) }}</h2>
+                <div class="mb-2">
+                    <span class="badge bg-warning text-dark p-3"><i class="bi bi-arrow-up-circle fs-4"></i></span>
+                </div>
+                <h6 class="card-title text-muted">Relay Messages</h6>
+                <h2 class="display-4 text-warning">{{ "{:,}".format(metrics.total_relay_messages) }}</h2>
             </div>
         </div>
     </div>
@@ -42,47 +51,87 @@
 <div class="row mb-4">
     <div class="col-md-6">
         <div class="card h-100">
-            <div class="card-header">
-                <h5 class="mb-0"><i class="bi bi-arrow-down-circle"></i> Client Messages by Verb</h5>
+            <div class="card-header bg-success text-white">
+                <h5 class="mb-0"><i class="bi bi-bar-chart"></i> Client Messages by Verb</h5>
             </div>
             <div class="card-body">
-                <table class="table table-sm">
-                    <thead>
-                        <tr>
-                            <th>Verb</th>
-                            <th class="text-end">Count</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for verb, count in metrics.client_messages_breakdown.items() %}
-                        <tr>
-                            <td><span class="badge bg-primary">{{ verb }}</span></td>
-                            <td class="text-end">{{ "{:,}".format(count) }}</td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
+                <canvas id="clientMessagesChart"></canvas>
             </div>
         </div>
     </div>
     <div class="col-md-6">
         <div class="card h-100">
-            <div class="card-header">
-                <h5 class="mb-0"><i class="bi bi-arrow-up-circle"></i> Relay Messages by Verb</h5>
+            <div class="card-header bg-warning text-dark">
+                <h5 class="mb-0"><i class="bi bi-bar-chart"></i> Relay Messages by Verb</h5>
             </div>
             <div class="card-body">
-                <table class="table table-sm">
-                    <thead>
+                <canvas id="relayMessagesChart"></canvas>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mb-4">
+    <div class="col-md-5">
+        <div class="card h-100">
+            <div class="card-header bg-info text-white">
+                <h5 class="mb-0"><i class="bi bi-pie-chart"></i> Events by Kind (Top 10)</h5>
+            </div>
+            <div class="card-body">
+                <canvas id="eventKindsChart"></canvas>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-7">
+        <div class="card h-100">
+            <div class="card-header bg-info text-white">
+                <h5 class="mb-0"><i class="bi bi-list"></i> Kind Details</h5>
+            </div>
+            <div class="card-body" style="max-height: 350px; overflow-y: auto;">
+                <table class="table table-sm table-hover">
+                    <thead class="sticky-top bg-light">
                         <tr>
-                            <th>Verb</th>
+                            <th>Kind</th>
+                            <th>Description</th>
                             <th class="text-end">Count</th>
+                            <th class="text-end">%</th>
                         </tr>
                     </thead>
                     <tbody>
-                        {% for verb, count in metrics.relay_messages_breakdown.items() %}
+                        {% for kind, count in metrics.top_event_kinds %}
                         <tr>
-                            <td><span class="badge bg-success">{{ verb }}</span></td>
+                            <td><span class="badge bg-info">{{ kind }}</span></td>
+                            <td>
+                                {% if kind == '0' %}Metadata
+                                {% elif kind == '1' %}Text Note
+                                {% elif kind == '2' %}Recommend Relay
+                                {% elif kind == '3' %}Contacts
+                                {% elif kind == '4' %}Encrypted DM
+                                {% elif kind == '5' %}Deletion
+                                {% elif kind == '6' %}Repost
+                                {% elif kind == '7' %}Reaction
+                                {% elif kind == '8' %}Badge Award
+                                {% elif kind == '9' %}Channel Create
+                                {% elif kind == '10' %}Channel Msg
+                                {% elif kind == '11' %}Channel Hide
+                                {% elif kind == '12' %}Channel Mute
+                                {% elif kind == '13' %}Channel Meta
+                                {% elif kind == '40' %}Channel Creation
+                                {% elif kind == '41' %}Channel Metadata
+                                {% elif kind == '42' %}Channel Message
+                                {% elif kind == '1063' %}File Metadata
+                                {% elif kind == '1984' %}Reporting
+                                {% elif kind == '9735' %}Zap Request
+                                {% elif kind == '9734' %}Zap Invoice
+                                {% elif kind == '10002' %}Relay List
+                                {% elif kind == '30000' %}Mute List
+                                {% elif kind == '30001' %}Pin List
+                                {% elif kind == '30023' %}Interest List
+                                {% elif kind == '30078' %}App Data
+                                {% else %}Unknown{% endif %}
+                            </td>
                             <td class="text-end">{{ "{:,}".format(count) }}</td>
+                            <td class="text-end">{{ "%.2f"|format((count / metrics.total_events * 100) if metrics.total_events > 0 else 0) }}%</td>
                         </tr>
                         {% endfor %}
                     </tbody>
@@ -91,61 +140,81 @@
         </div>
     </div>
 </div>
+{% endif %}
+{% endblock %}
 
-<div class="card">
-    <div class="card-header">
-        <h5 class="mb-0"><i class="bi bi-pie-chart"></i> Events by Kind (Top 10)</h5>
-    </div>
-    <div class="card-body">
-        <table class="table table-striped">
-            <thead>
-                <tr>
-                    <th>Kind</th>
-                    <th>Description</th>
-                    <th class="text-end">Count</th>
-                    <th class="text-end">%</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for kind, count in metrics.top_event_kinds %}
-                <tr>
-                    <td><span class="badge bg-info">{{ kind }}</span></td>
-                    <td>
-                        {% if kind == '0' %}Metadata
-                        {% elif kind == '1' %}Text Note
-                        {% elif kind == '2' %}Recommend Relay
-                        {% elif kind == '3' %}Contacts
-                        {% elif kind == '4' %}Encrypted Direct Message
-                        {% elif kind == '5' %}Event Deletion
-                        {% elif kind == '6' %}Repost
-                        {% elif kind == '7' %}Reaction
-                        {% elif kind == '8' %}Badge Award
-                        {% elif kind == '9' %}Channel Create
-                        {% elif kind == '10' %}Channel Message
-                        {% elif kind == '11' %}Channel Hide Message
-                        {% elif kind == '12' %}Channel Mute User
-                        {% elif kind == '13' %}Channel Metadata
-                        {% elif kind == '40' %}Channel Creation
-                        {% elif kind == '41' %}Channel Metadata
-                        {% elif kind == '42' %}Channel Message
-                        {% elif kind == '1063' %}File Metadata
-                        {% elif kind == '1984' %}Reporting
-                        {% elif kind == '9735' %}Zap Request
-                        {% elif kind == '9734' %}Zap Invoice
-                        {% elif kind == '10002' %}NIP-65 Relay List
-                        {% elif kind == '30000' %}NIP-51 Mute List
-                        {% elif kind == '30001' %}NIP-51 Pin List
-                        {% elif kind == '30023' %}NIP-51 Interest List
-                        {% elif kind == '30078' %}Application-Specific Data
-                        {% else %}Unknown{% endif %}
-                    </td>
-                    <td class="text-end">{{ "{:,}".format(count) }}</td>
-                    <td class="text-end">{{ "%.2f"|format((count / metrics.total_events * 100) if metrics.total_events > 0 else 0) }}%</td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
-</div>
+{% block scripts %}
+{% if not metrics.error %}
+<script>
+const chartColors = [
+    '#0d6efd', '#6610f2', '#6f42c1', '#d63384', '#dc3545',
+    '#fd7e14', '#ffc107', '#198754', '#20c997', '#0dcaf0'
+];
+
+new Chart(document.getElementById('clientMessagesChart'), {
+    type: 'bar',
+    data: {
+        labels: {{ metrics.client_messages_breakdown.keys()|list|tojson }},
+        datasets: [{
+            label: 'Client Messages',
+            data: {{ metrics.client_messages_breakdown.values()|list|tojson }},
+            backgroundColor: '#198754',
+            borderRadius: 4
+        }]
+    },
+    options: {
+        responsive: true,
+        plugins: { legend: { display: false } },
+        scales: {
+            y: { beginAtZero: true, ticks: { callback: v => v.toLocaleString() } }
+        }
+    }
+});
+
+new Chart(document.getElementById('relayMessagesChart'), {
+    type: 'bar',
+    data: {
+        labels: {{ metrics.relay_messages_breakdown.keys()|list|tojson }},
+        datasets: [{
+            label: 'Relay Messages',
+            data: {{ metrics.relay_messages_breakdown.values()|list|tojson }},
+            backgroundColor: '#ffc107',
+            borderColor: '#ffc107',
+            borderRadius: 4
+        }]
+    },
+    options: {
+        responsive: true,
+        plugins: { legend: { display: false } },
+        scales: {
+            y: { beginAtZero: true, ticks: { callback: v => v.toLocaleString() } }
+        }
+    }
+});
+
+new Chart(document.getElementById('eventKindsChart'), {
+    type: 'doughnut',
+    data: {
+        labels: {{ metrics.top_event_kinds|map('first')|list|tojson }},
+        datasets: [{
+            data: {{ metrics.top_event_kinds|map('last')|list|tojson }},
+            backgroundColor: chartColors,
+            borderWidth: 2,
+            borderColor: '#fff'
+        }]
+    },
+    options: {
+        responsive: true,
+        plugins: {
+            legend: { position: 'bottom', labels: { boxWidth: 12 } },
+            tooltip: {
+                callbacks: {
+                    label: ctx => ctx.label + ': ' + ctx.raw.toLocaleString()
+                }
+            }
+        }
+    }
+});
+</script>
 {% endif %}
 {% endblock %}
