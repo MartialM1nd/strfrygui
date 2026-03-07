@@ -8,7 +8,7 @@ class MetricsError(Exception):
     pass
 
 
-MAX_HISTORY = 20
+MAX_HISTORY = 60
 
 client_histories = {}
 relay_histories = {}
