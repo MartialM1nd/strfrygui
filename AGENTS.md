@@ -52,10 +52,10 @@ gunicorn -w 4 -b 127.0.0.1:5000 app:app
 ```
 
 ### Running Tests
-Currently no test framework is configured. To add tests:
+Recommended: Install test dependencies and use pytest:
 ```bash
 # Install test dependencies
-pip install pytest pytest-flask
+pip install pytest pytest-flask pytest-cov
 
 # Run all tests
 pytest
@@ -65,6 +65,9 @@ pytest tests/test_models.py
 
 # Run a single test function
 pytest tests/test_models.py::test_user_password
+
+# Run with coverage report
+pytest --cov=app --cov-report=html
 ```
 
 ### Linting
@@ -212,6 +215,41 @@ def datetime_filter(ts):
     return datetime.fromtimestamp(ts).strftime('%Y-%m-%d %H:%M:%S')
 ```
 
+### Metrics System
+The metrics system parses Prometheus-format metrics from strfry's `/metrics` endpoint.
+
+#### Parsing Metrics (utils/metrics.py)
+```python
+def parse_metrics(raw_metrics):
+    metrics = {
+        'client_messages': {},
+        'relay_messages': {},
+        'events_by_kind': {},
+        'connection_info': {}
+    }
+    # Parse Prometheus format: metric_name{labels} value
+    for line in raw_metrics.split('\n'):
+        if '{' in line and '}' in line:
+            metric_name = line.split('{')[0]
+            # Extract labels and value...
+    return metrics
+```
+
+#### Rate Tracking (Historical Data)
+For dashboard charts, rates are calculated per-interval:
+```python
+# Track previous values to calculate rate
+if previous_total is not None:
+    rate = max(0, current_total - previous_total)
+history.append((current_time, rate))
+```
+
+#### Adding New Metrics
+1. Add parsing logic in `parse_metrics()` to extract the metric
+2. Add to return dict in `get_summary()`
+3. Create API endpoint if real-time updates needed
+4. Update template to display the data
+
 ### Security Considerations
 - Never log passwords or secrets
 - Use parameterized queries (SQLAlchemy handles this)
@@ -227,6 +265,44 @@ def datetime_filter(ts):
 - Use Jinja2 block system for content
 - Access route names via `url_for()`
 - Use `{% with %}` for local variables
+- Use `{{ variable|tojson }}` to pass Python data to JavaScript
+- Use `{% block scripts %}{% endblock %}` for page-specific JavaScript
+
+### JavaScript Patterns
+The dashboard uses Chart.js for real-time charts. Key patterns:
+
+```javascript
+// Multi-line chart with auto-refresh
+const chart = new Chart(document.getElementById('chartId'), {
+    type: 'line',
+    data: {
+        labels: data.map(x => formatTime(x[0])),
+        datasets: keys.map((key, i) => ({
+            label: key,
+            data: history[key].map(x => x[1]),
+            borderColor: chartColors[i % chartColors.length],
+            backgroundColor: chartColors[i % chartColors.length] + '33',
+            fill: true,
+            tension: 0.3,
+            pointRadius: 2,
+            borderWidth: 2
+        }))
+    },
+    options: {
+        responsive: true,
+        plugins: { legend: { position: 'bottom' } },
+        scales: { y: { beginAtZero: true } },
+        interaction: { mode: 'nearest', axis: 'x', intersect: false }
+    }
+});
+
+// Auto-refresh every 5 seconds
+setInterval(async function() {
+    const resp = await fetch('/api/endpoint');
+    const data = await resp.json();
+    // Update chart.data.datasets and call chart.update('none')
+}, 5000);
+```
 
 ## Configuration
 
