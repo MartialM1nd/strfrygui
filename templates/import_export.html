@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Import/Export - StrfryGUI{% endblock %}
+{% block title %}Import/Export{% if relay_name %} for {{ relay_name }}{% endif %} - StrfryGUI{% endblock %}
 
 {% block content %}
 <h2 class="mb-4"><i class="bi bi-upload-download"></i> Import / Export</h2>

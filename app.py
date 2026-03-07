@@ -162,6 +162,13 @@ def inject_user():
     return dict(User=User)
 
 
+@app.context_processor
+def inject_relay_name():
+    config = get_config()
+    relay_name = config.get('info', {}).get('name', '') if config else ''
+    return dict(relay_name=relay_name)
+
+
 @app.template_filter('datetime')
 def datetime_filter(ts):
     from datetime import datetime
