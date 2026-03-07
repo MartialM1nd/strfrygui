@@ -110,7 +110,12 @@ The app installs to `/opt/strfrygui` and runs as the `www-data` user.
 Edit `/opt/strfrygui/.env` with your settings:
 
 ```env
-SECRET_KEY=change-this-to-a-random-secret-key
+# Required: Generate with: python3 -c "import secrets; print(secrets.token_hex(32))"
+SECRET_KEY=
+
+# Required for first-time registration: Generate with: python3 -c "import secrets; print(secrets.token_hex(32))"
+REGISTRATION_TOKEN=
+
 DATABASE_URL=sqlite:////opt/strfrygui/strfrygui.db
 STRFRY_BINARY=/usr/local/bin/strfry
 STRFRY_CONFIG=/etc/strfry.conf
@@ -118,16 +123,24 @@ STRFRY_DB_PATH=/var/lib/strfry
 STRFRY_METRICS_URL=http://localhost:7777/metrics
 ```
 
-Generate a secure SECRET_KEY:
+Generate secure tokens:
 ```bash
+# For SECRET_KEY
+python3 -c "import secrets; print(secrets.token_hex(32))"
+
+# For REGISTRATION_TOKEN
 python3 -c "import secrets; print(secrets.token_hex(32))"
 ```
+
+### First-Time Registration
+
+The first user must register at `/register` with the correct `REGISTRATION_TOKEN` set in `.env`. This prevents unauthorized registration before you secure your relay. After the first user is created, registration is automatically closed.
 
 ## Files You Must Edit After Cloning
 
 | File | What to change |
 |------|----------------|
-| `.env` | `SECRET_KEY` (required), database path if desired |
+| `.env` | `SECRET_KEY` (required), `REGISTRATION_TOKEN` (required for first-time setup) |
 | `nginx.conf` | `strfrygui.YOUR_DOMAIN.COM`, SSL certificate paths |
 
 ## User Roles

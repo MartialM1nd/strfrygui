@@ -73,9 +73,7 @@ class AdminCreateUserForm(FlaskForm):
     ])
     password = PasswordField('Password', validators=[
         DataRequired(),
-        Length(min=21),
-        Regexp(r'^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]',
-               message='Password must have: 21+ chars, uppercase, lowercase, digit, special char')
+        Length(min=8, max=128)
     ])
     role = SelectField('Role', choices=[('admin', 'Admin'), ('moderator', 'Moderator'), ('viewer', 'Viewer')], validators=[DataRequired()])
 
@@ -647,7 +645,7 @@ def create_user():
         user = User(
             username=form.username.data,
             role=form.role.data,
-            must_change_password=False
+            must_change_password=True
         )
         user.set_password(form.password.data)
         
@@ -704,16 +702,19 @@ def internal_error(error):
     return render_template('error.html', error='500 - Internal Server Error'), 500
 
 
-_db_initialized = False
-
 def init_db():
-    global _db_initialized
-    if not _db_initialized:
-        with app.app_context():
-            db.create_all()
-            _db_initialized = True
-            if User.query.count() == 0:
-                print("No users found. Please register at /register")
+    with app.app_context():
+        db.create_all()
+        from sqlalchemy import text
+        with db.engine.connect() as conn:
+            result = conn.execute(text(
+                "SELECT name FROM pragma_table_info('users') WHERE name='must_change_password'"
+            ))
+            if not result.fetchone():
+                conn.execute(text(
+                    "ALTER TABLE users ADD COLUMN must_change_password BOOLEAN DEFAULT 1"
+                ))
+                conn.commit()
 
 
 init_db()
