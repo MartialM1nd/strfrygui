@@ -8,8 +8,12 @@ class MetricsError(Exception):
     pass
 
 
-events_history = deque(maxlen=720)
+events_history = deque(maxlen=20)
+client_history = deque(maxlen=20)
+relay_history = deque(maxlen=20)
 previous_total_events = None
+previous_total_client = None
+previous_total_relay = None
 history_initialized = False
 
 
@@ -84,7 +88,7 @@ def get_metrics():
 
 
 def get_summary():
-    global previous_total_events, history_initialized
+    global previous_total_events, previous_total_client, previous_total_relay, history_initialized
     
     metrics = get_metrics()
     
@@ -93,16 +97,25 @@ def get_summary():
     total_events = sum(metrics['events_by_kind'].values())
     
     current_time = int(time.time())
-    rate = 0
+    events_rate = 0
+    client_rate = 0
+    relay_rate = 0
     
     if previous_total_events is not None:
-        rate = max(0, total_events - previous_total_events)
+        events_rate = max(0, total_events - previous_total_events)
+    if previous_total_client is not None:
+        client_rate = max(0, total_client - previous_total_client)
+    if previous_total_relay is not None:
+        relay_rate = max(0, total_relay - previous_total_relay)
     
-    events_history.append((current_time, rate))
+    events_history.append((current_time, events_rate))
+    client_history.append((current_time, client_rate))
+    relay_history.append((current_time, relay_rate))
+    
     previous_total_events = total_events
+    previous_total_client = total_client
+    previous_total_relay = total_relay
     history_initialized = True
-    
-    rate_history = list(events_history)
     
     top_kinds = sorted(
         metrics['events_by_kind'].items(),
@@ -117,5 +130,7 @@ def get_summary():
         'client_messages_breakdown': metrics['client_messages'],
         'relay_messages_breakdown': metrics['relay_messages'],
         'top_event_kinds': top_kinds,
-        'events_rate_history': rate_history
+        'events_rate_history': list(events_history),
+        'client_rate_history': list(client_history),
+        'relay_rate_history': list(relay_history)
     }

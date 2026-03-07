@@ -46,20 +46,20 @@
     <div class="col-md-6">
         <div class="card h-100">
             <div class="card-header bg-success text-white">
-                <h5 class="mb-0"><i class="bi bi-bar-chart"></i> Client Messages by Verb</h5>
+                <h5 class="mb-0"><i class="bi bi-graph-up"></i> Client Messages (per 15s)</h5>
             </div>
             <div class="card-body">
-                <canvas id="clientMessagesChart"></canvas>
+                <canvas id="clientChart" style="max-height: 250px;"></canvas>
             </div>
         </div>
     </div>
     <div class="col-md-6">
         <div class="card h-100">
             <div class="card-header bg-warning text-dark">
-                <h5 class="mb-0"><i class="bi bi-bar-chart"></i> Relay Messages by Verb</h5>
+                <h5 class="mb-0"><i class="bi bi-graph-up"></i> Relay Messages (per 15s)</h5>
             </div>
             <div class="card-body">
-                <canvas id="relayMessagesChart"></canvas>
+                <canvas id="relayChart" style="max-height: 250px;"></canvas>
             </div>
         </div>
     </div>
@@ -69,10 +69,10 @@
     <div class="col-12">
         <div class="card">
             <div class="card-header bg-info text-white">
-                <h5 class="mb-0"><i class="bi bi-graph-up"></i> Events Rate (Last Hour)</h5>
+                <h5 class="mb-0"><i class="bi bi-graph-up"></i> All Events (per 15s)</h5>
             </div>
             <div class="card-body">
-                <canvas id="eventKindsChart" style="max-height: 300px;"></canvas>
+                <canvas id="eventsChart" style="max-height: 250px;"></canvas>
             </div>
         </div>
     </div>
@@ -83,110 +83,110 @@
 {% block scripts %}
 {% if not metrics.error %}
 <script>
-const chartColors = [
-    '#0d6efd', '#6610f2', '#6f42c1', '#d63384', '#dc3545',
-    '#fd7e14', '#ffc107', '#198754', '#20c997', '#0dcaf0'
-];
+const clientHistory = {{ metrics.client_rate_history|tojson }};
+const relayHistory = {{ metrics.relay_rate_history|tojson }};
+const eventsHistory = {{ metrics.events_rate_history|tojson }};
 
-new Chart(document.getElementById('clientMessagesChart'), {
-    type: 'bar',
-    data: {
-        labels: {{ metrics.client_messages_breakdown.keys()|list|tojson }},
-        datasets: [{
-            label: 'Client Messages',
-            data: {{ metrics.client_messages_breakdown.values()|list|tojson }},
-            backgroundColor: '#198754',
-            borderRadius: 4
-        }]
-    },
-    options: {
-        responsive: true,
-        plugins: { legend: { display: false } },
-        scales: {
-            y: { beginAtZero: true, ticks: { callback: v => v.toLocaleString() } }
-        }
-    }
-});
+function formatTime(ts) {
+    const d = new Date(ts * 1000);
+    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
 
-new Chart(document.getElementById('relayMessagesChart'), {
-    type: 'bar',
-    data: {
-        labels: {{ metrics.relay_messages_breakdown.keys()|list|tojson }},
-        datasets: [{
-            label: 'Relay Messages',
-            data: {{ metrics.relay_messages_breakdown.values()|list|tojson }},
-            backgroundColor: '#ffc107',
-            borderColor: '#ffc107',
-            borderRadius: 4
-        }]
-    },
-    options: {
-        responsive: true,
-        plugins: { legend: { display: false } },
-        scales: {
-            y: { beginAtZero: true, ticks: { callback: v => v.toLocaleString() } }
-        }
-    }
-});
+function buildChartData(history) {
+    return {
+        labels: history.map(x => formatTime(x[0])),
+        data: history.map(x => x[1])
+    };
+}
 
-const eventRateCtx = document.getElementById('eventKindsChart').getContext('2d');
-const eventRateHistory = {{ metrics.events_rate_history|tojson }};
+const clientData = buildChartData(clientHistory);
+const relayData = buildChartData(relayHistory);
+const eventsData = buildChartData(eventsHistory);
 
-const eventKindsChart = new Chart(eventRateCtx, {
+const clientChart = new Chart(document.getElementById('clientChart'), {
     type: 'line',
     data: {
-        labels: eventRateHistory.map(x => {
-            const d = new Date(x[0] * 1000);
-            return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-        }),
+        labels: clientData.labels,
         datasets: [{
-            label: 'New Events (per 5s)',
-            data: eventRateHistory.map(x => x[1]),
-            borderColor: '#0dcaf0',
-            backgroundColor: 'rgba(13, 202, 240, 0.2)',
+            label: 'Client Messages',
+            data: clientData.data,
+            borderColor: '#198754',
+            backgroundColor: 'rgba(25, 135, 84, 0.2)',
             fill: true,
             tension: 0.3,
-            pointRadius: 0,
+            pointRadius: 2,
             borderWidth: 2
         }]
     },
     options: {
         responsive: true,
         plugins: {
-            legend: { display: false },
-            tooltip: {
-                mode: 'index',
-                intersect: false,
-                callbacks: {
-                    title: ctx => new Date(ctx[0].parsed.x * 1000).toLocaleTimeString(),
-                    label: ctx => ctx.parsed.y + ' events/5s'
-                }
-            }
+            legend: { position: 'bottom', labels: { boxWidth: 12 } },
+            tooltip: { mode: 'index', intersect: false }
         },
         scales: {
-            x: {
-                type: 'linear',
-                display: true,
-                ticks: {
-                    callback: function(val) {
-                        const now = Date.now() / 1000;
-                        const timeAgo = now - (720 * 5 - val);
-                        const d = new Date(timeAgo * 1000);
-                        return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                    },
-                    maxTicksLimit: 12
-                }
-            },
-            y: {
-                beginAtZero: true,
-                ticks: { callback: v => v.toLocaleString() }
-            }
+            x: { display: true, ticks: { maxTicksLimit: 10 } },
+            y: { beginAtZero: true, ticks: { callback: v => v.toLocaleString() } }
         },
-        interaction: {
-            mode: 'nearest',
-            axis: 'x',
-            intersect: false
-        }
+        interaction: { mode: 'nearest', axis: 'x', intersect: false }
+    }
+});
+
+const relayChart = new Chart(document.getElementById('relayChart'), {
+    type: 'line',
+    data: {
+        labels: relayData.labels,
+        datasets: [{
+            label: 'Relay Messages',
+            data: relayData.data,
+            borderColor: '#ffc107',
+            backgroundColor: 'rgba(255, 193, 7, 0.2)',
+            fill: true,
+            tension: 0.3,
+            pointRadius: 2,
+            borderWidth: 2
+        }]
+    },
+    options: {
+        responsive: true,
+        plugins: {
+            legend: { position: 'bottom', labels: { boxWidth: 12 } },
+            tooltip: { mode: 'index', intersect: false }
+        },
+        scales: {
+            x: { display: true, ticks: { maxTicksLimit: 10 } },
+            y: { beginAtZero: true, ticks: { callback: v => v.toLocaleString() } }
+        },
+        interaction: { mode: 'nearest', axis: 'x', intersect: false }
+    }
+});
+
+const eventsChart = new Chart(document.getElementById('eventsChart'), {
+    type: 'line',
+    data: {
+        labels: eventsData.labels,
+        datasets: [{
+            label: 'All Events',
+            data: eventsData.data,
+            borderColor: '#0dcaf0',
+            backgroundColor: 'rgba(13, 202, 240, 0.2)',
+            fill: true,
+            tension: 0.3,
+            pointRadius: 2,
+            borderWidth: 2
+        }]
+    },
+    options: {
+        responsive: true,
+        plugins: {
+            legend: { position: 'bottom', labels: { boxWidth: 12 } },
+            tooltip: { mode: 'index', intersect: false }
+        },
+        scales: {
+            x: { display: true, ticks: { maxTicksLimit: 10 } },
+            y: { beginAtZero: true, ticks: { callback: v => v.toLocaleString() } }
+        },
+        interaction: { mode: 'nearest', axis: 'x', intersect: false }
     }
 });
 
@@ -201,23 +201,17 @@ setInterval(async function() {
         document.getElementById('stat-client').textContent = data.total_client_messages.toLocaleString();
         document.getElementById('stat-relay').textContent = data.total_relay_messages.toLocaleString();
         
-        clientMessagesChart.data.labels = Object.keys(data.client_messages_breakdown);
-        clientMessagesChart.data.datasets[0].data = Object.values(data.client_messages_breakdown);
-        clientMessagesChart.update('none');
+        const updateChart = (chart, history) => {
+            chart.data.labels = history.map(x => formatTime(x[0]));
+            chart.data.datasets[0].data = history.map(x => x[1]);
+            chart.update('none');
+        };
         
-        relayMessagesChart.data.labels = Object.keys(data.relay_messages_breakdown);
-        relayMessagesChart.data.datasets[0].data = Object.values(data.relay_messages_breakdown);
-        relayMessagesChart.update('none');
-        
-        const rateHistory = data.events_rate_history;
-        eventKindsChart.data.labels = rateHistory.map(x => {
-            const d = new Date(x[0] * 1000);
-            return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
-        });
-        eventKindsChart.data.datasets[0].data = rateHistory.map(x => x[1]);
-        eventKindsChart.update('none');
+        updateChart(clientChart, data.client_rate_history);
+        updateChart(relayChart, data.relay_rate_history);
+        updateChart(eventsChart, data.events_rate_history);
     } catch (e) {}
-}, 5000);
+}, 15000);
 </script>
 {% endif %}
 {% endblock %}
