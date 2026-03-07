@@ -78,8 +78,7 @@ code.text-truncate {
     cursor: pointer;
 }
 
-pre, .bg-body {
-    background-color: var(--bs-body-bg);
+pre {
     border: 1px solid var(--bs-border-color);
     border-radius: 6px;
 }
