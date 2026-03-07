@@ -1,9 +1,9 @@
 {% extends "base.html" %}
 
-{% block title %}Database{% if relay_name %} for {{ relay_name }}{% endif %} - StrfryGUI{% endblock %}
+{% block title %}Database{% if relay_name %} - {{ relay_name }}{% endif %} - StrfryGUI{% endblock %}
 
 {% block content %}
-<h2 class="mb-4"><i class="bi bi-database"></i> Database Management</h2>
+<h2 class="mb-4"><i class="bi bi-database"></i>{% if relay_name %} Database for {{ relay_name }}{% else %} Database Management{% endif %}</h2>
 
 <div class="row">
     <div class="col-md-6">

@@ -1,9 +1,9 @@
 {% extends "base.html" %}
 
-{% block title %}Connections{% if relay_name %} for {{ relay_name }}{% endif %} - StrfryGUI{% endblock %}
+{% block title %}Connections{% if relay_name %} - {{ relay_name }}{% endif %} - StrfryGUI{% endblock %}
 
 {% block content %}
-<h2 class="mb-4"><i class="bi bi-hdd-network"></i> Connections & Status</h2>
+<h2 class="mb-4"><i class="bi bi-hdd-network"></i>{% if relay_name %} Connections for {{ relay_name }}{% else %} Connections & Status{% endif %}</h2>
 
 {% if metrics.error %}
 <div class="alert alert-danger">

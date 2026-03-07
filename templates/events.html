@@ -1,9 +1,9 @@
 {% extends "base.html" %}
 
-{% block title %}Event Search{% if relay_name %} for {{ relay_name }}{% endif %} - StrfryGUI{% endblock %}
+{% block title %}Event Search{% if relay_name %} - {{ relay_name }}{% endif %} - StrfryGUI{% endblock %}
 
 {% block content %}
-<h2 class="mb-4"><i class="bi bi-search"></i> Event Search</h2>
+<h2 class="mb-4"><i class="bi bi-search"></i>{% if relay_name %} Event Search for {{ relay_name }}{% else %} Event Search{% endif %}</h2>
 
 <div class="card mb-4">
     <div class="card-header">

@@ -1,9 +1,9 @@
 {% extends "base.html" %}
 
-{% block title %}Configuration{% if relay_name %} for {{ relay_name }}{% endif %} - StrfryGUI{% endblock %}
+{% block title %}Configuration{% if relay_name %} - {{ relay_name }}{% endif %} - StrfryGUI{% endblock %}
 
 {% block content %}
-<h2 class="mb-4"><i class="bi bi-gear"></i> Relay Configuration</h2>
+<h2 class="mb-4"><i class="bi bi-gear"></i>{% if relay_name %} Configuration for {{ relay_name }}{% else %} Relay Configuration{% endif %}</h2>
 
 {% if error %}
 <div class="alert alert-danger">

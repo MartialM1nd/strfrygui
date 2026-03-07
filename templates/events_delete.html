@@ -1,9 +1,9 @@
 {% extends "base.html" %}
 
-{% block title %}Delete Events{% if relay_name %} for {{ relay_name }}{% endif %} - StrfryGUI{% endblock %}
+{% block title %}Delete Events{% if relay_name %} - {{ relay_name }}{% endif %} - StrfryGUI{% endblock %}
 
 {% block content %}
-<h2 class="mb-4"><i class="bi bi-trash"></i> Delete Events</h2>
+<h2 class="mb-4"><i class="bi bi-trash"></i>{% if relay_name %} Delete Events for {{ relay_name }}{% else %} Delete Events{% endif %}</h2>
 
 <div class="card border-danger mb-4">
     <div class="card-header bg-danger text-white">

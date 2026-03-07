@@ -1,9 +1,9 @@
 {% extends "base.html" %}
 
-{% block title %}Admin{% if relay_name %} for {{ relay_name }}{% endif %} - StrfryGUI{% endblock %}
+{% block title %}Admin{% if relay_name %} - {{ relay_name }}{% endif %} - StrfryGUI{% endblock %}
 
 {% block content %}
-<h2 class="mb-4"><i class="bi bi-people"></i> User Management</h2>
+<h2 class="mb-4"><i class="bi bi-people"></i>{% if relay_name %} User Management for {{ relay_name }}{% else %} User Management{% endif %}</h2>
 
 <div class="card mb-4">
     <div class="card-header">
