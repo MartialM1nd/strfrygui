@@ -194,7 +194,7 @@ def index():
         metrics = {'error': str(e)}
     
     config = get_config()
-    relay_name = config.get('relay', {}).get('info', {}).get('name', '') if config else ''
+    relay_name = config.get('info', {}).get('name', '') if config else ''
     
     return render_template('index.html', metrics=metrics, relay_name=relay_name)
 
