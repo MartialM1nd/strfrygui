@@ -56,6 +56,12 @@ class RegisterForm(FlaskForm):
     registration_token = StringField('Registration Token', validators=[DataRequired()])
 
 
+class AdminCreateUserForm(FlaskForm):
+    username = StringField('Username', validators=[DataRequired(), Length(min=3, max=80)])
+    password = PasswordField('Password', validators=[DataRequired(), Length(min=8)])
+    role = SelectField('Role', choices=[('admin', 'Admin'), ('moderator', 'Moderator'), ('viewer', 'Viewer')], validators=[DataRequired()])
+
+
 class UserEditForm(FlaskForm):
     username = StringField('Username', validators=[DataRequired(), Length(min=3, max=80)])
     role = SelectField('Role', choices=[('admin', 'Admin'), ('moderator', 'Moderator'), ('viewer', 'Viewer')], validators=[DataRequired()])
@@ -596,7 +602,7 @@ def delete_user(user_id):
 @app.route('/admin/user', methods=['POST'])
 @admin_required
 def create_user():
-    form = RegisterForm()
+    form = AdminCreateUserForm()
     if form.validate_on_submit():
         user = User(
             username=form.username.data,
