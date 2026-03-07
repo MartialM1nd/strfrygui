@@ -66,70 +66,13 @@
 </div>
 
 <div class="row mb-4">
-    <div class="col-md-5">
-        <div class="card h-100">
+    <div class="col-12">
+        <div class="card">
             <div class="card-header bg-info text-white">
-                <h5 class="mb-0"><i class="bi bi-pie-chart"></i> Events by Kind (Top 10)</h5>
+                <h5 class="mb-0"><i class="bi bi-graph-up"></i> Events Rate (Last Hour)</h5>
             </div>
             <div class="card-body">
-                <canvas id="eventKindsChart"></canvas>
-            </div>
-        </div>
-    </div>
-    <div class="col-md-7">
-        <div class="card h-100">
-            <div class="card-header bg-info text-white">
-                <h5 class="mb-0"><i class="bi bi-list"></i> Kind Details</h5>
-            </div>
-            <div class="card-body" style="max-height: 350px; overflow-y: auto;">
-                <table class="table table-sm table-hover">
-                    <thead class="sticky-top bg-light">
-                        <tr>
-                            <th>Kind</th>
-                            <th>Description</th>
-                            <th class="text-end">Count</th>
-                            <th class="text-end">%</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for kind, count in metrics.top_event_kinds %}
-                        <tr>
-                            <td><span class="badge bg-info">{{ kind }}</span></td>
-                            <td>
-                                {% if kind == '0' %}Metadata
-                                {% elif kind == '1' %}Text Note
-                                {% elif kind == '2' %}Recommend Relay
-                                {% elif kind == '3' %}Contacts
-                                {% elif kind == '4' %}Encrypted DM
-                                {% elif kind == '5' %}Deletion
-                                {% elif kind == '6' %}Repost
-                                {% elif kind == '7' %}Reaction
-                                {% elif kind == '8' %}Badge Award
-                                {% elif kind == '9' %}Channel Create
-                                {% elif kind == '10' %}Channel Msg
-                                {% elif kind == '11' %}Channel Hide
-                                {% elif kind == '12' %}Channel Mute
-                                {% elif kind == '13' %}Channel Meta
-                                {% elif kind == '40' %}Channel Creation
-                                {% elif kind == '41' %}Channel Metadata
-                                {% elif kind == '42' %}Channel Message
-                                {% elif kind == '1063' %}File Metadata
-                                {% elif kind == '1984' %}Reporting
-                                {% elif kind == '9735' %}Zap Request
-                                {% elif kind == '9734' %}Zap Invoice
-                                {% elif kind == '10002' %}Relay List
-                                {% elif kind == '30000' %}Mute List
-                                {% elif kind == '30001' %}Pin List
-                                {% elif kind == '30023' %}Interest List
-                                {% elif kind == '30078' %}App Data
-                                {% else %}Unknown{% endif %}
-                            </td>
-                            <td class="text-end">{{ "{:,}".format(count) }}</td>
-                            <td class="text-end">{{ "%.2f"|format((count / metrics.total_events * 100) if metrics.total_events > 0 else 0) }}%</td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
+                <canvas id="eventKindsChart" style="max-height: 300px;"></canvas>
             </div>
         </div>
     </div>
@@ -186,26 +129,63 @@ new Chart(document.getElementById('relayMessagesChart'), {
     }
 });
 
-new Chart(document.getElementById('eventKindsChart'), {
-    type: 'doughnut',
+const eventRateCtx = document.getElementById('eventKindsChart').getContext('2d');
+const eventRateHistory = {{ metrics.events_rate_history|tojson }};
+
+const eventKindsChart = new Chart(eventRateCtx, {
+    type: 'line',
     data: {
-        labels: {{ metrics.top_event_kinds|map('first')|list|tojson }},
+        labels: eventRateHistory.map(x => {
+            const d = new Date(x[0] * 1000);
+            return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        }),
         datasets: [{
-            data: {{ metrics.top_event_kinds|map('last')|list|tojson }},
-            backgroundColor: chartColors,
-            borderWidth: 2,
-            borderColor: '#fff'
+            label: 'New Events (per 5s)',
+            data: eventRateHistory.map(x => x[1]),
+            borderColor: '#0dcaf0',
+            backgroundColor: 'rgba(13, 202, 240, 0.2)',
+            fill: true,
+            tension: 0.3,
+            pointRadius: 0,
+            borderWidth: 2
         }]
     },
     options: {
         responsive: true,
         plugins: {
-            legend: { position: 'bottom', labels: { boxWidth: 12 } },
+            legend: { display: false },
             tooltip: {
+                mode: 'index',
+                intersect: false,
                 callbacks: {
-                    label: ctx => ctx.label + ': ' + ctx.raw.toLocaleString()
+                    title: ctx => new Date(ctx[0].parsed.x * 1000).toLocaleTimeString(),
+                    label: ctx => ctx.parsed.y + ' events/5s'
                 }
             }
+        },
+        scales: {
+            x: {
+                type: 'linear',
+                display: true,
+                ticks: {
+                    callback: function(val) {
+                        const now = Date.now() / 1000;
+                        const timeAgo = now - (720 * 5 - val);
+                        const d = new Date(timeAgo * 1000);
+                        return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                    },
+                    maxTicksLimit: 12
+                }
+            },
+            y: {
+                beginAtZero: true,
+                ticks: { callback: v => v.toLocaleString() }
+            }
+        },
+        interaction: {
+            mode: 'nearest',
+            axis: 'x',
+            intersect: false
         }
     }
 });
@@ -229,8 +209,12 @@ setInterval(async function() {
         relayMessagesChart.data.datasets[0].data = Object.values(data.relay_messages_breakdown);
         relayMessagesChart.update('none');
         
-        eventKindsChart.data.labels = data.top_event_kinds.map(x => x[0]);
-        eventKindsChart.data.datasets[0].data = data.top_event_kinds.map(x => x[1]);
+        const rateHistory = data.events_rate_history;
+        eventKindsChart.data.labels = rateHistory.map(x => {
+            const d = new Date(x[0] * 1000);
+            return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        });
+        eventKindsChart.data.datasets[0].data = rateHistory.map(x => x[1]);
         eventKindsChart.update('none');
     } catch (e) {}
 }, 5000);

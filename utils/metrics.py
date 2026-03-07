@@ -1,9 +1,16 @@
 import requests
+import time
+from collections import deque
 from config import Config
 
 
 class MetricsError(Exception):
     pass
+
+
+events_history = deque(maxlen=720)
+previous_total_events = None
+history_initialized = False
 
 
 def fetch_metrics():
@@ -77,11 +84,25 @@ def get_metrics():
 
 
 def get_summary():
+    global previous_total_events, history_initialized
+    
     metrics = get_metrics()
     
     total_client = sum(metrics['client_messages'].values())
     total_relay = sum(metrics['relay_messages'].values())
     total_events = sum(metrics['events_by_kind'].values())
+    
+    current_time = int(time.time())
+    rate = 0
+    
+    if previous_total_events is not None:
+        rate = max(0, total_events - previous_total_events)
+    
+    events_history.append((current_time, rate))
+    previous_total_events = total_events
+    history_initialized = True
+    
+    rate_history = list(events_history)
     
     top_kinds = sorted(
         metrics['events_by_kind'].items(),
@@ -95,5 +116,6 @@ def get_summary():
         'total_events': total_events,
         'client_messages_breakdown': metrics['client_messages'],
         'relay_messages_breakdown': metrics['relay_messages'],
-        'top_event_kinds': top_kinds
+        'top_event_kinds': top_kinds,
+        'events_rate_history': rate_history
     }
