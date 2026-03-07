@@ -12,37 +12,31 @@
     <p class="mb-0">Make sure strfry is running and the metrics endpoint is accessible at <code>{{ config.STRFRY_METRICS_URL }}</code></p>
 </div>
 {% else %}
-<div class="row mb-4">
+<div class="row mb-3">
     <div class="col-md-4">
-        <div class="card text-center h-100 border-primary">
-            <div class="card-body">
-                <div class="mb-2">
-                    <span class="badge bg-primary p-3"><i class="bi bi-lightning-event fs-4"></i></span>
-                </div>
-                <h6 class="card-title text-muted">Total Events</h6>
-                <h2 class="display-4 text-primary">{{ "{:,}".format(metrics.total_events) }}</h2>
+        <div class="card text-center border-primary">
+            <div class="card-body py-2">
+                <span class="badge bg-primary mb-1"><i class="bi bi-lightning-event"></i></span>
+                <h6 class="card-title text-muted mb-1">Total Events</h6>
+                <h4 class="text-primary mb-0" id="stat-events">{{ "{:,}".format(metrics.total_events) }}</h4>
             </div>
         </div>
     </div>
     <div class="col-md-4">
-        <div class="card text-center h-100 border-success">
-            <div class="card-body">
-                <div class="mb-2">
-                    <span class="badge bg-success p-3"><i class="bi bi-arrow-down-circle fs-4"></i></span>
-                </div>
-                <h6 class="card-title text-muted">Client Messages</h6>
-                <h2 class="display-4 text-success">{{ "{:,}".format(metrics.total_client_messages) }}</h2>
+        <div class="card text-center border-success">
+            <div class="card-body py-2">
+                <span class="badge bg-success mb-1"><i class="bi bi-arrow-down-circle"></i></span>
+                <h6 class="card-title text-muted mb-1">Client Messages</h6>
+                <h4 class="text-success mb-0" id="stat-client">{{ "{:,}".format(metrics.total_client_messages) }}</h4>
             </div>
         </div>
     </div>
     <div class="col-md-4">
-        <div class="card text-center h-100 border-warning">
-            <div class="card-body">
-                <div class="mb-2">
-                    <span class="badge bg-warning text-dark p-3"><i class="bi bi-arrow-up-circle fs-4"></i></span>
-                </div>
-                <h6 class="card-title text-muted">Relay Messages</h6>
-                <h2 class="display-4 text-warning">{{ "{:,}".format(metrics.total_relay_messages) }}</h2>
+        <div class="card text-center border-warning">
+            <div class="card-body py-2">
+                <span class="badge bg-warning text-dark mb-1"><i class="bi bi-arrow-up-circle"></i></span>
+                <h6 class="card-title text-muted mb-1">Relay Messages</h6>
+                <h4 class="text-warning mb-0" id="stat-relay">{{ "{:,}".format(metrics.total_relay_messages) }}</h4>
             </div>
         </div>
     </div>
@@ -215,6 +209,31 @@ new Chart(document.getElementById('eventKindsChart'), {
         }
     }
 });
+
+setInterval(async function() {
+    try {
+        const resp = await fetch('/api/metrics');
+        const data = await resp.json();
+        
+        if (data.error) return;
+        
+        document.getElementById('stat-events').textContent = data.total_events.toLocaleString();
+        document.getElementById('stat-client').textContent = data.total_client_messages.toLocaleString();
+        document.getElementById('stat-relay').textContent = data.total_relay_messages.toLocaleString();
+        
+        clientMessagesChart.data.labels = Object.keys(data.client_messages_breakdown);
+        clientMessagesChart.data.datasets[0].data = Object.values(data.client_messages_breakdown);
+        clientMessagesChart.update('none');
+        
+        relayMessagesChart.data.labels = Object.keys(data.relay_messages_breakdown);
+        relayMessagesChart.data.datasets[0].data = Object.values(data.relay_messages_breakdown);
+        relayMessagesChart.update('none');
+        
+        eventKindsChart.data.labels = data.top_event_kinds.map(x => x[0]);
+        eventKindsChart.data.datasets[0].data = data.top_event_kinds.map(x => x[1]);
+        eventKindsChart.update('none');
+    } catch (e) {}
+}, 5000);
 </script>
 {% endif %}
 {% endblock %}

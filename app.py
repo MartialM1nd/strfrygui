@@ -158,6 +158,16 @@ def index():
     return render_template('index.html', metrics=metrics)
 
 
+@app.route('/api/metrics')
+@viewer_or_higher
+def api_metrics():
+    try:
+        metrics = get_summary()
+        return jsonify(metrics)
+    except MetricsError as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if current_user.is_authenticated:
