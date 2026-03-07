@@ -558,7 +558,9 @@ def admin():
             is_active='true' if user.is_active else 'false'
         )
     
-    return render_template('admin.html', users=users, audit_logs=audit_logs, edit_forms=edit_forms)
+    create_user_form = AdminCreateUserForm()
+    
+    return render_template('admin.html', users=users, audit_logs=audit_logs, edit_forms=edit_forms, create_user_form=create_user_form)
 
 
 @app.route('/admin/user/<int:user_id>/edit', methods=['POST'])

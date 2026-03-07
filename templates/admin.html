@@ -11,6 +11,7 @@
     </div>
     <div class="card-body">
         <form method="POST" action="{{ url_for('create_user') }}">
+            {{ create_user_form.hidden_tag() }}
             <div class="row">
                 <div class="col-md-3">
                     <input type="text" name="username" class="form-control" placeholder="Username" required>
