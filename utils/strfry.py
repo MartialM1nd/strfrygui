@@ -117,11 +117,24 @@ def export_events(since=None, until=None, reverse=False, fried=False):
 
 
 def import_events(jsonl_data, verify=True):
+    validate_jsonl(jsonl_data)
+    
     cmd = ['import']
     if not verify:
         cmd.append('--no-verify')
     
     return run_strfry_command(cmd, input_data=jsonl_data)
+
+
+def validate_jsonl(jsonl_data):
+    """Validate file contains valid JSONL before passing to strfry"""
+    for line_num, line in enumerate(jsonl_data.split('\n')):
+        if line.strip():
+            try:
+                json.loads(line)
+            except json.JSONDecodeError as e:
+                raise StrfryError(f"Invalid JSON at line {line_num + 1}: {e}")
+    return True
 
 
 def compact_database():
