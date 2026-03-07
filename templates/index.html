@@ -1,9 +1,9 @@
 {% extends "base.html" %}
 
-{% block title %}Dashboard - StrfryGUI{% endblock %}
+{% block title %}Dashboard{% if relay_name %} - {{ relay_name }}{% endif %} - StrfryGUI{% endblock %}
 
 {% block content %}
-<h2 class="mb-4"><i class="bi bi-speedometer2"></i> Relay Dashboard</h2>
+<h2 class="mb-4"><i class="bi bi-speedometer2"></i>{% if relay_name %} Relay Dashboard for {{ relay_name }}{% else %} Relay Dashboard{% endif %}</h2>
 
 {% if metrics.error %}
 <div class="alert alert-danger">

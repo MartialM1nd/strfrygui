@@ -193,7 +193,10 @@ def index():
     except MetricsError as e:
         metrics = {'error': str(e)}
     
-    return render_template('index.html', metrics=metrics)
+    config = get_config()
+    relay_name = config.get('relay', {}).get('info', {}).get('name', '') if config else ''
+    
+    return render_template('index.html', metrics=metrics, relay_name=relay_name)
 
 
 @app.route('/api/metrics')
