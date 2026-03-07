@@ -1,7 +1,8 @@
-.env
 *.pyc
 __pycache__/
 *.db
 instance/
 .coverage
 .pytest_cache/
+.env
+migrations/
