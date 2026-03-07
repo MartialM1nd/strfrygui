@@ -8,12 +8,16 @@ class MetricsError(Exception):
     pass
 
 
-events_history = deque(maxlen=20)
-client_history = deque(maxlen=20)
-relay_history = deque(maxlen=20)
-previous_total_events = None
-previous_total_client = None
-previous_total_relay = None
+MAX_HISTORY = 20
+
+client_histories = {}
+relay_histories = {}
+events_histories = {}
+
+previous_client = {}
+previous_relay = {}
+previous_events = {}
+
 history_initialized = False
 
 
@@ -88,7 +92,8 @@ def get_metrics():
 
 
 def get_summary():
-    global previous_total_events, previous_total_client, previous_total_relay, history_initialized
+    global history_initialized, client_histories, relay_histories, events_histories
+    global previous_client, previous_relay, previous_events
     
     metrics = get_metrics()
     
@@ -97,31 +102,39 @@ def get_summary():
     total_events = sum(metrics['events_by_kind'].values())
     
     current_time = int(time.time())
-    events_rate = 0
-    client_rate = 0
-    relay_rate = 0
     
-    if previous_total_events is not None:
-        events_rate = max(0, total_events - previous_total_events)
-    if previous_total_client is not None:
-        client_rate = max(0, total_client - previous_total_client)
-    if previous_total_relay is not None:
-        relay_rate = max(0, total_relay - previous_total_relay)
+    for verb, count in metrics['client_messages'].items():
+        if verb == 'total':
+            continue
+        if verb not in client_histories:
+            client_histories[verb] = deque(maxlen=MAX_HISTORY)
+        rate = 0
+        if verb in previous_client:
+            rate = max(0, count - previous_client[verb])
+        client_histories[verb].append((current_time, rate))
+        previous_client[verb] = count
     
-    events_history.append((current_time, events_rate))
-    client_history.append((current_time, client_rate))
-    relay_history.append((current_time, relay_rate))
+    for verb, count in metrics['relay_messages'].items():
+        if verb == 'total':
+            continue
+        if verb not in relay_histories:
+            relay_histories[verb] = deque(maxlen=MAX_HISTORY)
+        rate = 0
+        if verb in previous_relay:
+            rate = max(0, count - previous_relay[verb])
+        relay_histories[verb].append((current_time, rate))
+        previous_relay[verb] = count
     
-    previous_total_events = total_events
-    previous_total_client = total_client
-    previous_total_relay = total_relay
+    for kind, count in metrics['events_by_kind'].items():
+        if kind not in events_histories:
+            events_histories[kind] = deque(maxlen=MAX_HISTORY)
+        rate = 0
+        if kind in previous_events:
+            rate = max(0, count - previous_events[kind])
+        events_histories[kind].append((current_time, rate))
+        previous_events[kind] = count
+    
     history_initialized = True
-    
-    top_kinds = sorted(
-        metrics['events_by_kind'].items(),
-        key=lambda x: x[1],
-        reverse=True
-    )[:10]
     
     return {
         'total_client_messages': total_client,
@@ -129,8 +142,8 @@ def get_summary():
         'total_events': total_events,
         'client_messages_breakdown': metrics['client_messages'],
         'relay_messages_breakdown': metrics['relay_messages'],
-        'top_event_kinds': top_kinds,
-        'events_rate_history': list(events_history),
-        'client_rate_history': list(client_history),
-        'relay_rate_history': list(relay_history)
+        'top_event_kinds': sorted(metrics['events_by_kind'].items(), key=lambda x: x[1], reverse=True),
+        'client_rate_history': {verb: list(h) for verb, h in client_histories.items()},
+        'relay_rate_history': {verb: list(h) for verb, h in relay_histories.items()},
+        'events_rate_history': {kind: list(h) for kind, h in events_histories.items()}
     }

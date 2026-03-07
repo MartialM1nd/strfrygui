@@ -87,37 +87,43 @@ const clientHistory = {{ metrics.client_rate_history|tojson }};
 const relayHistory = {{ metrics.relay_rate_history|tojson }};
 const eventsHistory = {{ metrics.events_rate_history|tojson }};
 
+const chartColors = [
+    '#0d6efd', '#6610f2', '#6f42c1', '#d63384', '#dc3545',
+    '#fd7e14', '#ffc107', '#198754', '#20c997', '#0dcaf0',
+    '#f8f9fa', '#adb5bd', '#495057', '#e9ecef', '#212529'
+];
+
 function formatTime(ts) {
     const d = new Date(ts * 1000);
     return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
 }
 
-function buildChartData(history) {
-    return {
-        labels: history.map(x => formatTime(x[0])),
-        data: history.map(x => x[1])
-    };
+function buildMultiLineData(history) {
+    const keys = Object.keys(history);
+    if (keys.length === 0) return { labels: [], datasets: [] };
+    
+    const labels = history[keys[0]].map(x => formatTime(x[0]));
+    const datasets = keys.map((key, i) => ({
+        label: key,
+        data: history[key].map(x => x[1]),
+        borderColor: chartColors[i % chartColors.length],
+        backgroundColor: chartColors[i % chartColors.length] + '33',
+        fill: true,
+        tension: 0.3,
+        pointRadius: 2,
+        borderWidth: 2
+    }));
+    
+    return { labels, datasets };
 }
 
-const clientData = buildChartData(clientHistory);
-const relayData = buildChartData(relayHistory);
-const eventsData = buildChartData(eventsHistory);
+const clientData = buildMultiLineData(clientHistory);
+const relayData = buildMultiLineData(relayHistory);
+const eventsData = buildMultiLineData(eventsHistory);
 
 const clientChart = new Chart(document.getElementById('clientChart'), {
     type: 'line',
-    data: {
-        labels: clientData.labels,
-        datasets: [{
-            label: 'Client Messages',
-            data: clientData.data,
-            borderColor: '#198754',
-            backgroundColor: 'rgba(25, 135, 84, 0.2)',
-            fill: true,
-            tension: 0.3,
-            pointRadius: 2,
-            borderWidth: 2
-        }]
-    },
+    data: clientData,
     options: {
         responsive: true,
         plugins: {
@@ -134,19 +140,7 @@ const clientChart = new Chart(document.getElementById('clientChart'), {
 
 const relayChart = new Chart(document.getElementById('relayChart'), {
     type: 'line',
-    data: {
-        labels: relayData.labels,
-        datasets: [{
-            label: 'Relay Messages',
-            data: relayData.data,
-            borderColor: '#ffc107',
-            backgroundColor: 'rgba(255, 193, 7, 0.2)',
-            fill: true,
-            tension: 0.3,
-            pointRadius: 2,
-            borderWidth: 2
-        }]
-    },
+    data: relayData,
     options: {
         responsive: true,
         plugins: {
@@ -163,19 +157,7 @@ const relayChart = new Chart(document.getElementById('relayChart'), {
 
 const eventsChart = new Chart(document.getElementById('eventsChart'), {
     type: 'line',
-    data: {
-        labels: eventsData.labels,
-        datasets: [{
-            label: 'All Events',
-            data: eventsData.data,
-            borderColor: '#0dcaf0',
-            backgroundColor: 'rgba(13, 202, 240, 0.2)',
-            fill: true,
-            tension: 0.3,
-            pointRadius: 2,
-            borderWidth: 2
-        }]
-    },
+    data: eventsData,
     options: {
         responsive: true,
         plugins: {
@@ -190,6 +172,34 @@ const eventsChart = new Chart(document.getElementById('eventsChart'), {
     }
 });
 
+function updateMultiLineChart(chart, history) {
+    const keys = Object.keys(history);
+    if (keys.length === 0) return;
+    
+    const labels = history[keys[0]].map(x => formatTime(x[0]));
+    chart.data.labels = labels;
+    
+    keys.forEach((key, i) => {
+        const data = history[key].map(x => x[1]);
+        if (chart.data.datasets[i]) {
+            chart.data.datasets[i].data = data;
+        } else {
+            chart.data.datasets[i] = {
+                label: key,
+                data: data,
+                borderColor: chartColors[i % chartColors.length],
+                backgroundColor: chartColors[i % chartColors.length] + '33',
+                fill: true,
+                tension: 0.3,
+                pointRadius: 2,
+                borderWidth: 2
+            };
+        }
+    });
+    
+    chart.update('none');
+}
+
 setInterval(async function() {
     try {
         const resp = await fetch('/api/metrics');
@@ -201,15 +211,9 @@ setInterval(async function() {
         document.getElementById('stat-client').textContent = data.total_client_messages.toLocaleString();
         document.getElementById('stat-relay').textContent = data.total_relay_messages.toLocaleString();
         
-        const updateChart = (chart, history) => {
-            chart.data.labels = history.map(x => formatTime(x[0]));
-            chart.data.datasets[0].data = history.map(x => x[1]);
-            chart.update('none');
-        };
-        
-        updateChart(clientChart, data.client_rate_history);
-        updateChart(relayChart, data.relay_rate_history);
-        updateChart(eventsChart, data.events_rate_history);
+        updateMultiLineChart(clientChart, data.client_rate_history);
+        updateMultiLineChart(relayChart, data.relay_rate_history);
+        updateMultiLineChart(eventsChart, data.events_rate_history);
     } catch (e) {}
 }, 15000);
 </script>
