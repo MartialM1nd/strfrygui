@@ -43,6 +43,15 @@
                         {{ form.role.label(class="form-label") }}
                         {{ form.role(class="form-select") }}
                     </div>
+                    <div class="mb-3">
+                        {{ form.registration_token.label(class="form-label") }}
+                        {{ form.registration_token(class="form-control") }}
+                        {% if form.registration_token.errors %}
+                            <div class="text-danger">
+                                {% for error in form.registration_token.errors %}{{ error }}{% endfor %}
+                            </div>
+                        {% endif %}
+                    </div>
                     <button type="submit" class="btn btn-success w-100">Create Account</button>
                 </form>
             </div>

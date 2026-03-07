@@ -1,4 +1,5 @@
 import os
+from datetime import datetime, timedelta
 from flask import Flask, render_template, redirect, url_for, flash, request, send_file, jsonify, abort
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from flask_wtf import FlaskForm
@@ -52,6 +53,7 @@ class RegisterForm(FlaskForm):
     password = PasswordField('Password', validators=[DataRequired(), Length(min=8)])
     confirm_password = PasswordField('Confirm Password', validators=[DataRequired(), EqualTo('password')])
     role = SelectField('Role', choices=[('admin', 'Admin'), ('moderator', 'Moderator'), ('viewer', 'Viewer')], validators=[DataRequired()])
+    registration_token = StringField('Registration Token', validators=[DataRequired()])
 
 
 class UserEditForm(FlaskForm):
@@ -135,16 +137,16 @@ def datetime_filter(ts):
         return str(ts)
 
 
-def log_audit(action, details=None):
-    if current_user.is_authenticated:
-        log = AuditLog(
-            user_id=current_user.id,
-            action=action,
-            details=details,
-            ip_address=request.remote_addr
-        )
-        db.session.add(log)
-        db.session.commit()
+def log_audit(action, details=None, user_id=None):
+    user_id = user_id or (current_user.id if current_user.is_authenticated else None)
+    log = AuditLog(
+        user_id=user_id,
+        action=action,
+        details=details,
+        ip_address=request.remote_addr
+    )
+    db.session.add(log)
+    db.session.commit()
 
 
 @app.route('/')
@@ -176,22 +178,42 @@ def login():
     form = LoginForm()
     if form.validate_on_submit():
         user = User.query.filter_by(username=form.username.data).first()
-        if user and user.check_password(form.password.data):
-            if not user.is_active:
-                flash('Your account has been deactivated.', 'danger')
+        
+        if user:
+            if user.lockout_until and user.lockout_until > datetime.utcnow():
+                flash('Account temporarily locked. Try again later.', 'danger')
                 return render_template('login.html', form=form)
             
-            login_user(user)
-            user.update_login()
+            if user.check_password(form.password.data):
+                if not user.is_active:
+                    flash('Your account has been deactivated.', 'danger')
+                    return render_template('login.html', form=form)
+                
+                user.failed_login_attempts = 0
+                user.lockout_until = None
+                login_user(user)
+                user.update_login()
+                db.session.commit()
+                
+                log_audit('login', f'User logged in')
+                
+                next_page = request.args.get('next')
+                flash(f'Welcome back, {user.username}!', 'success')
+                return redirect(next_page) if next_page else redirect(url_for('index'))
+        
+        if user:
+            user.failed_login_attempts += 1
+            if user.failed_login_attempts >= 5:
+                user.lockout_until = datetime.utcnow() + timedelta(minutes=15)
+                flash('Too many failed attempts. Account locked for 15 minutes.', 'danger')
+                log_audit('login_failed', f'Account locked after 5 failed attempts for {user.username}')
+            else:
+                flash('Invalid username or password.', 'danger')
+                log_audit('login_failed', f'Failed login attempt for {user.username}')
             db.session.commit()
-            
-            log_audit('login', f'User logged in')
-            
-            next_page = request.args.get('next')
-            flash(f'Welcome back, {user.username}!', 'success')
-            return redirect(next_page) if next_page else redirect(url_for('index'))
         else:
             flash('Invalid username or password.', 'danger')
+            log_audit('login_failed', f'Failed login attempt for unknown user {form.username.data}')
     
     return render_template('login.html', form=form)
 
@@ -216,6 +238,11 @@ def register():
     
     form = RegisterForm()
     if form.validate_on_submit():
+        if Config.REGISTRATION_TOKEN and form.registration_token.data != Config.REGISTRATION_TOKEN:
+            flash('Invalid registration token.', 'danger')
+            log_audit('register_failed', f'Invalid token attempt for user {form.username.data}')
+            return render_template('register.html', form=form)
+        
         user = User(
             username=form.username.data,
             role=form.role.data

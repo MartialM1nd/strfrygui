@@ -5,7 +5,11 @@ load_dotenv()
 
 
 class Config:
-    SECRET_KEY = os.getenv('SECRET_KEY', 'dev-secret-key-change-in-production')
+    SECRET_KEY = os.getenv('SECRET_KEY')
+    if not SECRET_KEY:
+        raise ValueError("SECRET_KEY must be set in environment")
+    
+    REGISTRATION_TOKEN = os.getenv('REGISTRATION_TOKEN')
     
     STRFRY_BINARY = os.getenv('STRFRY_BINARY', '/usr/local/bin/strfry')
     STRFRY_CONFIG = os.getenv('STRFRY_CONFIG', '/etc/strfry.conf')
