@@ -4,7 +4,7 @@ from flask import Flask, render_template, redirect, url_for, flash, request, sen
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from flask_wtf import FlaskForm
 from wtforms import StringField, PasswordField, SelectField, TextAreaField, IntegerField
-from wtforms.validators import DataRequired, Length, EqualTo, Optional
+from wtforms.validators import DataRequired, Length, EqualTo, Optional, Regexp
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from werkzeug.utils import secure_filename
@@ -49,23 +49,55 @@ class LoginForm(FlaskForm):
 
 
 class RegisterForm(FlaskForm):
-    username = StringField('Username', validators=[DataRequired(), Length(min=3, max=80)])
-    password = PasswordField('Password', validators=[DataRequired(), Length(min=8)])
+    username = StringField('Username', validators=[
+        DataRequired(),
+        Length(min=3, max=80),
+        Regexp(r'^[a-zA-Z0-9_]+$', message='Username must be alphanumeric with underscores only')
+    ])
+    password = PasswordField('Password', validators=[
+        DataRequired(),
+        Length(min=21),
+        Regexp(r'^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]',
+               message='Password must have: 21+ chars, uppercase, lowercase, digit, special char')
+    ])
     confirm_password = PasswordField('Confirm Password', validators=[DataRequired(), EqualTo('password')])
     role = SelectField('Role', choices=[('admin', 'Admin'), ('moderator', 'Moderator'), ('viewer', 'Viewer')], validators=[DataRequired()])
     registration_token = StringField('Registration Token', validators=[DataRequired()])
 
 
 class AdminCreateUserForm(FlaskForm):
-    username = StringField('Username', validators=[DataRequired(), Length(min=3, max=80)])
-    password = PasswordField('Password', validators=[DataRequired(), Length(min=8)])
+    username = StringField('Username', validators=[
+        DataRequired(),
+        Length(min=3, max=80),
+        Regexp(r'^[a-zA-Z0-9_]+$', message='Username must be alphanumeric with underscores only')
+    ])
+    password = PasswordField('Password', validators=[
+        DataRequired(),
+        Length(min=21),
+        Regexp(r'^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]',
+               message='Password must have: 21+ chars, uppercase, lowercase, digit, special char')
+    ])
     role = SelectField('Role', choices=[('admin', 'Admin'), ('moderator', 'Moderator'), ('viewer', 'Viewer')], validators=[DataRequired()])
 
 
 class UserEditForm(FlaskForm):
-    username = StringField('Username', validators=[DataRequired(), Length(min=3, max=80)])
+    username = StringField('Username', validators=[
+        DataRequired(),
+        Length(min=3, max=80),
+        Regexp(r'^[a-zA-Z0-9_]+$', message='Username must be alphanumeric with underscores only')
+    ])
     role = SelectField('Role', choices=[('admin', 'Admin'), ('moderator', 'Moderator'), ('viewer', 'Viewer')], validators=[DataRequired()])
     is_active = SelectField('Active', choices=[('true', 'Yes'), ('false', 'No')], validators=[DataRequired()])
+
+
+class ChangePasswordForm(FlaskForm):
+    password = PasswordField('New Password', validators=[
+        DataRequired(),
+        Length(min=21),
+        Regexp(r'^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]',
+               message='Password must have: 21+ chars, uppercase, lowercase, digit, special char')
+    ])
+    confirm_password = PasswordField('Confirm Password', validators=[DataRequired(), EqualTo('password')])
 
 
 class DeleteForm(FlaskForm):
@@ -203,6 +235,10 @@ def login():
                 
                 log_audit('login', f'User logged in')
                 
+                if user.must_change_password:
+                    flash('Please change your password.', 'warning')
+                    return redirect(url_for('change_password_route', user_id=user.id))
+                
                 next_page = request.args.get('next')
                 flash(f'Welcome back, {user.username}!', 'success')
                 return redirect(next_page) if next_page else redirect(url_for('index'))
@@ -251,7 +287,8 @@ def register():
         
         user = User(
             username=form.username.data,
-            role=form.role.data
+            role=form.role.data,
+            must_change_password=False
         )
         user.set_password(form.password.data)
         
@@ -559,8 +596,9 @@ def admin():
         )
     
     create_user_form = AdminCreateUserForm()
+    change_password_form = ChangePasswordForm()
     
-    return render_template('admin.html', users=users, audit_logs=audit_logs, edit_forms=edit_forms, create_user_form=create_user_form)
+    return render_template('admin.html', users=users, audit_logs=audit_logs, edit_forms=edit_forms, create_user_form=create_user_form, change_password_form=change_password_form)
 
 
 @app.route('/admin/user/<int:user_id>/edit', methods=['POST'])
@@ -608,19 +646,51 @@ def create_user():
     if form.validate_on_submit():
         user = User(
             username=form.username.data,
-            role=form.role.data
+            role=form.role.data,
+            must_change_password=False
         )
         user.set_password(form.password.data)
         
         db.session.add(user)
-        db.session.commit()
-        
-        log_audit('user_create', f'Created user {user.username} as {user.role}')
-        flash(f'User {user.username} created.', 'success')
+        try:
+            db.session.commit()
+            log_audit('user_create', f'Created user {user.username} as {user.role}')
+            flash(f'User {user.username} created.', 'success')
+        except Exception as e:
+            db.session.rollback()
+            if 'UNIQUE constraint' in str(e) or 'duplicate' in str(e).lower():
+                flash('Username already exists.', 'danger')
+            else:
+                flash('Failed to create user.', 'danger')
     else:
-        flash('Failed to create user.', 'danger')
+        flash('Failed to create user. Check username and password requirements.', 'danger')
     
     return redirect(url_for('admin'))
+
+
+@app.route('/change-password/<int:user_id>', methods=['GET', 'POST'])
+@login_required
+def change_password_route(user_id):
+    if current_user.id != user_id and current_user.role != 'admin':
+        abort(403)
+    
+    user = User.query.get_or_404(user_id)
+    form = ChangePasswordForm()
+    
+    if form.validate_on_submit():
+        user.set_password(form.password.data)
+        user.must_change_password = False
+        db.session.commit()
+        log_audit('password_change', f'Password changed for {user.username}')
+        
+        if current_user.id == user_id:
+            flash('Password changed successfully.', 'success')
+            return redirect(url_for('index'))
+        else:
+            flash(f'Password for {user.username} changed.', 'success')
+            return redirect(url_for('admin'))
+    
+    return render_template('change_password.html', form=form, user=user)
 
 
 @app.errorhandler(404)

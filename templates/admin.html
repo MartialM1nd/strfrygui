@@ -18,6 +18,7 @@
                 </div>
                 <div class="col-md-3">
                     <input type="password" name="password" class="form-control" placeholder="Password" required>
+                    <small class="text-muted">Min 21 chars: uppercase, lowercase, digit, special char (@$!%*?&)</small>
                 </div>
                 <div class="col-md-3">
                     <select name="role" class="form-select">
@@ -98,6 +99,9 @@
                             </button>
                         </form>
                         {% endif %}
+                        <button type="button" class="btn btn-sm btn-outline-warning" data-bs-toggle="modal" data-bs-target="#changePasswordModal{{ user.id }}">
+                            <i class="bi bi-key"></i>
+                        </button>
                     </td>
                 </tr>
                 {% endfor %}
@@ -135,4 +139,45 @@
         </table>
     </div>
 </div>
+
+{% for user in users %}
+<div class="modal fade" id="changePasswordModal{{ user.id }}" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header bg-warning">
+                <h5 class="modal-title">Change Password for {{ user.username }}</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <form method="POST" action="{{ url_for('change_password_route', user_id=user.id) }}">
+                {{ change_password_form.hidden_tag() }}
+                <div class="modal-body">
+                    <div class="mb-3">
+                        {{ change_password_form.password.label(class="form-label") }}
+                        {{ change_password_form.password(class="form-control") }}
+                        {% if change_password_form.password.errors %}
+                            <div class="text-danger">
+                                {% for error in change_password_form.password.errors %}{{ error }}{% endfor %}
+                            </div>
+                        {% endif %}
+                        <small class="text-muted">Min 21 chars: uppercase, lowercase, digit, special char (@$!%*?&)</small>
+                    </div>
+                    <div class="mb-3">
+                        {{ change_password_form.confirm_password.label(class="form-label") }}
+                        {{ change_password_form.confirm_password(class="form-control") }}
+                        {% if change_password_form.confirm_password.errors %}
+                            <div class="text-danger">
+                                {% for error in change_password_form.confirm_password.errors %}{{ error }}{% endfor %}
+                            </div>
+                        {% endif %}
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                    <button type="submit" class="btn btn-warning">Change Password</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endfor %}
 {% endblock %}

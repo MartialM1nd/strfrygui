@@ -29,6 +29,7 @@
                                 {% for error in form.password.errors %}{{ error }}{% endfor %}
                             </div>
                         {% endif %}
+                        <small class="text-muted">Min 21 chars: uppercase, lowercase, digit, special char (@$!%*?&)</small>
                     </div>
                     <div class="mb-3">
                         {{ form.confirm_password.label(class="form-label") }}

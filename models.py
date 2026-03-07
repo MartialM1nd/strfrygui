@@ -18,6 +18,7 @@ class User(UserMixin, db.Model):
     last_login = db.Column(db.DateTime)
     failed_login_attempts = db.Column(db.Integer, default=0)
     lockout_until = db.Column(db.DateTime)
+    must_change_password = db.Column(db.Boolean, default=True)
     
     def set_password(self, password):
         self.password_hash = bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
