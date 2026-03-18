@@ -35,6 +35,16 @@
                 </div>
             </div>
             
+            <div id="nip05Fields" class="search-fields" style="display:none;">
+                <div class="mb-3">
+                    {{ form.nip05.label(class="form-label") }}
+                    {{ form.nip05(class="form-control", placeholder="e.g., user@domain.com") }}
+                </div>
+                <div class="mb-3">
+                    <small class="text-muted">Enter a NIP-05 address to search for all events from that user.</small>
+                </div>
+            </div>
+            
             <div id="pubkeyFields" class="search-fields">
                 <div class="mb-3">
                     {{ form.pubkey.label(class="form-label") }}
@@ -224,6 +234,7 @@ const searchTypeSelect = document.getElementById('searchType');
 const searchFields = {
     'all': null,
     'keyword': document.getElementById('keywordFields'),
+    'nip05': document.getElementById('nip05Fields'),
     'pubkey': document.getElementById('pubkeyFields'),
     'kind': document.getElementById('kindFields'),
     'timerange': document.getElementById('timerangeFields'),

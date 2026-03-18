@@ -16,6 +16,9 @@ class Config:
     STRFRY_DB_PATH = os.getenv('STRFRY_DB_PATH', '/var/lib/strfry')
     STRFRY_METRICS_URL = os.getenv('STRFRY_METRICS_URL', 'http://localhost:7777/metrics')
     
+    EXTERNAL_RELAYS = os.getenv('EXTERNAL_RELAYS', 'wss://relay.damus.io\nwss://nos.lol').split('\n')
+    EXTERNAL_RELAYS = [r.strip() for r in EXTERNAL_RELAYS if r.strip()]
+    
     SQLALCHEMY_DATABASE_URI = os.getenv('DATABASE_URL', 'sqlite:///strfrygui.db')
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     
@@ -36,8 +39,8 @@ class Config:
 class Security:
     ALLOWED_ROLES = ['admin', 'moderator', 'viewer']
     ROLE_PERMISSIONS = {
-        'admin': ['read', 'write', 'delete', 'config', 'users', 'import_export', 'db_manage'],
-        'moderator': ['read', 'write', 'delete'],
+        'admin': ['read', 'write', 'delete', 'config', 'users', 'import_export', 'db_manage', 'moderation'],
+        'moderator': ['read', 'write', 'delete', 'moderation'],
         'viewer': ['read']
     }
     

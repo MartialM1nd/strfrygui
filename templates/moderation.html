@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+
+{% block title %}Moderation{% if relay_name %} - {{ relay_name }}{% endif %} - StrfryGUI{% endblock %}
+
+{% block content %}
+<h2 class="mb-4"><i class="bi bi-shield-exclamation"></i>{% if relay_name %} Moderation for {{ relay_name }}{% else %} Moderation{% endif %}</h2>
+
+<div class="card mb-4">
+    <div class="card-header">
+        <h5 class="mb-0">Filter Reports</h5>
+    </div>
+    <div class="card-body">
+        <form method="GET" class="row g-3">
+            <div class="col-md-3">
+                <label class="form-label">Report Type</label>
+                <select name="report_type" class="form-select">
+                    <option value="">All Types</option>
+                    <option value="nudity" {% if report_type_filter == 'nudity' %}selected{% endif %}>Nudity</option>
+                    <option value="spam" {% if report_type_filter == 'spam' %}selected{% endif %}>Spam</option>
+                    <option value="profanity" {% if report_type_filter == 'profanity' %}selected{% endif %}>Profanity</option>
+                    <option value="illegal" {% if report_type_filter == 'illegal' %}selected{% endif %}>Illegal</option>
+                    <option value="impersonation" {% if report_type_filter == 'impersonation' %}selected{% endif %}>Impersonation</option>
+                    <option value="other" {% if report_type_filter == 'other' %}selected{% endif %}>Other</option>
+                </select>
+            </div>
+            <div class="col-md-3">
+                <label class="form-label">Reporter Pubkey</label>
+                <input type="text" name="reporter" class="form-control" placeholder="Filter by reporter" value="{{ reporter_filter }}">
+            </div>
+            <div class="col-md-3">
+                <label class="form-label">Reported Pubkey</label>
+                <input type="text" name="reported" class="form-control" placeholder="Filter by reported user" value="{{ reported_filter }}">
+            </div>
+            <div class="col-md-3 d-flex align-items-end">
+                <button type="submit" class="btn btn-primary">
+                    <i class="bi bi-search"></i> Filter
+                </button>
+            </div>
+        </form>
+    </div>
+</div>
+
+{% if reports %}
+<div class="card">
+    <div class="card-header">
+        <h5 class="mb-0">Reports ({{ reports|length }})</h5>
+    </div>
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table table-sm table-hover">
+                <thead>
+                    <tr>
+                        <th>Date</th>
+                        <th>Type</th>
+                        <th>Reporter</th>
+                        <th>Reported User</th>
+                        <th>Event ID</th>
+                        <th>Content</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for report in reports %}
+                    <tr>
+                        <td><small>{{ report.created_at|datetime if report.created_at else '-' }}</small></td>
+                        <td>
+                            {% if report.report_type == 'nudity' %}
+                            <span class="badge bg-danger">Nudity</span>
+                            {% elif report.report_type == 'spam' %}
+                            <span class="badge bg-warning text-dark">Spam</span>
+                            {% elif report.report_type == 'profanity' %}
+                            <span class="badge bg-warning text-dark">Profanity</span>
+                            {% elif report.report_type == 'illegal' %}
+                            <span class="badge bg-danger">Illegal</span>
+                            {% elif report.report_type == 'impersonation' %}
+                            <span class="badge bg-info">Impersonation</span>
+                            {% else %}
+                            <span class="badge bg-secondary">{{ report.report_type|default('Other') }}</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if report.reporter %}
+                            <a href="{{ url_for('events') }}" onclick="document.querySelector('#searchType').value='pubkey'; document.querySelector('#pubkeyFields input').value='{{ report.reporter }}'; document.querySelector('#searchForm button').click(); return false;" title="Search events from this pubkey">
+                                <code class="text-truncate d-inline-block" style="max-width: 80px;">{{ report.reporter }}</code>
+                            </a>
+                            {% else %}
+                            -
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if report.reported_pubkey %}
+                            <a href="{{ url_for('events') }}" onclick="document.querySelector('#searchType').value='pubkey'; document.querySelector('#pubkeyFields input').value='{{ report.reported_pubkey }}'; document.querySelector('#searchForm button').click(); return false;" title="Search events from this pubkey">
+                                <code class="text-truncate d-inline-block" style="max-width: 80px;">{{ report.reported_pubkey }}</code>
+                            </a>
+                            {% else %}
+                            -
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if report.reported_event %}
+                            <code class="text-truncate d-inline-block" style="max-width: 80px;" title="{{ report.reported_event }}">{{ report.reported_event }}</code>
+                            {% else %}
+                            -
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if report.content %}
+                            <small class="text-muted">{{ report.content[:50] }}{% if report.content|length > 50 %}...{% endif %}</small>
+                            {% else %}
+                            -
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% else %}
+<div class="alert alert-info">
+    No reports found matching your filters.
+</div>
+{% endif %}
+
+{% endblock %}

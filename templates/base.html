@@ -50,6 +50,13 @@
                             <i class="bi bi-gear"></i> Config
                         </a>
                     </li>
+                    {% if current_user.role in ['admin', 'moderator'] %}
+                    <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('moderation') }}">
+                            <i class="bi bi-shield-exclamation"></i> Moderation
+                        </a>
+                    </li>
+                    {% endif %}
                     {% if current_user.role == 'admin' %}
                     <li class="nav-item">
                         <a class="nav-link" href="{{ url_for('admin') }}">

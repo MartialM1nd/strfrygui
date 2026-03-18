@@ -79,6 +79,46 @@ class PubkeyMetadataCache:
 pubkey_metadata_cache = PubkeyMetadataCache()
 
 
+def fetch_from_external_relays(pubkey, relays=None):
+    """Fetch kind 0 metadata from external relays."""
+    import json
+    import requests
+    
+    if relays is None:
+        relays = Config.EXTERNAL_RELAYS
+    
+    for relay_url in relays:
+        try:
+            subscription = json.dumps({
+                "kinds": [0],
+                "authors": [pubkey],
+                "limit": 1
+            })
+            ws_url = relay_url.replace('wss://', 'wss://').replace('ws://', 'ws://')
+            
+            import websocket
+            ws = websocket.create_connection(ws_url, timeout=5)
+            ws.send(json.dumps(["REQ", "metadata", subscription]))
+            
+            while True:
+                try:
+                    response = ws.recv()
+                    if not response:
+                        break
+                    msg = json.loads(response)
+                    if msg[0] == "EVENT" and msg[2].get('kind') == 0:
+                        ws.close()
+                        return json.loads(msg[2].get('content', '{}'))
+                except:
+                    break
+            
+            ws.close()
+        except Exception:
+            continue
+    
+    return None
+
+
 def get_pubkey_metadata(pubkey):
     cached = pubkey_metadata_cache.get(pubkey)
     if cached:
@@ -96,6 +136,11 @@ def get_pubkey_metadata(pubkey):
             return content
     except Exception:
         pass
+    
+    metadata = fetch_from_external_relays(pubkey)
+    if metadata:
+        pubkey_metadata_cache.set(pubkey, metadata)
+        return metadata
     
     pubkey_metadata_cache.set(pubkey, {})
     return {}
@@ -185,6 +230,7 @@ class EventSearchForm(FlaskForm):
     search_type = SelectField('Search Type', choices=[
         ('all', 'All Events'),
         ('keyword', 'By Keyword'),
+        ('nip05', 'By NIP-05'),
         ('pubkey', 'By Pubkey'),
         ('kind', 'By Kind'),
         ('timerange', 'By Time Range'),
@@ -192,6 +238,7 @@ class EventSearchForm(FlaskForm):
         ('advanced', 'Advanced (JSON)')
     ])
     keyword = StringField('Keyword', validators=[Optional()])
+    nip05 = StringField('NIP-05 (e.g., user@domain.com)', validators=[Optional()])
     pubkey = StringField('Pubkey', validators=[Optional()])
     kind = SelectField('Kind', choices=[
         ('', 'Select Kind...'),
@@ -403,7 +450,14 @@ def events():
     if request.method == 'POST':
         if 'search' in request.form and form.validate():
             try:
-                current_filter = build_filter_from_form(form)
+                if form.search_type.data == 'nip05' and form.nip05.data:
+                    pubkey = resolve_nip05(form.nip05.data)
+                    if not pubkey:
+                        error = "Could not resolve NIP-05 address. Check the format (user@domain.com) and try again."
+                    else:
+                        current_filter = {'authors': [pubkey]}
+                else:
+                    current_filter = build_filter_from_form(form)
                 
                 if form.search_type.data == 'keyword' and form.keyword.data:
                     keyword = form.keyword.data.lower()
@@ -467,6 +521,25 @@ def parse_timestamp(value):
     return None
 
 
+def resolve_nip05(nip05_address):
+    """Resolve a NIP-05 address to a pubkey."""
+    try:
+        import requests
+        local_part, _, domain = nip05_address.strip().partition('@')
+        if not local_part or not domain:
+            return None
+        
+        url = f"https://{domain}/.well-known/nostr.json?name={local_part}"
+        response = requests.get(url, timeout=10)
+        response.raise_for_status()
+        data = response.json()
+        
+        pubkey = data.get('names', {}).get(local_part)
+        return pubkey
+    except Exception:
+        return None
+
+
 def build_filter_from_form(form):
     filter_obj = {}
     
@@ -483,6 +556,10 @@ def build_filter_from_form(form):
             filter_obj['since'] = since_ts
         if until_ts:
             filter_obj['until'] = until_ts
+    elif search_type == 'nip05' and form.nip05.data:
+        pubkey = resolve_nip05(form.nip05.data)
+        if pubkey:
+            filter_obj['authors'] = [pubkey]
     elif search_type == 'pubkey' and form.pubkey.data:
         pubkey_input = form.pubkey.data.strip()
         try:
@@ -733,6 +810,63 @@ def admin():
     change_password_form = ChangePasswordForm()
     
     return render_template('admin.html', users=users, audit_logs=audit_logs, edit_forms=edit_forms, create_user_form=create_user_form, change_password_form=change_password_form)
+
+
+@app.route('/moderation', methods=['GET', 'POST'])
+@moderator_required
+def moderation():
+    report_type_filter = request.args.get('report_type', '')
+    reporter_filter = request.args.get('reporter', '')
+    reported_filter = request.args.get('reported', '')
+    
+    filter_obj = {'kinds': [1984], 'limit': 100}
+    
+    if report_type_filter:
+        filter_obj['#p'] = [report_type_filter]
+    
+    try:
+        reports = scan_events(filter_obj, limit=100)
+        
+        parsed_reports = []
+        for report in reports:
+            tags = report.get('tags', [])
+            report_type = None
+            reported_pubkey = None
+            reported_event_id = None
+            
+            for tag in tags:
+                if tag[0] == 'p' and len(tag) >= 3:
+                    reported_pubkey = tag[1]
+                    report_type = tag[2] if len(tag) > 2 else 'other'
+                elif tag[0] == 'e' and len(tag) >= 3:
+                    reported_event_id = tag[1]
+            
+            if reporter_filter and report.get('pubkey') != reporter_filter:
+                continue
+            if reported_filter and reported_pubkey != reported_filter:
+                continue
+            if report_type_filter and report_type != report_type_filter:
+                continue
+            
+            parsed_reports.append({
+                'id': report.get('id'),
+                'created_at': report.get('created_at'),
+                'reporter': report.get('pubkey'),
+                'reported_pubkey': reported_pubkey,
+                'reported_event': reported_event_id,
+                'report_type': report_type,
+                'content': report.get('content', '')
+            })
+        
+        parsed_reports.sort(key=lambda x: x['created_at'] or 0, reverse=True)
+    except Exception as e:
+        parsed_reports = []
+        error = str(e)
+    
+    return render_template('moderation.html', reports=parsed_reports, 
+                           report_type_filter=report_type_filter,
+                           reporter_filter=reporter_filter,
+                           reported_filter=reported_filter)
 
 
 @app.route('/admin/user/<int:user_id>/edit', methods=['POST'])
