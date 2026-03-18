@@ -25,6 +25,16 @@
                 </div>
             </div>
             
+            <div id="keywordFields" class="search-fields" style="display:none;">
+                <div class="mb-3">
+                    {{ form.keyword.label(class="form-label") }}
+                    {{ form.keyword(class="form-control", placeholder="Search for keyword in event content") }}
+                </div>
+                <div class="mb-3">
+                    <small class="text-muted">Search recent kind 1 (text notes) for keyword. Optionally set time range below.</small>
+                </div>
+            </div>
+            
             <div id="pubkeyFields" class="search-fields">
                 <div class="mb-3">
                     {{ form.pubkey.label(class="form-label") }}
@@ -43,13 +53,13 @@
                 <div class="row">
                     <div class="col-md-6 mb-3">
                         {{ form.since.label(class="form-label") }}
-                        {{ form.since(class="form-control", placeholder="e.g., 1704067200") }}
-                        <div class="form-text">Unix timestamp. Leave empty for no start limit.</div>
+                        {{ form.since(class="form-control", placeholder="e.g., 1704067200 or 2024-01-01") }}
+                        <div class="form-text">Unix timestamp or date (YYYY-MM-DD). Leave empty for no start limit.</div>
                     </div>
                     <div class="col-md-6 mb-3">
                         {{ form.until.label(class="form-label") }}
-                        {{ form.until(class="form-control", placeholder="e.g., 1735689600") }}
-                        <div class="form-text">Unix timestamp. Leave empty for no end limit.</div>
+                        {{ form.until(class="form-control", placeholder="e.g., 1735689600 or 2024-12-31") }}
+                        <div class="form-text">Unix timestamp or date (YYYY-MM-DD). Leave empty for no end limit.</div>
                     </div>
                 </div>
             </div>
@@ -207,6 +217,8 @@
 <script>
 const searchTypeSelect = document.getElementById('searchType');
 const searchFields = {
+    'all': null,
+    'keyword': document.getElementById('keywordFields'),
     'pubkey': document.getElementById('pubkeyFields'),
     'kind': document.getElementById('kindFields'),
     'timerange': document.getElementById('timerangeFields'),
@@ -215,7 +227,7 @@ const searchFields = {
 };
 
 function showFieldsForType(type) {
-    Object.values(searchFields).forEach(el => el.style.display = 'none');
+    Object.values(searchFields).forEach(el => { if (el) el.style.display = 'none'; });
     if (searchFields[type]) {
         searchFields[type].style.display = 'block';
     }

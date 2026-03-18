@@ -106,12 +106,14 @@ class DeleteForm(FlaskForm):
 class EventSearchForm(FlaskForm):
     search_type = SelectField('Search Type', choices=[
         ('all', 'All Events'),
+        ('keyword', 'By Keyword'),
         ('pubkey', 'By Pubkey'),
         ('kind', 'By Kind'),
         ('timerange', 'By Time Range'),
         ('tag', 'By Tag'),
         ('advanced', 'Advanced (JSON)')
     ])
+    keyword = StringField('Keyword', validators=[Optional()])
     pubkey = StringField('Pubkey', validators=[Optional()])
     kind = SelectField('Kind', choices=[
         ('', 'Select Kind...'),
@@ -128,8 +130,8 @@ class EventSearchForm(FlaskForm):
         ('30000', 'NIP-51 Mute List'),
         ('30001', 'NIP-51 Pin List'),
     ], validators=[Optional()])
-    since = StringField('Since (Unix timestamp)', validators=[Optional()])
-    until = StringField('Until (Unix timestamp)', validators=[Optional()])
+    since = StringField('Since', validators=[Optional()])
+    until = StringField('Until', validators=[Optional()])
     tag_name = StringField('Tag Name (e.g., p, e)', validators=[Optional()])
     tag_value = StringField('Tag Value', validators=[Optional()])
     filter_json = TextAreaField('Custom Filter (JSON)', validators=[Optional()])
@@ -323,7 +325,16 @@ def events():
         if 'search' in request.form and form.validate():
             try:
                 current_filter = build_filter_from_form(form)
-                events_list = scan_events(current_filter, limit=form.limit.data or 25)
+                
+                if form.search_type.data == 'keyword' and form.keyword.data:
+                    keyword = form.keyword.data.lower()
+                    filter_obj = {k: v for k, v in current_filter.items() if k != 'limit'}
+                    filter_obj['limit'] = 1000
+                    all_events = scan_events(filter_obj, limit=1000)
+                    events_list = [e for e in all_events if keyword in e.get('content', '').lower()]
+                    events_list = events_list[:form.limit.data or 25]
+                else:
+                    events_list = scan_events(current_filter, limit=form.limit.data or 25)
             except (ValueError, StrfryError) as e:
                 error = str(e)
         elif 'delete_selected' in request.form:
@@ -346,6 +357,29 @@ def events():
     return render_template('events.html', form=form, events=events_list, error=error, current_filter=current_filter)
 
 
+def parse_timestamp(value):
+    if not value:
+        return None
+    value = value.strip()
+    try:
+        return int(value)
+    except ValueError:
+        pass
+    from datetime import datetime
+    formats = [
+        '%Y-%m-%d %H:%M:%S',
+        '%Y-%m-%dT%H:%M:%S',
+        '%Y-%m-%d',
+    ]
+    for fmt in formats:
+        try:
+            dt = datetime.strptime(value, fmt)
+            return int(dt.timestamp())
+        except ValueError:
+            continue
+    return None
+
+
 def build_filter_from_form(form):
     filter_obj = {}
     
@@ -353,6 +387,15 @@ def build_filter_from_form(form):
     
     if search_type == 'all':
         pass
+    elif search_type == 'keyword' and form.keyword.data:
+        filter_obj['kinds'] = [1]
+        filter_obj['limit'] = 1000
+        since_ts = parse_timestamp(form.since.data) if form.since.data else None
+        until_ts = parse_timestamp(form.until.data) if form.until.data else None
+        if since_ts:
+            filter_obj['since'] = since_ts
+        if until_ts:
+            filter_obj['until'] = until_ts
     elif search_type == 'pubkey' and form.pubkey.data:
         pubkey_input = form.pubkey.data.strip()
         try:
@@ -363,16 +406,12 @@ def build_filter_from_form(form):
     elif search_type == 'kind' and form.kind.data:
         filter_obj['kinds'] = [int(form.kind.data)]
     elif search_type == 'timerange':
-        if form.since.data:
-            try:
-                filter_obj['since'] = int(form.since.data)
-            except ValueError:
-                pass
-        if form.until.data:
-            try:
-                filter_obj['until'] = int(form.until.data)
-            except ValueError:
-                pass
+        since_ts = parse_timestamp(form.since.data) if form.since.data else None
+        until_ts = parse_timestamp(form.until.data) if form.until.data else None
+        if since_ts:
+            filter_obj['since'] = since_ts
+        if until_ts:
+            filter_obj['until'] = until_ts
     elif search_type == 'tag' and form.tag_name.data and form.tag_value.data:
         tag_name = form.tag_name.data.strip()
         if tag_name:
