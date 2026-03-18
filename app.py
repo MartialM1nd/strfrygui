@@ -23,6 +23,84 @@ from utils.strfry import (
 from utils.metrics import get_summary, MetricsError
 from utils.auth import admin_required, moderator_required, viewer_or_higher, permission_required
 
+
+class PubkeyMetadataCache:
+    def __init__(self, max_size=50000, ttl_days=7):
+        self.cache = {}
+        self.max_size = max_size
+        self.ttl_seconds = ttl_days * 86400
+        self.access_order = []
+    
+    def get(self, pubkey):
+        if pubkey in self.cache:
+            metadata, timestamp = self.cache[pubkey]
+            import time
+            if time.time() - timestamp > self.ttl_seconds:
+                del self.cache[pubkey]
+                self.access_order.remove(pubkey)
+                return None
+            if pubkey in self.access_order:
+                self.access_order.remove(pubkey)
+            self.access_order.append(pubkey)
+            return metadata
+        return None
+    
+    def set(self, pubkey, metadata):
+        import time
+        current_time = time.time()
+        
+        if len(self.cache) > 0 and len(self.cache) % 100 == 0:
+            self._cleanup_expired()
+        
+        if pubkey in self.cache:
+            if pubkey in self.access_order:
+                self.access_order.remove(pubkey)
+        else:
+            if len(self.cache) >= self.max_size:
+                oldest = self.access_order.pop(0)
+                del self.cache[oldest]
+        
+        self.cache[pubkey] = (metadata, current_time)
+        self.access_order.append(pubkey)
+    
+    def _cleanup_expired(self):
+        import time
+        now = time.time()
+        expired = [
+            k for k, v in self.cache.items() 
+            if now - v[1] > self.ttl_seconds
+        ]
+        for k in expired:
+            del self.cache[k]
+            if k in self.access_order:
+                self.access_order.remove(k)
+
+
+pubkey_metadata_cache = PubkeyMetadataCache()
+
+
+def get_pubkey_metadata(pubkey):
+    cached = pubkey_metadata_cache.get(pubkey)
+    if cached:
+        return cached
+    
+    try:
+        events = scan_events({
+            'kinds': [0],
+            'authors': [pubkey]
+        }, limit=1)
+        if events:
+            import json
+            content = json.loads(events[0]['content'])
+            pubkey_metadata_cache.set(pubkey, content)
+            return content
+    except Exception:
+        pass
+    
+    pubkey_metadata_cache.set(pubkey, {})
+    return {}
+
+
 app = Flask(__name__)
 app.config.from_object(Config)
 
@@ -320,6 +398,7 @@ def events():
     events_list = []
     error = None
     current_filter = {}
+    pubkey_metadata = {}
     
     if request.method == 'POST':
         if 'search' in request.form and form.validate():
@@ -335,6 +414,10 @@ def events():
                     events_list = events_list[:form.limit.data or 25]
                 else:
                     events_list = scan_events(current_filter, limit=form.limit.data or 25)
+                
+                unique_pubkeys = set(e.get('pubkey', '') for e in events_list if e.get('pubkey'))
+                for pubkey in unique_pubkeys:
+                    pubkey_metadata[pubkey] = get_pubkey_metadata(pubkey)
             except (ValueError, StrfryError) as e:
                 error = str(e)
         elif 'delete_selected' in request.form:
@@ -349,12 +432,15 @@ def events():
                         try:
                             current_filter = build_filter_from_form(form)
                             events_list = scan_events(current_filter, limit=form.limit.data or 25)
+                            unique_pubkeys = set(e.get('pubkey', '') for e in events_list if e.get('pubkey'))
+                            for pubkey in unique_pubkeys:
+                                pubkey_metadata[pubkey] = get_pubkey_metadata(pubkey)
                         except:
                             pass
                 except (ValueError, StrfryError) as e:
                     error = str(e)
     
-    return render_template('events.html', form=form, events=events_list, error=error, current_filter=current_filter)
+    return render_template('events.html', form=form, events=events_list, error=error, current_filter=current_filter, pubkey_metadata=pubkey_metadata)
 
 
 def parse_timestamp(value):
@@ -369,6 +455,7 @@ def parse_timestamp(value):
     formats = [
         '%Y-%m-%d %H:%M:%S',
         '%Y-%m-%dT%H:%M:%S',
+        '%Y-%m-%dT%H:%M',
         '%Y-%m-%d',
     ]
     for fmt in formats:

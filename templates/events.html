@@ -53,13 +53,13 @@
                 <div class="row">
                     <div class="col-md-6 mb-3">
                         {{ form.since.label(class="form-label") }}
-                        {{ form.since(class="form-control", placeholder="e.g., 1704067200 or 2024-01-01") }}
-                        <div class="form-text">Unix timestamp or date (YYYY-MM-DD). Leave empty for no start limit.</div>
+                        {{ form.since(class="form-control", type="datetime-local") }}
+                        <div class="form-text">Leave empty for no start limit.</div>
                     </div>
                     <div class="col-md-6 mb-3">
                         {{ form.until.label(class="form-label") }}
-                        {{ form.until(class="form-control", placeholder="e.g., 1735689600 or 2024-12-31") }}
-                        <div class="form-text">Unix timestamp or date (YYYY-MM-DD). Leave empty for no end limit.</div>
+                        {{ form.until(class="form-control", type="datetime-local") }}
+                        <div class="form-text">Leave empty for no end limit.</div>
                     </div>
                 </div>
             </div>
@@ -161,8 +161,13 @@
                     <tr class="collapse" id="content-{{ loop.index }}">
                         <td colspan="6">
                             <div class="p-3 rounded bg-body-secondary">
+                                {% set metadata = pubkey_metadata.get(event.get('pubkey', ''), {}) %}
+                                {% if metadata.name or metadata.nip05 %}
+                                <strong>Name:</strong> {{ metadata.name|default('N/A') }}<br>
+                                <strong>NIP-05:</strong> {{ metadata.nip05|default('N/A') }}<br>
+                                {% endif %}
                                 <strong>ID:</strong> <code>{{ event.get('id', '') }}</code><br>
-                                <strong>Pubkey:</strong> <code>{{ event.get('pubkey', '') }}</code><br>
+                                <strong>Pubkey:</strong> <a href="#" onclick="document.getElementById('searchType').value='pubkey'; document.getElementById('pubkeyFields').querySelector('input').value='{{ event.get('pubkey', '') }}'; showFieldsForType('pubkey'); document.getElementById('searchForm').querySelector('button').click(); return false;" title="Search events from this pubkey"><code>{{ event.get('pubkey', '') }}</code> <i class="bi bi-search"></i></a><br>
                                 <strong>Created:</strong> {{ event.get('created_at', 0) }}<br>
                                 <strong>Kind:</strong> {{ event.get('kind', '') }}<br>
                                 <strong>Tags:</strong>
