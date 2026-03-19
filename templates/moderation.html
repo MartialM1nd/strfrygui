@@ -320,7 +320,25 @@ document.querySelectorAll('[id^="report-"]').forEach(function(element) {
                     return;
                 }
                 let html = '<strong>Kind:</strong> ' + event.kind + '<br>';
-                html += '<strong>Author:</strong> <code class="text-truncate" style="max-width: 150px;">' + event.pubkey + '</code><br>';
+                
+                // Fetch author metadata
+                fetch('/api/pubkey-metadata/' + encodeURIComponent(event.pubkey))
+                    .then(function(r) { return r.json(); })
+                    .then(function(metadata) {
+                        let authorHtml = '<code>' + event.pubkey + '</code>';
+                        if (metadata.name) {
+                            authorHtml = '<strong>' + metadata.name + '</strong> ' + authorHtml;
+                        }
+                        if (metadata.nip05) {
+                            authorHtml += ' <span class="text-info">' + metadata.nip05 + '</span>';
+                        }
+                        contentDiv.querySelector('.author-display').innerHTML = authorHtml;
+                    })
+                    .catch(function() {
+                        contentDiv.querySelector('.author-display').innerHTML = '<code>' + event.pubkey + '</code>';
+                    });
+                
+                html += '<strong>Author:</strong> <span class="author-display"><em>Loading...</em></span><br>';
                 if (event.content) {
                     html += '<strong>Content:</strong><pre class="mt-1 mb-0" style="white-space: pre-wrap; word-break: break-word;">' + event.content + '</pre>';
                 }
@@ -392,7 +410,25 @@ function appendReports(reports) {
                         return;
                     }
                     let html = '<strong>Kind:</strong> ' + event.kind + '<br>';
-                    html += '<strong>Author:</strong> <code class="text-truncate" style="max-width: 150px;">' + event.pubkey + '</code><br>';
+                    
+                    // Fetch author metadata
+                    fetch('/api/pubkey-metadata/' + encodeURIComponent(event.pubkey))
+                        .then(function(r) { return r.json(); })
+                        .then(function(metadata) {
+                            let authorHtml = '<code>' + event.pubkey + '</code>';
+                            if (metadata.name) {
+                                authorHtml = '<strong>' + metadata.name + '</strong> ' + authorHtml;
+                            }
+                            if (metadata.nip05) {
+                                authorHtml += ' <span class="text-info">' + metadata.nip05 + '</span>';
+                            }
+                            contentDiv.querySelector('.author-display').innerHTML = authorHtml;
+                        })
+                        .catch(function() {
+                            contentDiv.querySelector('.author-display').innerHTML = '<code>' + event.pubkey + '</code>';
+                        });
+                    
+                    html += '<strong>Author:</strong> <span class="author-display"><em>Loading...</em></span><br>';
                     if (event.content) {
                         html += '<strong>Content:</strong><pre class="mt-1 mb-0" style="white-space: pre-wrap; word-break: break-word;">' + event.content + '</pre>';
                     }
