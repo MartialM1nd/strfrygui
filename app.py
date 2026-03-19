@@ -1000,6 +1000,9 @@ def moderation_ban(report_id):
         report.banned = True
         report.banned_by = current_user.id
         report.banned_at = datetime.utcnow()
+        report.reviewed = True
+        report.reviewed_by = current_user.id
+        report.reviewed_at = datetime.utcnow()
         
         log_audit('pubkey_banned', f'Banned pubkey {report.reported_pubkey} - {reason}')
         flash('User banned and all events deleted.', 'success')
@@ -1038,6 +1041,12 @@ def moderation_delete_event(report_id):
         flash('Event deleted.', 'success')
     except (ValueError, StrfryError) as e:
         flash(f'Failed to delete event: {e}', 'danger')
+        return redirect(url_for('moderation'))
+    
+    report.reviewed = True
+    report.reviewed_by = current_user.id
+    report.reviewed_at = datetime.utcnow()
+    db.session.commit()
     
     return redirect(url_for('moderation'))
 
