@@ -343,6 +343,16 @@ def api_metrics():
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/pubkey-metadata/<pubkey>')
+@viewer_or_higher
+def api_pubkey_metadata(pubkey):
+    try:
+        metadata = get_pubkey_metadata(pubkey)
+        return jsonify(metadata)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if current_user.is_authenticated:
@@ -445,7 +455,6 @@ def events():
     events_list = []
     error = None
     current_filter = {}
-    pubkey_metadata = {}
     
     if request.method == 'POST':
         if 'search' in request.form and form.validate():
@@ -468,10 +477,6 @@ def events():
                     events_list = events_list[:form.limit.data or 25]
                 else:
                     events_list = scan_events(current_filter, limit=form.limit.data or 25)
-                
-                unique_pubkeys = set(e.get('pubkey', '') for e in events_list if e.get('pubkey'))
-                for pubkey in unique_pubkeys:
-                    pubkey_metadata[pubkey] = get_pubkey_metadata(pubkey)
             except (ValueError, StrfryError) as e:
                 error = str(e)
         elif 'delete_selected' in request.form:
@@ -486,9 +491,6 @@ def events():
                         try:
                             current_filter = build_filter_from_form(form)
                             events_list = scan_events(current_filter, limit=form.limit.data or 25)
-                            unique_pubkeys = set(e.get('pubkey', '') for e in events_list if e.get('pubkey'))
-                            for pubkey in unique_pubkeys:
-                                pubkey_metadata[pubkey] = get_pubkey_metadata(pubkey)
                         except:
                             pass
                 except (ValueError, StrfryError) as e:
@@ -496,7 +498,7 @@ def events():
     
     banned_pubkeys = [b.pubkey for b in BannedPubkey.query.all()]
     
-    return render_template('events.html', form=form, events=events_list, error=error, current_filter=current_filter, pubkey_metadata=pubkey_metadata, banned_pubkeys=banned_pubkeys)
+    return render_template('events.html', form=form, events=events_list, error=error, current_filter=current_filter, banned_pubkeys=banned_pubkeys)
 
 
 def parse_timestamp(value):

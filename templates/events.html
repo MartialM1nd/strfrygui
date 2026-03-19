@@ -168,10 +168,9 @@
                             </button>
                         </td>
                     </tr>
-                    <tr class="collapse" id="content-{{ loop.index }}">
+                    <tr class="collapse" id="content-{{ loop.index }}" data-pubkey="{{ event.get('pubkey', '') }}">
                         <td colspan="6">
                             <div class="p-3 rounded bg-body-secondary">
-                                {% set metadata = pubkey_metadata.get(event.get('pubkey', ''), {}) %}
                                 {% set event_pubkey = event.get('pubkey', '') %}
                                 {% set is_banned = event_pubkey in banned_pubkeys %}
                                 {% if is_banned %}
@@ -179,10 +178,9 @@
                                     <i class="bi bi-exclamation-triangle-fill"></i> <strong>WARNING:</strong> This user is banned!
                                 </div>
                                 {% endif %}
-                                {% if metadata.name or metadata.nip05 %}
-                                <strong>Name:</strong> {{ metadata.name|default('N/A') }}<br>
-                                <strong>NIP-05:</strong> {{ metadata.nip05|default('N/A') }}<br>
-                                {% endif %}
+                                <div id="metadata-{{ loop.index }}" class="metadata-placeholder">
+                                    <em>Loading metadata...</em>
+                                </div>
                                 <strong>ID:</strong> <code>{{ event.get('id', '') }}</code><br>
                                 <strong>Pubkey:</strong> <a href="#" onclick="document.getElementById('searchType').value='pubkey'; document.getElementById('pubkeyFields').querySelector('input').value='{{ event_pubkey }}'; showFieldsForType('pubkey'); document.getElementById('searchForm').querySelector('button').click(); return false;" title="Search events from this pubkey"><code>{{ event_pubkey }}</code> <i class="bi bi-search"></i></a>{% if is_banned %} <span class="badge bg-danger">BANNED</span>{% endif %}<br>
                                 <strong>Created:</strong> {{ event.get('created_at', 0) }}<br>
@@ -400,5 +398,29 @@ function confirmEventBan() {
         }
     });
 }
+
+document.querySelectorAll('[id^="content-"]').forEach(function(element) {
+    element.addEventListener('show.bs.collapse', function() {
+        const pubkey = this.getAttribute('data-pubkey');
+        const placeholder = this.querySelector('.metadata-placeholder');
+        if (pubkey && placeholder) {
+            fetch('/api/pubkey-metadata/' + encodeURIComponent(pubkey))
+                .then(function(response) { return response.json(); })
+                .then(function(metadata) {
+                    if (metadata.name || metadata.nip05) {
+                        var html = '';
+                        if (metadata.name) html += '<strong>Name:</strong> ' + metadata.name + '<br>';
+                        if (metadata.nip05) html += '<strong>NIP-05:</strong> ' + metadata.nip05 + '<br>';
+                        placeholder.innerHTML = html;
+                    } else {
+                        placeholder.innerHTML = '';
+                    }
+                })
+                .catch(function() {
+                    placeholder.innerHTML = '';
+                });
+        }
+    });
+});
 </script>
 {% endblock %}
