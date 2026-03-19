@@ -52,6 +52,13 @@
                 </div>
             </div>
             
+            <div id="event_idFields" class="search-fields" style="display:none;">
+                <div class="mb-3">
+                    {{ form.event_id.label(class="form-label") }}
+                    {{ form.event_id(class="form-control", placeholder="Event ID (hex)") }}
+                </div>
+            </div>
+            
             <div id="kindFields" class="search-fields" style="display:none;">
                 <div class="mb-3">
                     {{ form.kind.label(class="form-label") }}
@@ -279,6 +286,7 @@ const searchFields = {
     'keyword': document.getElementById('keywordFields'),
     'nip05': document.getElementById('nip05Fields'),
     'pubkey': document.getElementById('pubkeyFields'),
+    'event_id': document.getElementById('event_idFields'),
     'kind': document.getElementById('kindFields'),
     'timerange': document.getElementById('timerangeFields'),
     'tag': document.getElementById('tagFields'),

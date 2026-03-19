@@ -232,6 +232,7 @@ class EventSearchForm(FlaskForm):
         ('keyword', 'By Keyword'),
         ('nip05', 'By NIP-05'),
         ('pubkey', 'By Pubkey'),
+        ('event_id', 'By Event ID'),
         ('kind', 'By Kind'),
         ('timerange', 'By Time Range'),
         ('tag', 'By Tag'),
@@ -240,6 +241,7 @@ class EventSearchForm(FlaskForm):
     keyword = StringField('Keyword', validators=[Optional()])
     nip05 = StringField('NIP-05 (e.g., user@domain.com)', validators=[Optional()])
     pubkey = StringField('Pubkey', validators=[Optional()])
+    event_id = StringField('Event ID', validators=[Optional()])
     kind = SelectField('Kind', choices=[
         ('', 'Select Kind...'),
         ('0', 'Metadata (kind 0)'),
@@ -349,6 +351,26 @@ def api_pubkey_metadata(pubkey):
     try:
         metadata = get_pubkey_metadata(pubkey)
         return jsonify(metadata)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/event/<event_id>')
+@moderator_required
+def api_get_event(event_id):
+    try:
+        events = scan_events({'ids': [event_id]}, limit=1)
+        if events:
+            e = events[0]
+            return jsonify({
+                'id': e.get('id'),
+                'pubkey': e.get('pubkey'),
+                'kind': e.get('kind'),
+                'content': e.get('content'),
+                'tags': e.get('tags'),
+                'created_at': e.get('created_at')
+            })
+        return jsonify({'error': 'Event not found'}), 404
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -512,7 +534,25 @@ def events():
     error = None
     current_filter = {}
     
-    if request.method == 'POST':
+    if request.method == 'GET':
+        search_type = request.args.get('search_type', 'all')
+        form.search_type.data = search_type
+        
+        if search_type == 'pubkey' and request.args.get('pubkey'):
+            form.pubkey.data = request.args.get('pubkey')
+            try:
+                current_filter = {'authors': [form.pubkey.data]}
+                events_list = scan_events(current_filter, limit=form.limit.data or 25)
+            except (ValueError, StrfryError) as e:
+                error = str(e)
+        elif search_type == 'event_id' and request.args.get('event_id'):
+            form.event_id.data = request.args.get('event_id')
+            try:
+                current_filter = {'ids': [form.event_id.data]}
+                events_list = scan_events(current_filter, limit=form.limit.data or 25)
+            except (ValueError, StrfryError) as e:
+                error = str(e)
+    elif request.method == 'POST':
         if 'search' in request.form and form.validate():
             try:
                 if form.search_type.data == 'nip05' and form.nip05.data:
@@ -627,6 +667,8 @@ def build_filter_from_form(form):
         except ValueError:
             pubkey_hex = pubkey_input
         filter_obj['authors'] = [pubkey_hex]
+    elif search_type == 'event_id' and form.event_id.data:
+        filter_obj['ids'] = [form.event_id.data.strip()]
     elif search_type == 'kind' and form.kind.data:
         filter_obj['kinds'] = [int(form.kind.data)]
     elif search_type == 'timerange':

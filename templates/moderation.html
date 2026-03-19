@@ -97,7 +97,7 @@
                         <td><small>{{ report.created_at|datetime if report.created_at else '-' }}</small></td>
                         <td>
                             {% if report.reporter_pubkey %}
-                            <a href="{{ url_for('events') }}" onclick="document.querySelector('#searchType').value='pubkey'; document.querySelector('#pubkeyFields input').value='{{ report.reporter_pubkey }}'; document.querySelector('#searchForm button').click(); return false;" title="Search events from this pubkey">
+                            <a href="{{ url_for('events', search_type='pubkey', pubkey=report.reporter_pubkey) }}" title="Search events from this pubkey">
                                 <code class="text-truncate d-inline-block" style="max-width: 80px;">{{ report.reporter_pubkey }}</code>
                             </a>
                             {% else %}
@@ -107,7 +107,7 @@
                         <td>
                             {% if report.reported_pubkey %}
                             <span class="{% if report.banned %}text-danger fw-bold{% endif %}">
-                                <a href="{{ url_for('events') }}" onclick="document.querySelector('#searchType').value='pubkey'; document.querySelector('#pubkeyFields input').value='{{ report.reported_pubkey }}'; document.querySelector('#searchForm button').click(); return false;" title="Search events from this pubkey">
+                                <a href="{{ url_for('events', search_type='pubkey', pubkey=report.reported_pubkey) }}" title="Search events from this pubkey">
                                     <code class="text-truncate d-inline-block" style="max-width: 80px;">{{ report.reported_pubkey }}</code>
                                 </a>
                                 {% if report.banned %}<i class="bi bi-exclamation-triangle-fill" title="User Banned"></i>{% endif %}
@@ -118,7 +118,9 @@
                         </td>
                         <td>
                             {% if report.reported_event_id %}
-                            <code class="text-truncate d-inline-block" style="max-width: 80px;" title="{{ report.reported_event_id }}">{{ report.reported_event_id }}</code>
+                            <a href="{{ url_for('events', search_type='event_id', event_id=report.reported_event_id) }}" title="Search for this event">
+                                <code class="text-truncate d-inline-block" style="max-width: 80px;">{{ report.reported_event_id }}</code>
+                            </a>
                             {% else %}
                             -
                             {% endif %}
@@ -148,16 +150,24 @@
                             </div>
                         </td>
                     </tr>
-                    <tr class="collapse" id="report-{{ loop.index }}">
+                    <tr class="collapse" id="report-{{ loop.index }}" data-event-id="{{ report.reported_event_id or '' }}">
                         <td colspan="6">
                             <div class="p-3 rounded bg-body-secondary">
                                 <strong>Report ID:</strong> <code>{{ report.event_id }}</code><br>
-                                <strong>Reporter:</strong> <code>{{ report.reporter_pubkey or 'N/A' }}</code><br>
-                                <strong>Reported User:</strong> <code>{{ report.reported_pubkey or 'N/A' }}</code><br>
-                                <strong>Reported Event:</strong> <code>{{ report.reported_event_id or 'N/A' }}</code><br>
+                                <strong>Reporter:</strong> <a href="{{ url_for('events', search_type='pubkey', pubkey=report.reporter_pubkey) }}"><code>{{ report.reporter_pubkey or 'N/A' }}</code></a><br>
+                                <strong>Reported User:</strong> <a href="{{ url_for('events', search_type='pubkey', pubkey=report.reported_pubkey) }}"><code>{{ report.reported_pubkey or 'N/A' }}</code></a><br>
+                                <strong>Reported Event:</strong> <a href="{{ url_for('events', search_type='event_id', event_id=report.reported_event_id) }}"><code>{{ report.reported_event_id or 'N/A' }}</code></a><br>
                                 <strong>Created:</strong> {{ report.created_at|datetime if report.created_at else 'N/A' }}<br>
+                                {% if report.reported_event_id %}
+                                <hr>
+                                <strong>Reported Event Content:</strong>
+                                <div id="event-content-{{ loop.index }}" class="mt-2">
+                                    <span class="text-muted"><em>Loading event...</em></span>
+                                </div>
+                                {% else %}
                                 <strong>Content:</strong>
-                                <pre class="mt-2 mb-0">{{ report.content or 'N/A' }}</pre>
+                                <pre class="mt-2 mb-0">{{ report.content if report.content else 'No content' }}</pre>
+                                {% endif %}
                                 {% if report.reviewed %}
                                 <hr>
                                 <span class="text-success"><i class="bi bi-check-circle"></i> Reviewed by user ID {{ report.reviewed_by }} on {{ report.reviewed_at|datetime if report.reviewed_at else 'N/A' }}</span>
@@ -291,6 +301,40 @@ const observer = new IntersectionObserver(function(entries) {
 const sentinel = document.getElementById('scrollSentinel');
 if (sentinel) observer.observe(sentinel);
 
+document.querySelectorAll('[id^="report-"]').forEach(function(element) {
+    element.addEventListener('show.bs.collapse', function() {
+        const eventId = this.getAttribute('data-event-id');
+        if (!eventId) return;
+        
+        const rowIndex = this.id.replace('report-', '');
+        const contentDiv = document.getElementById('event-content-' + rowIndex);
+        if (!contentDiv || contentDiv.dataset.loaded === 'true') return;
+        
+        contentDiv.dataset.loaded = 'true';
+        
+        fetch('/api/event/' + encodeURIComponent(eventId))
+            .then(function(r) { return r.json(); })
+            .then(function(event) {
+                if (event.error) {
+                    contentDiv.innerHTML = '<span class="text-danger">Event not found</span>';
+                    return;
+                }
+                let html = '<strong>Kind:</strong> ' + event.kind + '<br>';
+                html += '<strong>Author:</strong> <code class="text-truncate" style="max-width: 150px;">' + event.pubkey + '</code><br>';
+                if (event.content) {
+                    html += '<strong>Content:</strong><pre class="mt-1 mb-0" style="white-space: pre-wrap; word-break: break-word;">' + event.content + '</pre>';
+                }
+                if (event.tags && event.tags.length > 0) {
+                    html += '<strong>Tags:</strong><pre class="mt-1 mb-0">' + JSON.stringify(event.tags) + '</pre>';
+                }
+                contentDiv.innerHTML = html;
+            })
+            .catch(function() {
+                contentDiv.innerHTML = '<span class="text-danger">Failed to load event</span>';
+            });
+    });
+});
+
 function loadMoreReports() {
     isLoading = true;
     document.getElementById('loadingIndicator').style.display = 'block';
@@ -319,9 +363,48 @@ function appendReports(reports) {
     
     reports.forEach(function(report, i) {
         const index = startIndex + i + 1;
+        
         const tr = document.createElement('tr');
         tr.innerHTML = buildReportRowHTML(report, index);
         tbody.insertBefore(tr, sentinel);
+        
+        const collapseTr = document.createElement('tr');
+        collapseTr.className = 'collapse';
+        collapseTr.id = 'report-' + index;
+        collapseTr.setAttribute('data-event-id', report.reported_event_id || '');
+        collapseTr.innerHTML = buildReportCollapseHTML(report, index);
+        tbody.insertBefore(collapseTr, sentinel);
+        
+        collapseTr.addEventListener('show.bs.collapse', function() {
+            const eventId = this.getAttribute('data-event-id');
+            if (!eventId) return;
+            
+            const contentDiv = document.getElementById('event-content-' + index);
+            if (!contentDiv || contentDiv.dataset.loaded === 'true') return;
+            
+            contentDiv.dataset.loaded = 'true';
+            
+            fetch('/api/event/' + encodeURIComponent(eventId))
+                .then(function(r) { return r.json(); })
+                .then(function(event) {
+                    if (event.error) {
+                        contentDiv.innerHTML = '<span class="text-danger">Event not found</span>';
+                        return;
+                    }
+                    let html = '<strong>Kind:</strong> ' + event.kind + '<br>';
+                    html += '<strong>Author:</strong> <code class="text-truncate" style="max-width: 150px;">' + event.pubkey + '</code><br>';
+                    if (event.content) {
+                        html += '<strong>Content:</strong><pre class="mt-1 mb-0" style="white-space: pre-wrap; word-break: break-word;">' + event.content + '</pre>';
+                    }
+                    if (event.tags && event.tags.length > 0) {
+                        html += '<strong>Tags:</strong><pre class="mt-1 mb-0">' + JSON.stringify(event.tags) + '</pre>';
+                    }
+                    contentDiv.innerHTML = html;
+                })
+                .catch(function() {
+                    contentDiv.innerHTML = '<span class="text-danger">Failed to load event</span>';
+                });
+        });
     });
 }
 
@@ -338,13 +421,13 @@ function buildReportRowHTML(report, index) {
     
     const dateStr = report.created_at ? formatDate(report.created_at) : '-';
     const reporterLink = report.reporter_pubkey ? 
-        '<a href="/events" onclick="document.querySelector(\'#searchType\').value=\'pubkey\'; document.querySelector(\'#pubkeyFields input\').value=\'' + report.reporter_pubkey + '\'; document.querySelector(\'#searchForm button\').click(); return false;" title="Search events from this pubkey"><code class="text-truncate d-inline-block" style="max-width: 80px;">' + report.reporter_pubkey + '</code></a>' : '-';
+        '<a href="/events?search_type=pubkey&pubkey=' + report.reporter_pubkey + '" title="Search events from this pubkey"><code class="text-truncate d-inline-block" style="max-width: 80px;">' + report.reporter_pubkey + '</code></a>' : '-';
     const reportedClass = report.banned ? 'text-danger fw-bold' : '';
     const bannedIcon = report.banned ? '<i class="bi bi-exclamation-triangle-fill" title="User Banned"></i>' : '';
     const reportedLink = report.reported_pubkey ?
-        '<span class="' + reportedClass + '"><a href="/events" onclick="document.querySelector(\'#searchType\').value=\'pubkey\'; document.querySelector(\'#pubkeyFields input\').value=\'' + report.reported_pubkey + '\'; document.querySelector(\'#searchForm button\').click(); return false;" title="Search events from this pubkey"><code class="text-truncate d-inline-block" style="max-width: 80px;">' + report.reported_pubkey + '</code></a>' + bannedIcon + '</span>' : '-';
+        '<span class="' + reportedClass + '"><a href="/events?search_type=pubkey&pubkey=' + report.reported_pubkey + '" title="Search events from this pubkey"><code class="text-truncate d-inline-block" style="max-width: 80px;">' + report.reported_pubkey + '</code></a>' + bannedIcon + '</span>' : '-';
     const eventId = report.reported_event_id ? 
-        '<code class="text-truncate d-inline-block" style="max-width: 80px;" title="' + report.reported_event_id + '">' + report.reported_event_id + '</code>' : '-';
+        '<a href="/events?search_type=event_id&event_id=' + report.reported_event_id + '" title="Search for this event"><code class="text-truncate d-inline-block" style="max-width: 80px;" title="' + report.reported_event_id + '">' + report.reported_event_id + '</code></a>' : '-';
     
     let actions = '<div class="btn-group btn-group-sm" role="group">' +
         '<button class="btn btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#report-' + index + '" title="View"><i class="bi bi-eye"></i></button>';
@@ -369,6 +452,28 @@ function buildReportRowHTML(report, index) {
     row += '<td>' + actions + '</td>';
     
     return row;
+}
+
+function buildReportCollapseHTML(report, index) {
+    const eventContentDiv = report.reported_event_id ? 
+        '<div id="event-content-' + index + '" class="mt-2"><span class="text-muted"><em>Loading event...</em></span></div>' :
+        '<pre class="mt-2 mb-0">' + (report.content || 'No content') + '</pre>';
+    
+    const reviewedHtml = report.reviewed ? 
+        '<hr><span class="text-success"><i class="bi bi-check-circle"></i> Reviewed by user ID ' + report.reviewed_by + ' on ' + formatDate(report.reviewed_at) + '</span>' : '';
+    const bannedHtml = report.banned ? 
+        '<hr><span class="text-danger"><i class="bi bi-x-circle-fill"></i> Banned by user ID ' + report.banned_by + ' on ' + formatDate(report.banned_at) + '</span>' : '';
+    
+    return '<td colspan="6">' +
+        '<div class="p-3 rounded bg-body-secondary">' +
+        '<strong>Report ID:</strong> <code>' + report.event_id + '</code><br>' +
+        '<strong>Reporter:</strong> <a href="/events?search_type=pubkey&pubkey=' + (report.reporter_pubkey || '') + '"><code>' + (report.reporter_pubkey || 'N/A') + '</code></a><br>' +
+        '<strong>Reported User:</strong> <a href="/events?search_type=pubkey&pubkey=' + (report.reported_pubkey || '') + '"><code>' + (report.reported_pubkey || 'N/A') + '</code></a><br>' +
+        '<strong>Reported Event:</strong> <a href="/events?search_type=event_id&event_id=' + (report.reported_event_id || '') + '"><code>' + (report.reported_event_id || 'N/A') + '</code></a><br>' +
+        '<strong>Created:</strong> ' + formatDate(report.created_at) + '<br>' +
+        (report.reported_event_id ? '<hr><strong>Reported Event Content:</strong>' + eventContentDiv : '<strong>Content:</strong>' + eventContentDiv) +
+        reviewedHtml + bannedHtml +
+        '</div></td>';
 }
 
 function formatDate(isoString) {
