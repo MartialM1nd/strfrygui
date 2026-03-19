@@ -150,6 +150,40 @@
     </div>
 </div>
 
+<div class="card mb-4">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <h5 class="mb-0">Metadata Lookup Relays</h5>
+        <span id="relayStatus" class="badge bg-secondary">Loading...</span>
+    </div>
+    <div class="card-body">
+        <div class="row mb-3">
+            <div class="col-md-8">
+                <input type="text" id="newRelayUrl" class="form-control" placeholder="wss://relay.example.com">
+            </div>
+            <div class="col-md-4">
+                <button class="btn btn-primary" onclick="addRelay()">
+                    <i class="bi bi-plus-circle"></i> Add Relay
+                </button>
+            </div>
+        </div>
+        <div class="table-responsive">
+            <table class="table table-sm" id="relaysTable">
+                <thead>
+                    <tr>
+                        <th>Status</th>
+                        <th>URL</th>
+                        <th>Last Tested</th>
+                        <th style="width: 150px;">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="relaysBody">
+                    <tr><td colspan="4" class="text-center">Loading...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
 {% for user in users %}
 <div class="modal fade" id="changePasswordModal{{ user.id }}" tabindex="-1">
     <div class="modal-dialog">
@@ -235,40 +269,6 @@
 </div>
 
 {% endblock %}
-
-<div class="card mb-4">
-    <div class="card-header d-flex justify-content-between align-items-center">
-        <h5 class="mb-0">Metadata Lookup Relays</h5>
-        <span id="relayStatus" class="badge bg-secondary">Loading...</span>
-    </div>
-    <div class="card-body">
-        <div class="row mb-3">
-            <div class="col-md-8">
-                <input type="text" id="newRelayUrl" class="form-control" placeholder="wss://relay.example.com">
-            </div>
-            <div class="col-md-4">
-                <button class="btn btn-primary" onclick="addRelay()">
-                    <i class="bi bi-plus-circle"></i> Add Relay
-                </button>
-            </div>
-        </div>
-        <div class="table-responsive">
-            <table class="table table-sm" id="relaysTable">
-                <thead>
-                    <tr>
-                        <th>Status</th>
-                        <th>URL</th>
-                        <th>Last Tested</th>
-                        <th style="width: 150px;">Actions</th>
-                    </tr>
-                </thead>
-                <tbody id="relaysBody">
-                    <tr><td colspan="4" class="text-center">Loading...</td></tr>
-                </tbody>
-            </table>
-        </div>
-    </div>
-</div>
 
 {% block scripts %}
 <script>
