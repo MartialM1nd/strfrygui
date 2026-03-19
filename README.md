@@ -11,7 +11,9 @@ A web-based management portal for [strfry](https://github.com/hoytech/strfry), a
 ## Features
 
 - **Real-time Metrics Dashboard** - Live line charts showing events, client messages, and relay message rates with 5-second auto-refresh
-- **Event Management** - Combined search and delete UI with dropdown selectors for pubkey (supports npub), kind, time range, tag, or advanced filters
+- **Event Management** - Combined search and delete UI with dropdown selectors for pubkey (supports npub), kind, time range, tag, event ID search, or advanced filters
+- **Moderation** - Handle NIP-56 reports (kind 1984) with lazy-loaded event content, clickable reporter/reported columns to search, reviewed checkbox, ban user with reason, delete reported event, auto-mark as reviewed when action taken
+- **Metadata Relay Management** - Add/remove metadata relays (for fetching user profile data)
 - **Dark Mode** - Toggle between light and dark themes, with automatic system preference detection
 - **Data Import/Export** - Import and export events in JSONL format, with fried export support for faster re-imports
 - **Negentropy Trees** - Create, build, and manage negentropy sync trees
@@ -20,7 +22,7 @@ A web-based management portal for [strfry](https://github.com/hoytech/strfry), a
 - **Configuration Editor** - Edit relay configuration (name, description, pubkey, contact, bind address, port)
 - **Connection Monitoring** - View real-time connection and message statistics
 - **Multi-user Authentication** - Role-based access control (admin, moderator, viewer)
-- **Audit Logging** - Track user actions for security and debugging
+- **Audit Logging** - Track user actions in scrollable log with timestamps
 
 ## Tech Stack
 

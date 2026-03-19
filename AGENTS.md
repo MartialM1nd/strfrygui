@@ -7,9 +7,9 @@ StrfryGUI is a Flask-based web management portal for the strfry Nostr relay.
 strfrygui/
 ├── app.py           # Main Flask app, routes, forms
 ├── config.py        # Config classes (Config, Security)
-├── models.py        # SQLAlchemy models (User, AuditLog)
+├── models.py        # SQLAlchemy models
 ├── requirements.txt # Python dependencies
-├── .env.example     # Environment template (copy to .env, never commit .env)
+├── .env.example     # Environment template (copy to .env, never commit)
 ├── utils/           # strfry.py, metrics.py, auth.py
 ├── templates/       # Jinja2 HTML templates
 └── static/          # CSS, JS
@@ -27,7 +27,8 @@ flask run --debug
 
 # Run tests
 pytest                      # all tests
-pytest tests/test_file.py::test_function  # single test
+pytest tests/test_file.py   # single file
+pytest tests/test_file.py::test_function  # single test function
 pytest --cov=app --cov-report=html        # with coverage
 
 # Lint (install first: pip install ruff black)
@@ -87,9 +88,9 @@ def scan_events(filter_json, limit=100):
         raise StrfryError("Command timed out")
 ```
 
-### Key Flask Patterns
+## Flask Patterns
 
-**Route with auth:**
+### Route with auth:
 ```python
 @app.route('/endpoint', methods=['GET', 'POST'])
 @admin_required  # Auth decorators before route
@@ -100,19 +101,28 @@ def handler_name():
     return render_template('template.html', form=form)
 ```
 
-**Form (Flask-WTF):**
+### Form (Flask-WTF):
 ```python
 class MyForm(FlaskForm):
     field_name = StringField('Label', validators=[DataRequired()])
     another_field = IntegerField('Label', validators=[Optional()])
 ```
 
-**Database model:**
+### Database model:
 ```python
 class User(db.Model):
     __tablename__ = 'users'
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False)
+```
+
+### API Endpoint:
+```python
+@app.route('/api/endpoint')
+@viewer_or_higher  # or appropriate auth decorator
+def api_endpoint():
+    data = fetch_data()
+    return jsonify({'data': data, 'has_more': bool})
 ```
 
 ## Database Migrations
@@ -125,52 +135,95 @@ def init_db():
         db.create_all()
         from sqlalchemy import text
         with db.engine.connect() as conn:
-            # Add missing columns for upgrades
+            # Check if column exists
             result = conn.execute(text(
                 "SELECT name FROM pragma_table_info('users') WHERE name='column_name'"
             ))
             if not result.fetchone():
                 conn.execute(text("ALTER TABLE users ADD COLUMN column_name BOOLEAN DEFAULT 1"))
                 conn.commit()
+        
+        # Ensure new tables exist
+        from models import NewModel
+        db.create_all()
 ```
 
 ## Security Requirements
 
-- **Passwords**: 21+ chars, uppercase, lowercase, digit, special char (except admin-created users: 8+ chars)
+- **Passwords**: 21+ chars, uppercase, lowercase, digit, special char (admin-created users: 8+ chars)
 - **must_change_password**: Admin-created users must change password on first login
 - **Auth decorators**: `@admin_required`, `@moderator_required`, `@viewer_or_higher`
-- CSRF: Flask-WTF handles automatically
-- Rate limiting: Flask-Limiter on `/login` and globally
-- Secrets: Never log passwords; use `.env` (never commit)
+- **CSRF**: Flask-WTF handles automatically - use `form.csrf_token.current_token` for AJAX
+- **Rate limiting**: Flask-Limiter on `/login` and globally
+- **Secrets**: Never log passwords; use `.env` (never commit)
 
 ## HTML Templates
 
 - Extend `base.html` for all pages
+- **CRITICAL**: Always close `{% block content %}` with `{% endblock %}` before starting `{% block scripts %}`
 - Use Bootstrap 5 with `data-bs-theme="dark"` for dark mode support
 - Use theme-aware classes: `bg-body-secondary` (not `bg-light`)
-- Block structure: `{% block content %}{% endblock %}` and `{% block scripts %}{% endblock %}`
 - Access routes via `url_for('route_name')`
 
-## Dark Mode
-
+### Dark Mode
 Bootstrap 5.3 uses `data-bs-theme="dark"` on `<html>`. Use theme-aware classes:
 - ✅ `bg-body`, `bg-body-secondary`, `bg-body-tertiary`
 - ❌ `bg-light`, `bg-dark` (won't adapt)
 
-## JavaScript (Dashboard)
+## JavaScript Patterns
 
-Chart.js for real-time charts with 5-second auto-refresh:
+### Fetch with CSRF Token
 ```javascript
-const chart = new Chart(document.getElementById('chartId'), {
-    type: 'line',
-    data: { labels: [], datasets: [...] },
-    options: { responsive: true, plugins: { legend: { position: 'bottom' } } }
-});
+function doAction() {
+    const form = document.getElementById('actionForm');
+    const csrfToken = form.querySelector('input[name="csrf_token"]').value;
+    
+    fetch('/api/endpoint', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: 'csrf_token=' + encodeURIComponent(csrfToken) + '&param=value'
+    }).then(r => r.json()).then(data => { /* handle */ });
+}
+```
 
-setInterval(async () => {
-    const data = await fetch('/api/endpoint').then(r => r.json());
-    // update chart and call chart.update('none')
-}, 5000);
+### Infinite Scroll (IntersectionObserver)
+```javascript
+let currentOffset = 0;
+let hasMore = true;
+let isLoading = false;
+
+const observer = new IntersectionObserver(function(entries) {
+    if (entries[0].isIntersecting && hasMore && !isLoading) {
+        loadMore();
+    }
+}, { rootMargin: '100px' });
+
+const sentinel = document.getElementById('scrollSentinel');
+if (sentinel) observer.observe(sentinel);
+
+function loadMore() {
+    isLoading = true;
+    fetch('/api/endpoint?offset=' + currentOffset)
+        .then(r => r.json())
+        .then(data => {
+            appendData(data.items);
+            hasMore = data.has_more;
+            currentOffset += data.items.length;
+            isLoading = false;
+        });
+}
+```
+
+### Defensive DOM Access
+```javascript
+function loadData() {
+    const element = document.getElementById('elementId');
+    if (!element) {
+        console.error('Element not found in DOM');
+        return;
+    }
+    // ... rest of function
+}
 ```
 
 ## Configuration
