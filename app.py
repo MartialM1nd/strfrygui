@@ -904,7 +904,7 @@ def moderation_ban(report_id):
     
     try:
         if report.reported_pubkey:
-            delete_events({'authors': [report.reported_pubkey]]})
+            delete_events({'authors': [report.reported_pubkey]})
         
         existing_ban = BannedPubkey.query.filter_by(pubkey=report.reported_pubkey).first()
         if not existing_ban:
