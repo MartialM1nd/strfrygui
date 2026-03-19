@@ -267,7 +267,7 @@
 </div>
 
 <form method="POST" id="eventBanForm" style="display:none;">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="csrf_token" value="{{ form.csrf_token.current_token }}">
     <input type="hidden" name="reason" value="Banned from events page">
 </form>
 
@@ -383,13 +383,15 @@ function showEventBanModal(pubkey) {
 
 function confirmEventBan() {
     const pubkey = document.getElementById('eventBanPubkey').value;
+    const form = document.getElementById('eventBanForm');
+    const csrfToken = form.querySelector('input[name="csrf_token"]').value;
     
     fetch('/moderation/ban-by-pubkey', {
         method: 'POST',
         headers: {
             'Content-Type': 'application/x-www-form-urlencoded',
         },
-        body: 'pubkey=' + encodeURIComponent(pubkey) + '&reason=' + encodeURIComponent('Banned from events page')
+        body: 'csrf_token=' + encodeURIComponent(csrfToken) + '&pubkey=' + encodeURIComponent(pubkey) + '&reason=' + encodeURIComponent('Banned from events page')
     }).then(response => {
         if (response.ok) {
             location.reload();

@@ -207,7 +207,7 @@
                         <td><small>{{ ban.banned_at|datetime if ban.banned_at else '-' }}</small></td>
                         <td>
                             <form method="POST" action="{{ url_for('unban_pubkey', ban_id=ban.id) }}" style="display:inline;">
-                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <input type="hidden" name="csrf_token" value="{{ create_user_form.csrf_token.current_token }}">
                                 <button type="submit" class="btn btn-sm btn-outline-success" onclick="return confirm('Unban this user?')" title="Unban">
                                     <i class="bi bi-arrow-counterclockwise"></i>
                                 </button>
