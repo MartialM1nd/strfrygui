@@ -95,3 +95,24 @@ class BannedPubkey(db.Model):
     banned_at = db.Column(db.DateTime, default=datetime.utcnow)
     
     banner = db.relationship('User', backref='banned_pubkeys')
+
+
+class MetadataRelay(db.Model):
+    __tablename__ = 'metadata_relays'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    url = db.Column(db.String(256), unique=True, nullable=False)
+    enabled = db.Column(db.Boolean, default=True)
+    is_default = db.Column(db.Boolean, default=False)
+    last_status = db.Column(db.String(20), default='unknown')
+    last_tested = db.Column(db.DateTime)
+    
+    def to_dict(self):
+        return {
+            'id': self.id,
+            'url': self.url,
+            'enabled': self.enabled,
+            'is_default': self.is_default,
+            'last_status': self.last_status,
+            'last_tested': self.last_tested.isoformat() if self.last_tested else None
+        }

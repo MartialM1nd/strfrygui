@@ -13,7 +13,7 @@ from io import StringIO, BytesIO
 import tempfile
 
 from config import Config, Security
-from models import db, User, AuditLog, ModerationReport, BannedPubkey
+from models import db, User, AuditLog, ModerationReport, BannedPubkey, MetadataRelay
 from utils.strfry import (
     scan_events, delete_events, export_events, import_events,
     compact_database, negentropy_list, negentropy_add, negentropy_build,
@@ -79,15 +79,16 @@ class PubkeyMetadataCache:
 pubkey_metadata_cache = PubkeyMetadataCache()
 
 
-def fetch_from_external_relays(pubkey, relays=None):
+def fetch_from_external_relays(pubkey, relays_list=None):
     """Fetch kind 0 metadata from external relays."""
+    from models import MetadataRelay
     import json
-    import requests
     
-    if relays is None:
-        relays = Config.EXTERNAL_RELAYS
+    if relays_list is None:
+        enabled_relays = MetadataRelay.query.filter_by(enabled=True).all()
+        relays_list = [r.url for r in enabled_relays]
     
-    for relay_url in relays:
+    for relay_url in relays_list:
         try:
             subscription = json.dumps({
                 "kinds": [0],
@@ -373,6 +374,88 @@ def api_get_event(event_id):
         return jsonify({'error': 'Event not found'}), 404
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/metadata-relays', methods=['GET'])
+@admin_required
+def api_metadata_relays_list():
+    relays = MetadataRelay.query.all()
+    return jsonify([r.to_dict() for r in relays])
+
+
+@app.route('/api/metadata-relays', methods=['POST'])
+@admin_required
+def api_metadata_relays_add():
+    url = request.json.get('url', '').strip()
+    if not url:
+        return jsonify({'error': 'URL is required'}), 400
+    
+    if not url.startswith('wss://') and not url.startswith('ws://'):
+        return jsonify({'error': 'URL must start with wss:// or ws://'}), 400
+    
+    existing = MetadataRelay.query.filter_by(url=url).first()
+    if existing:
+        return jsonify({'error': 'Relay already exists'}), 400
+    
+    relay = MetadataRelay(url=url, enabled=True)
+    db.session.add(relay)
+    db.session.commit()
+    
+    log_audit('metadata_relay_added', f'Added metadata relay: {url}')
+    return jsonify(relay.to_dict())
+
+
+@app.route('/api/metadata-relays/<int:relay_id>', methods=['DELETE'])
+@admin_required
+def api_metadata_relays_delete(relay_id):
+    relay = MetadataRelay.query.get_or_404(relay_id)
+    url = relay.url
+    db.session.delete(relay)
+    db.session.commit()
+    
+    log_audit('metadata_relay_deleted', f'Deleted metadata relay: {url}')
+    return jsonify({'success': True})
+
+
+@app.route('/api/metadata-relays/<int:relay_id>/toggle', methods=['POST'])
+@admin_required
+def api_metadata_relays_toggle(relay_id):
+    relay = MetadataRelay.query.get_or_404(relay_id)
+    relay.enabled = not relay.enabled
+    db.session.commit()
+    
+    log_audit('metadata_relay_toggled', f'Toggled metadata relay: {relay.url} ({relay.enabled})')
+    return jsonify(relay.to_dict())
+
+
+@app.route('/api/metadata-relays/<int:relay_id>/test', methods=['POST'])
+@admin_required
+def api_metadata_relays_test(relay_id):
+    import json
+    import websocket
+    from datetime import datetime
+    
+    relay = MetadataRelay.query.get_or_404(relay_id)
+    
+    try:
+        ws_url = relay.url.replace('wss://', 'wss://').replace('ws://', 'ws://')
+        ws = websocket.create_connection(ws_url, timeout=5)
+        ws.send(json.dumps(["REQ", "test", {"kinds": [0], "limit": 1}]))
+        
+        response = ws.recv()
+        ws.close()
+        
+        relay.last_status = 'success'
+        relay.last_tested = datetime.utcnow()
+        db.session.commit()
+        
+        return jsonify({'status': 'success', 'message': 'Relay is working'})
+    except Exception as e:
+        relay.last_status = 'failed'
+        relay.last_tested = datetime.utcnow()
+        db.session.commit()
+        
+        return jsonify({'status': 'failed', 'message': str(e)})
 
 
 @app.route('/api/moderation-reports')
@@ -1254,8 +1337,19 @@ def init_db():
                 ))
                 conn.commit()
         
-        from models import ModerationReport, BannedPubkey
+        from models import ModerationReport, BannedPubkey, MetadataRelay
         db.create_all()
+        
+        if MetadataRelay.query.count() == 0:
+            default_relays = [
+                'wss://relay.damus.io',
+                'wss://nos.lol',
+                'wss://relay.nostr.band'
+            ]
+            for url in default_relays:
+                relay = MetadataRelay(url=url, enabled=True, is_default=True)
+                db.session.add(relay)
+            db.session.commit()
 
 
 init_db()

@@ -223,4 +223,147 @@
         {% endif %}
     </div>
 </div>
+
+<div class="card mb-4">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <h5 class="mb-0">Metadata Lookup Relays</h5>
+        <span id="relayStatus" class="badge bg-secondary">Loading...</span>
+    </div>
+    <div class="card-body">
+        <div class="row mb-3">
+            <div class="col-md-8">
+                <input type="text" id="newRelayUrl" class="form-control" placeholder="wss://relay.example.com">
+            </div>
+            <div class="col-md-4">
+                <button class="btn btn-primary" onclick="addRelay()">
+                    <i class="bi bi-plus-circle"></i> Add Relay
+                </button>
+            </div>
+        </div>
+        <div class="table-responsive">
+            <table class="table table-sm" id="relaysTable">
+                <thead>
+                    <tr>
+                        <th>Status</th>
+                        <th>URL</th>
+                        <th>Last Tested</th>
+                        <th style="width: 150px;">Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="relaysBody">
+                    <tr><td colspan="4" class="text-center">Loading...</td></tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+{% block scripts %}
+<script>
+function loadRelays() {
+    fetch('/api/metadata-relays')
+        .then(function(r) { return r.json(); })
+        .then(function(relays) {
+            var tbody = document.getElementById('relaysBody');
+            if (relays.length === 0) {
+                tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted">No relays configured. Add one below.</td></tr>';
+                document.getElementById('relayStatus').textContent = 'No relays';
+                document.getElementById('relayStatus').className = 'badge bg-warning';
+                return;
+            }
+            
+            var failed = relays.filter(function(r) { return r.last_status === 'failed'; }).length;
+            var statusBadge = document.getElementById('relayStatus');
+            if (failed === 0) {
+                statusBadge.textContent = 'All working';
+                statusBadge.className = 'badge bg-success';
+            } else {
+                statusBadge.textContent = failed + ' failing';
+                statusBadge.className = 'badge bg-danger';
+            }
+            
+            tbody.innerHTML = relays.map(function(relay) {
+                var statusIcon = '';
+                if (relay.last_status === 'success') {
+                    statusIcon = '<span class="text-success"><i class="bi bi-check-circle-fill"></i></span>';
+                } else if (relay.last_status === 'failed') {
+                    statusIcon = '<span class="text-danger"><i class="bi bi-x-circle-fill"></i></span>';
+                } else {
+                    statusIcon = '<span class="text-muted"><i class="bi bi-question-circle"></i></span>';
+                }
+                
+                var lastTested = relay.last_tested ? new Date(relay.last_tested).toLocaleString() : 'Never';
+                var enabledBadge = relay.enabled ? '' : ' <span class="badge bg-secondary">Disabled</span>';
+                
+                return '<tr>' +
+                    '<td>' + statusIcon + '</td>' +
+                    '<td><code>' + relay.url + '</code>' + enabledBadge + '</td>' +
+                    '<td><small>' + lastTested + '</small></td>' +
+                    '<td>' +
+                    '<button class="btn btn-sm btn-outline-primary me-1" onclick="testRelay(' + relay.id + ')" title="Test relay"><i class="bi bi-arrow-repeat"></i></button>' +
+                    '<button class="btn btn-sm btn-outline-secondary me-1" onclick="toggleRelay(' + relay.id + ')" title="' + (relay.enabled ? 'Disable' : 'Enable') + '"><i class="bi bi-toggle-' + (relay.enabled ? 'on' : 'off') + '"></i></button>' +
+                    '<button class="btn btn-sm btn-outline-danger" onclick="deleteRelay(' + relay.id + ')" title="Delete"><i class="bi bi-trash"></i></button>' +
+                    '</td></tr>';
+            }).join('');
+        })
+        .catch(function() {
+            document.getElementById('relaysBody').innerHTML = '<tr><td colspan="4" class="text-center text-danger">Failed to load relays</td></tr>';
+        });
+}
+
+function addRelay() {
+    var url = document.getElementById('newRelayUrl').value.trim();
+    if (!url) return alert('Please enter a relay URL');
+    
+    fetch('/api/metadata-relays', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: url })
+    })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+        if (data.error) {
+            alert(data.error);
+        } else {
+            document.getElementById('newRelayUrl').value = '';
+            loadRelays();
+        }
+    })
+    .catch(function() { alert('Failed to add relay'); });
+}
+
+function deleteRelay(id) {
+    if (!confirm('Delete this relay?')) return;
+    
+    fetch('/api/metadata-relays/' + id, { method: 'DELETE' })
+    .then(function() { loadRelays(); })
+    .catch(function() { alert('Failed to delete relay'); });
+}
+
+function toggleRelay(id) {
+    fetch('/api/metadata-relays/' + id + '/toggle', { method: 'POST' })
+    .then(function() { loadRelays(); })
+    .catch(function() { alert('Failed to toggle relay'); });
+}
+
+function testRelay(id) {
+    var btn = event.target.closest('button');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
+    
+    fetch('/api/metadata-relays/' + id + '/test', { method: 'POST' })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+        if (data.status === 'success') {
+            alert('Relay is working!');
+        } else {
+            alert('Relay test failed: ' + data.message);
+        }
+        loadRelays();
+    })
+    .catch(function() { alert('Failed to test relay'); btn.disabled = false; });
+}
+
+document.addEventListener('DOMContentLoaded', loadRelays);
+</script>
 {% endblock %}
