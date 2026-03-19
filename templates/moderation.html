@@ -11,7 +11,7 @@
     </div>
     <div class="card-body">
         <form method="GET" class="row g-3">
-            <div class="col-md-3">
+            <div class="col-md-2">
                 <label class="form-label">Report Type</label>
                 <select name="report_type" class="form-select">
                     <option value="">All Types</option>
@@ -23,18 +23,35 @@
                     <option value="other" {% if report_type_filter == 'other' %}selected{% endif %}>Other</option>
                 </select>
             </div>
-            <div class="col-md-3">
-                <label class="form-label">Reporter Pubkey</label>
+            <div class="col-md-2">
+                <label class="form-label">Date</label>
+                <select name="sort" class="form-select">
+                    <option value="desc" {% if sort_order == 'desc' %}selected{% endif %}>Newest First</option>
+                    <option value="asc" {% if sort_order == 'asc' %}selected{% endif %}>Oldest First</option>
+                </select>
+            </div>
+            <div class="col-md-2">
+                <label class="form-label">Reporter</label>
                 <input type="text" name="reporter" class="form-control" placeholder="Filter by reporter" value="{{ reporter_filter }}">
             </div>
-            <div class="col-md-3">
-                <label class="form-label">Reported Pubkey</label>
+            <div class="col-md-2">
+                <label class="form-label">Reported</label>
                 <input type="text" name="reported" class="form-control" placeholder="Filter by reported user" value="{{ reported_filter }}">
             </div>
-            <div class="col-md-3 d-flex align-items-end">
-                <button type="submit" class="btn btn-primary">
-                    <i class="bi bi-search"></i> Filter
-                </button>
+            <div class="col-md-2">
+                <label class="form-label">Event ID</label>
+                <input type="text" name="event_id" class="form-control" placeholder="Filter by event ID">
+            </div>
+            <div class="col-md-2 d-flex align-items-end">
+                <div>
+                    <button type="submit" class="btn btn-primary mb-2">
+                        <i class="bi bi-search"></i> Filter
+                    </button>
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" name="show_reviewed" id="showReviewed" {% if show_reviewed %}checked{% endif %}>
+                        <label class="form-check-label" for="showReviewed">Show reviewed</label>
+                    </div>
+                </div>
             </div>
         </form>
     </div>
@@ -42,26 +59,26 @@
 
 {% if reports %}
 <div class="card">
-    <div class="card-header">
-        <h5 class="mb-0">Reports ({{ reports|length }})</h5>
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <h5 class="mb-0">Reports ({{ total_count|default(reports|length) }})</h5>
+        <small class="text-muted">Showing {{ reports|length }} reports</small>
     </div>
     <div class="card-body">
         <div class="table-responsive">
             <table class="table table-sm table-hover">
                 <thead>
                     <tr>
-                        <th>Date</th>
                         <th>Type</th>
+                        <th>Date</th>
                         <th>Reporter</th>
-                        <th>Reported User</th>
+                        <th>Reported</th>
                         <th>Event ID</th>
-                        <th style="width: 140px;">Actions</th>
+                        <th style="width: 200px;">Actions</th>
                     </tr>
                 </thead>
                 <tbody>
                     {% for report in reports %}
                     <tr>
-                        <td><small>{{ report.created_at|datetime if report.created_at else '-' }}</small></td>
                         <td>
                             {% if report.report_type == 'nudity' %}
                             <span class="badge bg-danger">Nudity</span>
@@ -77,6 +94,7 @@
                             <span class="badge bg-secondary">{{ report.report_type|default('Other') }}</span>
                             {% endif %}
                         </td>
+                        <td><small>{{ report.created_at|datetime if report.created_at else '-' }}</small></td>
                         <td>
                             {% if report.reporter_pubkey %}
                             <a href="{{ url_for('events') }}" onclick="document.querySelector('#searchType').value='pubkey'; document.querySelector('#pubkeyFields input').value='{{ report.reporter_pubkey }}'; document.querySelector('#searchForm button').click(); return false;" title="Search events from this pubkey">
@@ -106,21 +124,28 @@
                             {% endif %}
                         </td>
                         <td>
-                            <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#report-{{ loop.index }}">
-                                <i class="bi bi-eye"></i> View
-                            </button>
-                            {% if report.banned %}
-                            <button class="btn btn-sm btn-outline-danger" onclick="deleteReport('{{ report.id }}')" title="Delete report">
-                                <i class="bi bi-trash"></i>
-                            </button>
-                            {% else %}
-                            <button class="btn btn-sm {% if report.reviewed %}btn-success{% else %}btn-outline-secondary{% endif %}" onclick="reviewReport('{{ report.id }}')" title="Mark as reviewed">
-                                <i class="bi bi-check-lg"></i>
-                            </button>
-                            <button class="btn btn-sm btn-danger" onclick="showBanModal('{{ report.id }}', '{{ report.reported_pubkey }}')" title="Ban user">
-                                <i class="bi bi-x-circle"></i>
-                            </button>
-                            {% endif %}
+                            <div class="btn-group btn-group-sm" role="group">
+                                <button class="btn btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#report-{{ loop.index }}" title="View">
+                                    <i class="bi bi-eye"></i>
+                                </button>
+                                {% if report.banned %}
+                                <button class="btn btn-outline-danger" onclick="deleteReport('{{ report.id }}')" title="Delete report">
+                                    <i class="bi bi-trash"></i>
+                                </button>
+                                {% else %}
+                                <button class="btn {% if report.reviewed %}btn-success{% else %}btn-outline-secondary{% endif %}" onclick="reviewReport('{{ report.id }}')" title="Mark as reviewed">
+                                    <i class="bi bi-check-lg"></i>
+                                </button>
+                                {% if report.reported_event_id %}
+                                <button class="btn btn-outline-warning" onclick="deleteEvent('{{ report.id }}')" title="Delete event">
+                                    <i class="bi bi-file-earmark-x"></i>
+                                </button>
+                                {% endif %}
+                                <button class="btn btn-danger" onclick="showBanModal('{{ report.id }}', '{{ report.reported_pubkey }}')" title="Ban user">
+                                    <i class="bi bi-x-circle"></i>
+                                </button>
+                                {% endif %}
+                            </div>
                         </td>
                     </tr>
                     <tr class="collapse" id="report-{{ loop.index }}">
@@ -145,6 +170,16 @@
                         </td>
                     </tr>
                     {% endfor %}
+                    <tr id="scrollSentinel">
+                        <td colspan="6" class="text-center py-3">
+                            <div id="loadingIndicator" style="display: none;">
+                                <span class="spinner-border spinner-border-sm me-2"></span> Loading more...
+                            </div>
+                            {% if not has_more and reports|length > 0 %}
+                            <small class="text-muted">No more reports</small>
+                            {% endif %}
+                        </td>
+                    </tr>
                 </tbody>
             </table>
         </div>
@@ -171,13 +206,15 @@
                     <li>Add their pubkey to the ban list</li>
                     <li>This cannot be undone!</li>
                 </ul>
-                <p>Type <strong>DELETE</strong> to confirm:</p>
+                <div class="mb-3">
+                    <label class="form-label">Reason (optional note):</label>
+                    <textarea id="banReason" class="form-control" rows="2" placeholder="Reason for ban..."></textarea>
+                </div>
                 <input type="hidden" id="banReportId">
-                <input type="text" id="banConfirmInput" class="form-control" placeholder="Type DELETE here">
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                <button type="button" class="btn btn-danger" id="confirmBanBtn" disabled onclick="confirmBan()">Ban User</button>
+                <button type="button" class="btn btn-danger" onclick="confirmBan()">Ban User</button>
             </div>
         </div>
     </div>
@@ -192,22 +229,17 @@
 {% block scripts %}
 <script>
 const banModal = new bootstrap.Modal(document.getElementById('banModal'));
-const banConfirmInput = document.getElementById('banConfirmInput');
-const confirmBanBtn = document.getElementById('confirmBanBtn');
-
-banConfirmInput.addEventListener('input', function() {
-    confirmBanBtn.disabled = this.value !== 'DELETE';
-});
 
 function showBanModal(reportId, pubkey) {
     document.getElementById('banReportId').value = reportId;
-    banConfirmInput.value = '';
-    confirmBanBtn.disabled = true;
+    document.getElementById('banReason').value = '';
     banModal.show();
 }
 
 function confirmBan() {
+    if (!confirm('Are you sure you want to ban this user? This will delete all their events and cannot be undone.')) return;
     const reportId = document.getElementById('banReportId').value;
+    const reason = document.getElementById('banReason').value || 'Banned via moderation page';
     const form = document.getElementById('actionForm');
     form.action = '/moderation/report/' + reportId + '/ban';
     form.method = 'POST';
@@ -215,7 +247,7 @@ function confirmBan() {
     const reasonInput = document.createElement('input');
     reasonInput.type = 'hidden';
     reasonInput.name = 'reason';
-    reasonInput.value = 'Banned via moderation page';
+    reasonInput.value = reason;
     form.appendChild(reasonInput);
     
     form.submit();
@@ -235,6 +267,113 @@ function deleteReport(reportId) {
         form.method = 'POST';
         form.submit();
     }
+}
+
+function deleteEvent(reportId) {
+    if (!confirm('Delete just this reported event?')) return;
+    const form = document.getElementById('actionForm');
+    form.action = '/moderation/report/' + reportId + '/delete-event';
+    form.method = 'POST';
+    form.submit();
+}
+
+let currentOffset = {{ offset|default(0) }};
+let currentLimit = {{ limit|default(25) }};
+let hasMore = {{ 'true' if has_more else 'false' }};
+let isLoading = false;
+
+const observer = new IntersectionObserver(function(entries) {
+    if (entries[0].isIntersecting && hasMore && !isLoading) {
+        loadMoreReports();
+    }
+}, { rootMargin: '100px' });
+
+const sentinel = document.getElementById('scrollSentinel');
+if (sentinel) observer.observe(sentinel);
+
+function loadMoreReports() {
+    isLoading = true;
+    document.getElementById('loadingIndicator').style.display = 'block';
+    
+    const params = new URLSearchParams(window.location.search);
+    params.set('offset', currentOffset + currentLimit);
+    
+    fetch('/api/moderation-reports?' + params.toString())
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            appendReports(data.reports);
+            hasMore = data.has_more;
+            currentOffset += data.reports.length;
+            document.getElementById('loadingIndicator').style.display = 'none';
+            isLoading = false;
+        })
+        .catch(function() {
+            document.getElementById('loadingIndicator').style.display = 'none';
+            isLoading = false;
+        });
+}
+
+function appendReports(reports) {
+    const tbody = document.querySelector('tbody');
+    const startIndex = tbody.querySelectorAll('tr:not(#scrollSentinel)').length;
+    
+    reports.forEach(function(report, i) {
+        const index = startIndex + i + 1;
+        const tr = document.createElement('tr');
+        tr.innerHTML = buildReportRowHTML(report, index);
+        tbody.insertBefore(tr, sentinel);
+    });
+}
+
+function buildReportRowHTML(report, index) {
+    let typeBadge = '';
+    switch(report.report_type) {
+        case 'nudity': typeBadge = '<span class="badge bg-danger">Nudity</span>'; break;
+        case 'spam': typeBadge = '<span class="badge bg-warning text-dark">Spam</span>'; break;
+        case 'profanity': typeBadge = '<span class="badge bg-warning text-dark">Profanity</span>'; break;
+        case 'illegal': typeBadge = '<span class="badge bg-danger">Illegal</span>'; break;
+        case 'impersonation': typeBadge = '<span class="badge bg-info">Impersonation</span>'; break;
+        default: typeBadge = '<span class="badge bg-secondary">' + (report.report_type || 'Other') + '</span>';
+    }
+    
+    const dateStr = report.created_at ? formatDate(report.created_at) : '-';
+    const reporterLink = report.reporter_pubkey ? 
+        '<a href="/events" onclick="document.querySelector(\'#searchType\').value=\'pubkey\'; document.querySelector(\'#pubkeyFields input\').value=\'' + report.reporter_pubkey + '\'; document.querySelector(\'#searchForm button\').click(); return false;" title="Search events from this pubkey"><code class="text-truncate d-inline-block" style="max-width: 80px;">' + report.reporter_pubkey + '</code></a>' : '-';
+    const reportedClass = report.banned ? 'text-danger fw-bold' : '';
+    const bannedIcon = report.banned ? '<i class="bi bi-exclamation-triangle-fill" title="User Banned"></i>' : '';
+    const reportedLink = report.reported_pubkey ?
+        '<span class="' + reportedClass + '"><a href="/events" onclick="document.querySelector(\'#searchType\').value=\'pubkey\'; document.querySelector(\'#pubkeyFields input\').value=\'' + report.reported_pubkey + '\'; document.querySelector(\'#searchForm button\').click(); return false;" title="Search events from this pubkey"><code class="text-truncate d-inline-block" style="max-width: 80px;">' + report.reported_pubkey + '</code></a>' + bannedIcon + '</span>' : '-';
+    const eventId = report.reported_event_id ? 
+        '<code class="text-truncate d-inline-block" style="max-width: 80px;" title="' + report.reported_event_id + '">' + report.reported_event_id + '</code>' : '-';
+    
+    let actions = '<div class="btn-group btn-group-sm" role="group">' +
+        '<button class="btn btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#report-' + index + '" title="View"><i class="bi bi-eye"></i></button>';
+    
+    if (report.banned) {
+        actions += '<button class="btn btn-outline-danger" onclick="deleteReport(\'' + report.id + '\')" title="Delete report"><i class="bi bi-trash"></i></button>';
+    } else {
+        const reviewClass = report.reviewed ? 'btn-success' : 'btn-outline-secondary';
+        actions += '<button class="btn ' + reviewClass + '" onclick="reviewReport(\'' + report.id + '\')" title="Mark as reviewed"><i class="bi bi-check-lg"></i></button>';
+        if (report.reported_event_id) {
+            actions += '<button class="btn btn-outline-warning" onclick="deleteEvent(\'' + report.id + '\')" title="Delete event"><i class="bi bi-file-earmark-x"></i></button>';
+        }
+        actions += '<button class="btn btn-danger" onclick="showBanModal(\'' + report.id + '\', \'' + (report.reported_pubkey || '') + '\')" title="Ban user"><i class="bi bi-x-circle"></i></button>';
+    }
+    actions += '</div>';
+    
+    let row = '<td>' + typeBadge + '</td>';
+    row += '<td><small>' + dateStr + '</small></td>';
+    row += '<td>' + reporterLink + '</td>';
+    row += '<td>' + reportedLink + '</td>';
+    row += '<td>' + eventId + '</td>';
+    row += '<td>' + actions + '</td>';
+    
+    return row;
+}
+
+function formatDate(isoString) {
+    const date = new Date(isoString);
+    return date.toLocaleString();
 }
 </script>
 {% endblock %}

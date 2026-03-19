@@ -353,6 +353,62 @@ def api_pubkey_metadata(pubkey):
         return jsonify({'error': str(e)}), 500
 
 
+@app.route('/api/moderation-reports')
+@moderator_required
+def api_moderation_reports():
+    report_type_filter = request.args.get('report_type', '')
+    reporter_filter = request.args.get('reporter', '')
+    reported_filter = request.args.get('reported', '')
+    event_id_filter = request.args.get('event_id', '')
+    show_reviewed = request.args.get('show_reviewed', 'false') == 'true'
+    sort_order = request.args.get('sort', 'desc')
+    offset = int(request.args.get('offset', 0))
+    limit = int(request.args.get('limit', 25))
+    
+    query = ModerationReport.query
+    
+    if report_type_filter:
+        query = query.filter(ModerationReport.report_type == report_type_filter)
+    if reporter_filter:
+        query = query.filter(ModerationReport.reporter_pubkey == reporter_filter)
+    if reported_filter:
+        query = query.filter(ModerationReport.reported_pubkey == reported_filter)
+    if event_id_filter:
+        query = query.filter(ModerationReport.reported_event_id == event_id_filter)
+    if not show_reviewed:
+        query = query.filter(ModerationReport.reviewed == False)
+    
+    total_count = query.count()
+    sort_column = ModerationReport.created_at.desc() if sort_order == 'desc' else ModerationReport.created_at.asc()
+    reports = query.order_by(sort_column).offset(offset).limit(limit).all()
+    has_more = (offset + len(reports)) < total_count
+    
+    reports_data = []
+    for r in reports:
+        reports_data.append({
+            'id': r.id,
+            'report_type': r.report_type,
+            'created_at': r.created_at.isoformat() if r.created_at else None,
+            'reporter_pubkey': r.reporter_pubkey,
+            'reported_pubkey': r.reported_pubkey,
+            'reported_event_id': r.reported_event_id,
+            'content': r.content,
+            'reviewed': r.reviewed,
+            'banned': r.banned,
+            'event_id': r.event_id,
+            'reviewed_by': r.reviewed_by,
+            'reviewed_at': r.reviewed_at.isoformat() if r.reviewed_at else None,
+            'banned_by': r.banned_by,
+            'banned_at': r.banned_at.isoformat() if r.banned_at else None,
+        })
+    
+    return jsonify({
+        'reports': reports_data,
+        'has_more': has_more,
+        'total_count': total_count
+    })
+
+
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if current_user.is_authenticated:
@@ -865,6 +921,11 @@ def moderation():
     report_type_filter = request.args.get('report_type', '')
     reporter_filter = request.args.get('reporter', '')
     reported_filter = request.args.get('reported', '')
+    event_id_filter = request.args.get('event_id', '')
+    show_reviewed = request.args.get('show_reviewed', 'false') == 'true'
+    sort_order = request.args.get('sort', 'desc')
+    offset = int(request.args.get('offset', 0))
+    limit = int(request.args.get('limit', 25))
     
     query = ModerationReport.query
     
@@ -874,18 +935,31 @@ def moderation():
         query = query.filter(ModerationReport.reporter_pubkey == reporter_filter)
     if reported_filter:
         query = query.filter(ModerationReport.reported_pubkey == reported_filter)
+    if event_id_filter:
+        query = query.filter(ModerationReport.reported_event_id == event_id_filter)
+    if not show_reviewed:
+        query = query.filter(ModerationReport.reviewed == False)
     
     from flask_wtf import FlaskForm
     class EmptyForm(FlaskForm):
         pass
     form = EmptyForm()
     
-    reports = query.order_by(ModerationReport.created_at.desc()).limit(100).all()
+    sort_column = ModerationReport.created_at.desc() if sort_order == 'desc' else ModerationReport.created_at.asc()
+    reports = query.order_by(sort_column).offset(offset).limit(limit).all()
+    total_count = query.count()
+    has_more = (offset + len(reports)) < total_count
     
     return render_template('moderation.html', reports=reports, 
                            report_type_filter=report_type_filter,
                            reporter_filter=reporter_filter,
                            reported_filter=reported_filter,
+                           show_reviewed=show_reviewed,
+                           sort_order=sort_order,
+                           offset=offset,
+                           limit=limit,
+                           has_more=has_more,
+                           total_count=total_count,
                            form=form)
 
 
@@ -927,7 +1001,7 @@ def moderation_ban(report_id):
         report.banned_by = current_user.id
         report.banned_at = datetime.utcnow()
         
-        log_audit('user_banned', f'Banned pubkey {report.reported_pubkey} - {reason}')
+        log_audit('pubkey_banned', f'Banned pubkey {report.reported_pubkey} - {reason}')
         flash('User banned and all events deleted.', 'success')
     except (ValueError, StrfryError) as e:
         flash(f'Failed to ban user: {e}', 'danger')
@@ -949,6 +1023,25 @@ def moderation_delete_report(report_id):
     return redirect(url_for('moderation'))
 
 
+@app.route('/moderation/report/<int:report_id>/delete-event', methods=['POST'])
+@moderator_required
+def moderation_delete_event(report_id):
+    report = ModerationReport.query.get_or_404(report_id)
+    
+    if not report.reported_event_id:
+        flash('No event ID associated with this report.', 'danger')
+        return redirect(url_for('moderation'))
+    
+    try:
+        delete_events({'ids': [report.reported_event_id]})
+        log_audit('moderation_event_deleted', f'Deleted event {report.reported_event_id} from report {report_id}')
+        flash('Event deleted.', 'success')
+    except (ValueError, StrfryError) as e:
+        flash(f'Failed to delete event: {e}', 'danger')
+    
+    return redirect(url_for('moderation'))
+
+
 @app.route('/moderation/ban-by-pubkey', methods=['POST'])
 @moderator_required
 def ban_by_pubkey():
@@ -966,7 +1059,7 @@ def ban_by_pubkey():
             ban = BannedPubkey(pubkey=pubkey, reason=reason, banned_by=current_user.id)
             db.session.add(ban)
         
-        log_audit('user_banned', f'Banned pubkey {pubkey} - {reason}')
+        log_audit('pubkey_banned', f'Banned pubkey {pubkey} - {reason}')
         db.session.commit()
         return 'OK', 200
     except (ValueError, StrfryError) as e:
