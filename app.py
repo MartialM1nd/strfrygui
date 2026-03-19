@@ -873,9 +873,6 @@ def moderation():
     if reported_filter:
         query = query.filter(ModerationReport.reported_pubkey == reported_filter)
     
-    from flask_wtf.csrf import CSRFProtect
-    csrf = CSRFProtect(app)
-    
     from flask_wtf import FlaskForm
     class EmptyForm(FlaskForm):
         pass
