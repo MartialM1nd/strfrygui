@@ -111,8 +111,8 @@
 </div>
 
 <div class="card">
-    <div class="card-header">
-        <h5 class="mb-0">Audit Log</h5>
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <h5 class="mb-0">Audit Log ({{ audit_total|default(audit_logs|length) }})</h5>
     </div>
     <div class="card-body">
         <table class="table table-sm">
@@ -125,7 +125,7 @@
                     <th>IP Address</th>
                 </tr>
             </thead>
-            <tbody>
+            <tbody id="auditLogsBody">
                 {% for log in audit_logs %}
                 <tr>
                     <td><small>{{ log.timestamp.strftime('%Y-%m-%d %H:%M:%S') if log.timestamp else '-' }}</small></td>
@@ -135,6 +135,16 @@
                     <td><small><code>{{ log.ip_address if log.ip_address else '-' }}</code></small></td>
                 </tr>
                 {% endfor %}
+                <tr id="auditLogSentinel">
+                    <td colspan="5" class="text-center py-2">
+                        <div id="auditLogLoading" style="display: none;">
+                            <span class="spinner-border spinner-border-sm me-2"></span> Loading more...
+                        </div>
+                        {% if not audit_has_more and audit_logs|length > 0 %}
+                        <small class="text-muted">End of logs</small>
+                        {% endif %}
+                    </td>
+                </tr>
             </tbody>
         </table>
     </div>
@@ -367,5 +377,69 @@ function testRelay(id) {
 }
 
 document.addEventListener('DOMContentLoaded', loadRelays);
+
+// Audit Log Infinite Scroll
+var auditLogOffset = {{ audit_offset|default(0) }};
+var auditLogLimit = {{ audit_limit|default(10) }};
+var auditLogHasMore = {{ 'true' if audit_has_more else 'false' }};
+var auditLogLoading = false;
+
+var auditLogObserver = new IntersectionObserver(function(entries) {
+    if (entries[0].isIntersecting && auditLogHasMore && !auditLogLoading) {
+        loadMoreAuditLogs();
+    }
+}, { rootMargin: '100px' });
+
+var auditLogSentinel = document.getElementById('auditLogSentinel');
+if (auditLogSentinel) auditLogObserver.observe(auditLogSentinel);
+
+function loadMoreAuditLogs() {
+    auditLogLoading = true;
+    document.getElementById('auditLogLoading').style.display = 'block';
+    
+    fetch('/api/audit-logs?offset=' + (auditLogOffset + auditLogLimit) + '&limit=25')
+        .then(function(r) { return r.json(); })
+        .then(function(data) {
+            appendAuditLogs(data.logs);
+            auditLogHasMore = data.has_more;
+            auditLogOffset += data.logs.length;
+            document.getElementById('auditLogLoading').style.display = 'none';
+            auditLogLoading = false;
+        })
+        .catch(function() {
+            document.getElementById('auditLogLoading').style.display = 'none';
+            auditLogLoading = false;
+        });
+}
+
+function appendAuditLogs(logs) {
+    var tbody = document.getElementById('auditLogsBody');
+    logs.forEach(function(log) {
+        var row = document.createElement('tr');
+        
+        var badgeClass = 'secondary';
+        if (log.action && log.action.indexOf('login') !== -1) badgeClass = 'success';
+        else if (log.action && (log.action.indexOf('delete') !== -1 || log.action.indexOf('remove') !== -1)) badgeClass = 'danger';
+        else if (log.action && (log.action.indexOf('create') !== -1 || log.action.indexOf('add') !== -1)) badgeClass = 'primary';
+        
+        var timestamp = log.timestamp ? new Date(log.timestamp).toISOString().replace('T', ' ').substring(0, 19) : '-';
+        var details = log.details ? (log.details.length > 50 ? log.details.substring(0, 50) + '...' : log.details) : '-';
+        
+        row.innerHTML = '<td><small>' + timestamp + '</small></td>' +
+            '<td><small>' + (log.username || 'system') + '</small></td>' +
+            '<td><span class="badge bg-' + badgeClass + '"><small>' + (log.action || '-') + '</small></span></td>' +
+            '<td><small>' + details + '</small></td>' +
+            '<td><small><code>' + (log.ip_address || '-') + '</code></small></td>';
+        
+        tbody.appendChild(row);
+    });
+    
+    if (!auditLogHasMore) {
+        var sentinel = document.getElementById('auditLogSentinel');
+        if (sentinel) {
+            sentinel.innerHTML = '<td colspan="5" class="text-center py-2"><small class="text-muted">End of logs</small></td>';
+        }
+    }
+}
 </script>
 {% endblock %}

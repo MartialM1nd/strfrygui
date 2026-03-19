@@ -514,6 +514,36 @@ def api_moderation_reports():
     })
 
 
+@app.route('/api/audit-logs')
+@admin_required
+def api_audit_logs():
+    offset = int(request.args.get('offset', 0))
+    limit = int(request.args.get('limit', 25))
+    
+    query = AuditLog.query.order_by(AuditLog.timestamp.desc())
+    total_count = query.count()
+    logs = query.offset(offset).limit(limit).all()
+    has_more = (offset + len(logs)) < total_count
+    
+    logs_data = []
+    for log in logs:
+        logs_data.append({
+            'id': log.id,
+            'action': log.action,
+            'details': log.details,
+            'user_id': log.user_id,
+            'username': log.user.username if log.user else 'system',
+            'ip_address': log.ip_address,
+            'timestamp': log.timestamp.isoformat() if log.timestamp else None
+        })
+    
+    return jsonify({
+        'logs': logs_data,
+        'has_more': has_more,
+        'total_count': total_count
+    })
+
+
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if current_user.is_authenticated:
@@ -981,7 +1011,14 @@ def connections():
 @admin_required
 def admin():
     users = User.query.all()
-    audit_logs = AuditLog.query.order_by(AuditLog.timestamp.desc()).limit(100).all()
+    audit_offset = int(request.args.get('audit_offset', 0))
+    audit_limit = int(request.args.get('audit_limit', 10))
+    
+    audit_query = AuditLog.query.order_by(AuditLog.timestamp.desc())
+    audit_logs = audit_query.offset(audit_offset).limit(audit_limit).all()
+    total_logs = audit_query.count()
+    audit_has_more = (audit_offset + len(audit_logs)) < total_logs
+    
     banned_pubkeys = BannedPubkey.query.order_by(BannedPubkey.banned_at.desc()).all()
     
     edit_forms = {}
@@ -995,7 +1032,7 @@ def admin():
     create_user_form = AdminCreateUserForm()
     change_password_form = ChangePasswordForm()
     
-    return render_template('admin.html', users=users, audit_logs=audit_logs, edit_forms=edit_forms, create_user_form=create_user_form, change_password_form=change_password_form, banned_pubkeys=banned_pubkeys)
+    return render_template('admin.html', users=users, audit_logs=audit_logs, edit_forms=edit_forms, create_user_form=create_user_form, change_password_form=change_password_form, banned_pubkeys=banned_pubkeys, audit_offset=audit_offset, audit_limit=audit_limit, audit_has_more=audit_has_more, audit_total=total_logs)
 
 
 def sync_moderation_reports():
@@ -1325,7 +1362,9 @@ def internal_error(error):
 
 def init_db():
     with app.app_context():
+        from models import ModerationReport, BannedPubkey, MetadataRelay
         db.create_all()
+        
         from sqlalchemy import text
         with db.engine.connect() as conn:
             result = conn.execute(text(
@@ -1336,9 +1375,12 @@ def init_db():
                     "ALTER TABLE users ADD COLUMN must_change_password BOOLEAN DEFAULT 1"
                 ))
                 conn.commit()
-        
-        from models import ModerationReport, BannedPubkey, MetadataRelay
-        db.create_all()
+            
+            try:
+                conn.execute(text("SELECT 1 FROM metadata_relays LIMIT 1"))
+            except:
+                conn.execute(text("CREATE TABLE IF NOT EXISTS metadata_relays (id INTEGER PRIMARY KEY, url TEXT UNIQUE NOT NULL, enabled BOOLEAN DEFAULT 1, is_default BOOLEAN DEFAULT 0, last_status TEXT DEFAULT 'unknown', last_tested TIMESTAMP)"))
+                conn.commit()
         
         if MetadataRelay.query.count() == 0:
             default_relays = [
