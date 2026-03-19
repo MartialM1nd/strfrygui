@@ -180,4 +180,47 @@
     </div>
 </div>
 {% endfor %}
+
+<div class="card mt-4">
+    <div class="card-header bg-danger text-white">
+        <h5 class="mb-0"><i class="bi bi-x-circle"></i> Banned Users</h5>
+    </div>
+    <div class="card-body">
+        {% if banned_pubkeys %}
+        <div class="table-responsive">
+            <table class="table table-sm">
+                <thead>
+                    <tr>
+                        <th>Pubkey</th>
+                        <th>Reason</th>
+                        <th>Banned By</th>
+                        <th>Date</th>
+                        <th style="width: 80px;">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for ban in banned_pubkeys %}
+                    <tr>
+                        <td><code class="text-truncate d-inline-block" style="max-width: 150px;" title="{{ ban.pubkey }}">{{ ban.pubkey }}</code></td>
+                        <td><small>{{ ban.reason or '-' }}</small></td>
+                        <td><small>User ID {{ ban.banned_by }}</small></td>
+                        <td><small>{{ ban.banned_at|datetime if ban.banned_at else '-' }}</small></td>
+                        <td>
+                            <form method="POST" action="{{ url_for('unban_pubkey', ban_id=ban.id) }}" style="display:inline;">
+                                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                <button type="submit" class="btn btn-sm btn-outline-success" onclick="return confirm('Unban this user?')" title="Unban">
+                                    <i class="bi bi-arrow-counterclockwise"></i>
+                                </button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="text-muted mb-0">No banned users.</p>
+        {% endif %}
+    </div>
+</div>
 {% endblock %}

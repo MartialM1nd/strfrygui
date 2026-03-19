@@ -61,3 +61,37 @@ class AuditLog(db.Model):
             'ip_address': self.ip_address,
             'timestamp': self.timestamp.isoformat() if self.timestamp else None
         }
+
+
+class ModerationReport(db.Model):
+    __tablename__ = 'moderation_reports'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    event_id = db.Column(db.String(64), unique=True)
+    reporter_pubkey = db.Column(db.String(64))
+    reported_pubkey = db.Column(db.String(64))
+    reported_event_id = db.Column(db.String(64))
+    report_type = db.Column(db.String(20))
+    content = db.Column(db.Text)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    reviewed = db.Column(db.Boolean, default=False)
+    reviewed_by = db.Column(db.Integer, db.ForeignKey('users.id'))
+    reviewed_at = db.Column(db.DateTime)
+    banned = db.Column(db.Boolean, default=False)
+    banned_by = db.Column(db.Integer, db.ForeignKey('users.id'))
+    banned_at = db.Column(db.DateTime)
+    
+    reviewer = db.relationship('User', foreign_keys=[reviewed_by], backref='reviews')
+    banner = db.relationship('User', foreign_keys=[banned_by], backref='bans')
+
+
+class BannedPubkey(db.Model):
+    __tablename__ = 'banned_pubkeys'
+    
+    id = db.Column(db.Integer, primary_key=True)
+    pubkey = db.Column(db.String(64), unique=True, nullable=False, index=True)
+    reason = db.Column(db.Text)
+    banned_by = db.Column(db.Integer, db.ForeignKey('users.id'))
+    banned_at = db.Column(db.DateTime, default=datetime.utcnow)
+    
+    banner = db.relationship('User', backref='banned_pubkeys')

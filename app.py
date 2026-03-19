@@ -13,7 +13,7 @@ from io import StringIO, BytesIO
 import tempfile
 
 from config import Config, Security
-from models import db, User, AuditLog
+from models import db, User, AuditLog, ModerationReport, BannedPubkey
 from utils.strfry import (
     scan_events, delete_events, export_events, import_events,
     compact_database, negentropy_list, negentropy_add, negentropy_build,
@@ -494,7 +494,9 @@ def events():
                 except (ValueError, StrfryError) as e:
                     error = str(e)
     
-    return render_template('events.html', form=form, events=events_list, error=error, current_filter=current_filter, pubkey_metadata=pubkey_metadata)
+    banned_pubkeys = [b.pubkey for b in BannedPubkey.query.all()]
+    
+    return render_template('events.html', form=form, events=events_list, error=error, current_filter=current_filter, pubkey_metadata=pubkey_metadata, banned_pubkeys=banned_pubkeys)
 
 
 def parse_timestamp(value):
@@ -797,6 +799,7 @@ def connections():
 def admin():
     users = User.query.all()
     audit_logs = AuditLog.query.order_by(AuditLog.timestamp.desc()).limit(100).all()
+    banned_pubkeys = BannedPubkey.query.order_by(BannedPubkey.banned_at.desc()).all()
     
     edit_forms = {}
     for user in users:
@@ -809,26 +812,21 @@ def admin():
     create_user_form = AdminCreateUserForm()
     change_password_form = ChangePasswordForm()
     
-    return render_template('admin.html', users=users, audit_logs=audit_logs, edit_forms=edit_forms, create_user_form=create_user_form, change_password_form=change_password_form)
+    return render_template('admin.html', users=users, audit_logs=audit_logs, edit_forms=edit_forms, create_user_form=create_user_form, change_password_form=change_password_form, banned_pubkeys=banned_pubkeys)
 
 
-@app.route('/moderation', methods=['GET', 'POST'])
-@moderator_required
-def moderation():
-    report_type_filter = request.args.get('report_type', '')
-    reporter_filter = request.args.get('reporter', '')
-    reported_filter = request.args.get('reported', '')
-    
-    filter_obj = {'kinds': [1984], 'limit': 100}
-    
-    if report_type_filter:
-        filter_obj['#p'] = [report_type_filter]
-    
+def sync_moderation_reports():
+    """Fetch reports from strfry and sync to database."""
     try:
-        reports = scan_events(filter_obj, limit=100)
+        reports = scan_events({'kinds': [1984], 'limit': 200}, limit=200)
         
-        parsed_reports = []
         for report in reports:
+            event_id = report.get('id')
+            existing = ModerationReport.query.filter_by(event_id=event_id).first()
+            
+            if existing:
+                continue
+            
             tags = report.get('tags', [])
             report_type = None
             reported_pubkey = None
@@ -841,32 +839,136 @@ def moderation():
                 elif tag[0] == 'e' and len(tag) >= 3:
                     reported_event_id = tag[1]
             
-            if reporter_filter and report.get('pubkey') != reporter_filter:
-                continue
-            if reported_filter and reported_pubkey != reported_filter:
-                continue
-            if report_type_filter and report_type != report_type_filter:
-                continue
-            
-            parsed_reports.append({
-                'id': report.get('id'),
-                'created_at': report.get('created_at'),
-                'reporter': report.get('pubkey'),
-                'reported_pubkey': reported_pubkey,
-                'reported_event': reported_event_id,
-                'report_type': report_type,
-                'content': report.get('content', '')
-            })
+            new_report = ModerationReport(
+                event_id=event_id,
+                reporter_pubkey=report.get('pubkey'),
+                reported_pubkey=reported_pubkey,
+                reported_event_id=reported_event_id,
+                report_type=report_type,
+                content=report.get('content', ''),
+                created_at=datetime.fromtimestamp(report.get('created_at', 0))
+            )
+            db.session.add(new_report)
         
-        parsed_reports.sort(key=lambda x: x['created_at'] or 0, reverse=True)
+        db.session.commit()
     except Exception as e:
-        parsed_reports = []
-        error = str(e)
+        pass
+
+
+@app.route('/moderation', methods=['GET', 'POST'])
+@moderator_required
+def moderation():
+    sync_moderation_reports()
     
-    return render_template('moderation.html', reports=parsed_reports, 
+    report_type_filter = request.args.get('report_type', '')
+    reporter_filter = request.args.get('reporter', '')
+    reported_filter = request.args.get('reported', '')
+    
+    query = ModerationReport.query
+    
+    if report_type_filter:
+        query = query.filter(ModerationReport.report_type == report_type_filter)
+    if reporter_filter:
+        query = query.filter(ModerationReport.reporter_pubkey == reporter_filter)
+    if reported_filter:
+        query = query.filter(ModerationReport.reported_pubkey == reported_filter)
+    
+    reports = query.order_by(ModerationReport.created_at.desc()).limit(100).all()
+    
+    return render_template('moderation.html', reports=reports, 
                            report_type_filter=report_type_filter,
                            reporter_filter=reporter_filter,
                            reported_filter=reported_filter)
+
+
+@app.route('/moderation/report/<int:report_id>/review', methods=['POST'])
+@moderator_required
+def moderation_review(report_id):
+    report = ModerationReport.query.get_or_404(report_id)
+    report.reviewed = True
+    report.reviewed_by = current_user.id
+    report.reviewed_at = datetime.utcnow()
+    db.session.commit()
+    
+    log_audit('moderation_review', f'Reviewed report {report.id} (type: {report.report_type})')
+    flash('Report marked as reviewed.', 'success')
+    
+    return redirect(url_for('moderation'))
+
+
+@app.route('/moderation/report/<int:report_id>/ban', methods=['POST'])
+@moderator_required
+def moderation_ban(report_id):
+    report = ModerationReport.query.get_or_404(report_id)
+    reason = request.form.get('reason', f'Report type: {report.report_type}')
+    
+    try:
+        if report.reported_pubkey:
+            delete_events({'authors': [report.reported_pubkey]]})
+        
+        existing_ban = BannedPubkey.query.filter_by(pubkey=report.reported_pubkey).first()
+        if not existing_ban:
+            ban = BannedPubkey(
+                pubkey=report.reported_pubkey,
+                reason=reason,
+                banned_by=current_user.id
+            )
+            db.session.add(ban)
+        
+        report.banned = True
+        report.banned_by = current_user.id
+        report.banned_at = datetime.utcnow()
+        
+        log_audit('user_banned', f'Banned pubkey {report.reported_pubkey} - {reason}')
+        flash('User banned and all events deleted.', 'success')
+    except (ValueError, StrfryError) as e:
+        flash(f'Failed to ban user: {e}', 'danger')
+    
+    db.session.commit()
+    return redirect(url_for('moderation'))
+
+
+@app.route('/moderation/report/<int:report_id>/delete', methods=['POST'])
+@moderator_required
+def moderation_delete_report(report_id):
+    report = ModerationReport.query.get_or_404(report_id)
+    db.session.delete(report)
+    db.session.commit()
+    
+    log_audit('moderation_report_deleted', f'Deleted report {report_id}')
+    flash('Report deleted.', 'success')
+    
+    return redirect(url_for('moderation'))
+
+
+@app.route('/moderation/ban-by-pubkey', methods=['POST'])
+@moderator_required
+def ban_by_pubkey():
+    pubkey = request.form.get('pubkey')
+    reason = request.form.get('reason', 'Banned via events page')
+    
+    if not pubkey:
+        return 'No pubkey provided', 400
+    
+    try:
+        delete_events({'authors': [pubkey]})
+        
+        existing_ban = BannedPubkey.query.filter_by(pubkey=pubkey).first()
+        if not existing_ban:
+            ban = BannedPubkey(pubkey=pubkey, reason=reason, banned_by=current_user.id)
+            db.session.add(ban)
+        
+        log_audit('user_banned', f'Banned pubkey {pubkey} - {reason}')
+        db.session.commit()
+        return 'OK', 200
+    except (ValueError, StrfryError) as e:
+        return f'Failed to ban user: {e}', 500
+
+
+def is_pubkey_banned(pubkey):
+    if not pubkey:
+        return False
+    return BannedPubkey.query.filter_by(pubkey=pubkey).first() is not None
 
 
 @app.route('/admin/user/<int:user_id>/edit', methods=['POST'])
@@ -903,6 +1005,20 @@ def delete_user(user_id):
     
     log_audit('user_delete', f'Deleted user {username}')
     flash(f'User {username} deleted.', 'success')
+    
+    return redirect(url_for('admin'))
+
+
+@app.route('/admin/banned/<int:ban_id>/unban', methods=['POST'])
+@admin_required
+def unban_pubkey(ban_id):
+    ban = BannedPubkey.query.get_or_404(ban_id)
+    pubkey = ban.pubkey
+    db.session.delete(ban)
+    db.session.commit()
+    
+    log_audit('user_unbanned', f'Unbanned pubkey {pubkey}')
+    flash(f'Pubkey unbanned.', 'success')
     
     return redirect(url_for('admin'))
 
@@ -985,6 +1101,9 @@ def init_db():
                     "ALTER TABLE users ADD COLUMN must_change_password BOOLEAN DEFAULT 1"
                 ))
                 conn.commit()
+        
+        from models import ModerationReport, BannedPubkey
+        db.create_all()
 
 
 init_db()
