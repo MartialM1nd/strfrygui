@@ -873,12 +873,21 @@ def moderation():
     if reported_filter:
         query = query.filter(ModerationReport.reported_pubkey == reported_filter)
     
+    from flask_wtf.csrf import CSRFProtect
+    csrf = CSRFProtect(app)
+    
+    from flask_wtf import FlaskForm
+    class EmptyForm(FlaskForm):
+        pass
+    form = EmptyForm()
+    
     reports = query.order_by(ModerationReport.created_at.desc()).limit(100).all()
     
     return render_template('moderation.html', reports=reports, 
                            report_type_filter=report_type_filter,
                            reporter_filter=reporter_filter,
-                           reported_filter=reported_filter)
+                           reported_filter=reported_filter,
+                           form=form)
 
 
 @app.route('/moderation/report/<int:report_id>/review', methods=['POST'])

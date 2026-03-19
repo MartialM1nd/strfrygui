@@ -184,7 +184,7 @@
 </div>
 
 <form method="POST" id="actionForm" style="display:none;">
-    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="csrf_token" value="{{ form.csrf_token.current_token }}">
 </form>
 
 {% endblock %}
