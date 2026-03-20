@@ -310,13 +310,20 @@ def datetime_filter(ts):
         return str(ts)
 
 
+def get_client_ip():
+    xff = request.headers.get('X-Forwarded-For')
+    if xff:
+        return xff.split(',')[0].strip()
+    return request.remote_addr
+
+
 def log_audit(action, details=None, user_id=None):
     user_id = user_id or (current_user.id if current_user.is_authenticated else None)
     log = AuditLog(
         user_id=user_id,
         action=action,
         details=details,
-        ip_address=request.remote_addr
+        ip_address=get_client_ip()
     )
     db.session.add(log)
     db.session.commit()
