@@ -62,7 +62,11 @@
             <div id="kindFields" class="search-fields" style="display:none;">
                 <div class="mb-3">
                     {{ form.kind.label(class="form-label") }}
-                    {{ form.kind(class="form-select") }}
+                    {{ form.kind(class="form-select", id="kindSelect") }}
+                </div>
+                <div class="mb-3" id="manualKindDiv" style="display:none;">
+                    <label class="form-label">Enter Kind Number</label>
+                    {{ form.manual_kind(class="form-control", id="manualKind", placeholder="e.g., 30023") }}
                 </div>
             </div>
             
@@ -309,6 +313,17 @@ searchTypeSelect.addEventListener('change', function() {
 });
 
 showFieldsForType(searchTypeSelect.value);
+
+const kindSelect = document.getElementById('kindSelect');
+const manualKindDiv = document.getElementById('manualKindDiv');
+
+kindSelect.addEventListener('change', function() {
+    if (this.value === 'other') {
+        manualKindDiv.style.display = 'block';
+    } else {
+        manualKindDiv.style.display = 'none';
+    }
+});
 
 const selectAll = document.getElementById('selectAll');
 const checkboxes = document.querySelectorAll('.event-checkbox');
