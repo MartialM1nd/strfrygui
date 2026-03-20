@@ -647,7 +647,7 @@ def register():
 
 
 @app.route('/events', methods=['GET', 'POST'])
-@moderator_required
+@viewer_or_higher
 def events():
     form = EventSearchForm()
     events_list = []
