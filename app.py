@@ -243,23 +243,7 @@ class EventSearchForm(FlaskForm):
     nip05 = StringField('NIP-05 (e.g., user@domain.com)', validators=[Optional()])
     pubkey = StringField('Pubkey', validators=[Optional()])
     event_id = StringField('Event ID', validators=[Optional()])
-    kind = SelectField('Kind', choices=[
-        ('', 'Select Kind...'),
-        ('0', 'Metadata (kind 0)'),
-        ('1', 'Text Note (kind 1)'),
-        ('2', 'Recommend Relay (kind 2)'),
-        ('3', 'Contacts (kind 3)'),
-        ('4', 'Encrypted DM (kind 4)'),
-        ('5', 'Event Deletion (kind 5)'),
-        ('6', 'Repost (kind 6)'),
-        ('7', 'Reaction (kind 7)'),
-        ('10000', 'Mute List (kind 10000)'),
-        ('10001', 'Pin List (kind 10001)'),
-        ('30000', 'NIP-51 Mute List'),
-        ('30001', 'NIP-51 Pin List'),
-        ('other', 'Other (manual)...'),
-    ], validators=[Optional()])
-    manual_kind = StringField('Manual Kind', validators=[Optional()])
+    kind = StringField('Kind', validators=[Optional()])
     since = StringField('Since', validators=[Optional()])
     until = StringField('Until', validators=[Optional()])
     tag_name = StringField('Tag Name (e.g., p, e)', validators=[Optional()])
@@ -792,13 +776,10 @@ def build_filter_from_form(form):
     elif search_type == 'event_id' and form.event_id.data:
         filter_obj['ids'] = [form.event_id.data.strip()]
     elif search_type == 'kind' and form.kind.data:
-        if form.kind.data == 'other' and form.manual_kind.data:
-            try:
-                filter_obj['kinds'] = [int(form.manual_kind.data)]
-            except ValueError:
-                pass
-        elif form.kind.data != 'other':
-            filter_obj['kinds'] = [int(form.kind.data)]
+        try:
+            filter_obj['kinds'] = [int(form.kind.data.strip())]
+        except ValueError:
+            return {'error': 'Kind must be a valid number'}
     elif search_type == 'timerange':
         since_ts = parse_timestamp(form.since.data) if form.since.data else None
         until_ts = parse_timestamp(form.until.data) if form.until.data else None

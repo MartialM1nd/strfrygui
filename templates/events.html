@@ -62,11 +62,7 @@
             <div id="kindFields" class="search-fields" style="display:none;">
                 <div class="mb-3">
                     {{ form.kind.label(class="form-label") }}
-                    {{ form.kind(class="form-select", id="kindSelect") }}
-                </div>
-                <div class="mb-3" id="manualKindDiv" style="display:none;">
-                    <label class="form-label">Enter Kind Number</label>
-                    {{ form.manual_kind(class="form-control", id="manualKind", placeholder="e.g., 30023") }}
+                    {{ form.kind(class="form-control", placeholder="Enter kind number (e.g., 1, 10000)") }}
                 </div>
             </div>
             
