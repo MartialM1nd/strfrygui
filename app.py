@@ -659,6 +659,40 @@ def events():
             except (ValueError, StrfryError) as e:
                 error = str(e)
     elif request.method == 'POST':
+        if 'delete_selected' in request.form:
+            event_ids = request.form.getlist('event_ids')
+            if event_ids:
+                try:
+                    id_filter = {'ids': event_ids}
+                    delete_events(id_filter)
+                    flash(f'Deleted {len(event_ids)} event(s) successfully', 'success')
+                    log_audit('event_delete', f'Deleted {len(event_ids)} events via UI')
+                except (ValueError, StrfryError) as e:
+                    flash(f'Failed to delete events: {e}', 'danger')
+            params = {'search_type': request.form.get('search_type', 'all')}
+            if request.form.get('pubkey'):
+                params['pubkey'] = request.form.get('pubkey')
+            if request.form.get('kind'):
+                params['kind'] = request.form.get('kind')
+            if request.form.get('event_id'):
+                params['event_id'] = request.form.get('event_id')
+            if request.form.get('since'):
+                params['since'] = request.form.get('since')
+            if request.form.get('until'):
+                params['until'] = request.form.get('until')
+            if request.form.get('keyword'):
+                params['keyword'] = request.form.get('keyword')
+            if request.form.get('nip05'):
+                params['nip05'] = request.form.get('nip05')
+            if request.form.get('tag_name'):
+                params['tag_name'] = request.form.get('tag_name')
+            if request.form.get('tag_value'):
+                params['tag_value'] = request.form.get('tag_value')
+            if request.form.get('filter_json'):
+                params['filter_json'] = request.form.get('filter_json')
+            params['limit'] = request.form.get('limit', 25)
+            return redirect(url_for('events', **params))
+        
         if 'search' in request.form and form.validate():
             try:
                 if form.search_type.data == 'nip05' and form.nip05.data:
@@ -681,24 +715,6 @@ def events():
                     events_list = scan_events(current_filter, limit=form.limit.data or 25)
             except (ValueError, StrfryError) as e:
                 error = str(e)
-        elif 'delete_selected' in request.form:
-            event_ids = request.form.getlist('event_ids')
-            if event_ids:
-                try:
-                    id_filter = {'ids': event_ids}
-                    delete_events(id_filter)
-                    flash(f'Deleted {len(event_ids)} event(s) successfully', 'success')
-                    log_audit('event_delete', f'Deleted {len(event_ids)} events via UI')
-                    if form.validate():
-                        try:
-                            current_filter = build_filter_from_form(form)
-                            events_list = scan_events(current_filter, limit=form.limit.data or 25)
-                        except (ValueError, StrfryError) as e:
-                            flash(f'Events deleted, but failed to refresh results: {e}', 'warning')
-                    else:
-                        flash('Events deleted, but form validation failed for refresh', 'warning')
-                except (ValueError, StrfryError) as e:
-                    error = str(e)
     
     banned_pubkeys = [b.pubkey for b in BannedPubkey.query.all()]
     
