@@ -693,8 +693,10 @@ def events():
                         try:
                             current_filter = build_filter_from_form(form)
                             events_list = scan_events(current_filter, limit=form.limit.data or 25)
-                        except:
-                            pass
+                        except (ValueError, StrfryError) as e:
+                            flash(f'Events deleted, but failed to refresh results: {e}', 'warning')
+                    else:
+                        flash('Events deleted, but form validation failed for refresh', 'warning')
                 except (ValueError, StrfryError) as e:
                     error = str(e)
     

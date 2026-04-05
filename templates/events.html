@@ -132,13 +132,25 @@
         <form method="POST" id="deleteForm">
             {{ form.hidden_tag() }}
             <input type="hidden" name="search" value="1">
+            <input type="hidden" name="search_type" value="{{ form.search_type.data }}">
             {% for key, value in current_filter.items() %}
             {% if key == 'authors' %}
             <input type="hidden" name="pubkey" value="{{ value[0] }}">
             {% elif key == 'kinds' %}
             <input type="hidden" name="kind" value="{{ value[0] }}">
+            {% elif key == 'ids' %}
+            <input type="hidden" name="event_id" value="{{ value[0] }}">
+            {% elif key == 'since' %}
+            <input type="hidden" name="since" value="{{ value }}">
+            {% elif key == 'until' %}
+            <input type="hidden" name="until" value="{{ value }}">
             {% endif %}
             {% endfor %}
+            <input type="hidden" name="keyword" value="{{ form.keyword.data or '' }}">
+            <input type="hidden" name="nip05" value="{{ form.nip05.data or '' }}">
+            <input type="hidden" name="tag_name" value="{{ form.tag_name.data or '' }}">
+            <input type="hidden" name="tag_value" value="{{ form.tag_value.data or '' }}">
+            <input type="hidden" name="filter_json" value="{{ form.filter_json.data or '' }}">
             <input type="hidden" name="limit" value="{{ form.limit.data or 25 }}">
             <button type="button" class="btn btn-danger btn-sm" id="deleteSelectedBtn" disabled onclick="showDeleteModal()">
                 <i class="bi bi-trash"></i> Delete Selected (<span id="selectedCount">0</span>)
@@ -351,14 +363,14 @@ function confirmDelete() {
     const form = document.getElementById('deleteForm');
     const selectedIds = Array.from(document.querySelectorAll('.event-checkbox:checked')).map(cb => cb.value);
     
-    let hiddenInput = form.querySelector('input[name="event_ids"]');
-    if (!hiddenInput) {
-        hiddenInput = document.createElement('input');
+    form.querySelectorAll('input[name="event_ids"]').forEach(el => el.remove());
+    selectedIds.forEach(id => {
+        const hiddenInput = document.createElement('input');
         hiddenInput.type = 'hidden';
         hiddenInput.name = 'event_ids';
+        hiddenInput.value = id;
         form.appendChild(hiddenInput);
-    }
-    hiddenInput.value = JSON.stringify(selectedIds);
+    });
     
     const hiddenDeleteInput = document.createElement('input');
     hiddenDeleteInput.type = 'hidden';
