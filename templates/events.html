@@ -337,26 +337,29 @@ const selectAll = document.getElementById('selectAll');
 const checkboxes = document.querySelectorAll('.event-checkbox');
 const deleteBtn = document.getElementById('deleteSelectedBtn');
 const selectedCount = document.getElementById('selectedCount');
-const deleteModal = new bootstrap.Modal(document.getElementById('deleteModal'));
+const deleteModalEl = document.getElementById('deleteModal');
+const deleteModal = deleteModalEl ? new bootstrap.Modal(deleteModalEl) : null;
 const deleteCountSpan = document.getElementById('deleteCount');
-
-selectAll.addEventListener('change', function() {
-    checkboxes.forEach(cb => cb.checked = this.checked);
-    updateSelectedCount();
-});
-
-checkboxes.forEach(cb => cb.addEventListener('change', updateSelectedCount));
 
 function updateSelectedCount() {
     const count = document.querySelectorAll('.event-checkbox:checked').length;
-    selectedCount.textContent = count;
-    deleteBtn.disabled = count === 0;
+    if (selectedCount) selectedCount.textContent = count;
+    if (deleteBtn) deleteBtn.disabled = count === 0;
 }
+
+if (selectAll) {
+    selectAll.addEventListener('change', function() {
+        checkboxes.forEach(cb => cb.checked = this.checked);
+        updateSelectedCount();
+    });
+}
+
+checkboxes.forEach(cb => cb.addEventListener('change', updateSelectedCount));
 
 function showDeleteModal() {
     const count = document.querySelectorAll('.event-checkbox:checked').length;
-    deleteCountSpan.textContent = count;
-    deleteModal.show();
+    if (deleteCountSpan) deleteCountSpan.textContent = count;
+    if (deleteModal) deleteModal.show();
 }
 
 function confirmDelete() {
