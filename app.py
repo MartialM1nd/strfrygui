@@ -296,6 +296,38 @@ def datetime_filter(ts):
         return str(ts)
 
 
+@app.template_filter('is_nsfw')
+def is_nsfw_filter(tags):
+    """Check if event has NSFW content-warning tag (NIP-36)."""
+    if not tags:
+        return False
+    for tag in tags:
+        if isinstance(tag, list) and len(tag) >= 1:
+            if tag[0] == 'content-warning':
+                return True
+            if len(tag) >= 2 and tag[0] == 'l' and 'nsfw' in str(tag[1]).lower():
+                return True
+            if len(tag) >= 1 and tag[0] == 'L' and 'content-warning' in str(tag[1]).lower():
+                return True
+    return False
+
+
+@app.template_filter('render_images')
+def render_images_filter(content):
+    """Convert image URLs in content to img tags."""
+    if not content:
+        return ''
+    import re
+    image_extensions = ('.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.bmp')
+    url_pattern = r'https?://[^\s<>"\']+'
+    def replace_url(match):
+        url = match.group(0)
+        if any(url.lower().endswith(ext) for ext in image_extensions):
+            return f'<a href="{url}" target="_blank"><img src="{url}" class="event-image" loading="lazy" alt="Image"></a>'
+        return url
+    return re.sub(url_pattern, replace_url, content)
+
+
 def get_client_ip():
     xff = request.headers.get('X-Forwarded-For')
     if xff:

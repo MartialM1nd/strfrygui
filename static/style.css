@@ -108,3 +108,51 @@ pre {
 footer {
     margin-top: auto;
 }
+
+.event-image {
+    max-width: 100%;
+    height: auto;
+    border-radius: 4px;
+    margin: 0.5rem 0;
+    cursor: pointer;
+}
+
+.event-content img.event-image {
+    max-height: 400px;
+    object-fit: contain;
+}
+
+.nsfw-blur {
+    filter: blur(20px);
+    cursor: pointer;
+    transition: filter 0.3s ease;
+    border-radius: 4px;
+}
+
+.nsfw-blur:hover {
+    filter: blur(10px);
+}
+
+.nsfw-blur.unblurred {
+    filter: blur(0);
+}
+
+.nsfw-blur.unblurred:hover {
+    filter: blur(0);
+}
+
+.nsfw-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(0,0,0,0.3);
+    color: white;
+    font-weight: 500;
+    pointer-events: none;
+    border-radius: 4px;
+}

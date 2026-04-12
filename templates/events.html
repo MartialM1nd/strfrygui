@@ -210,8 +210,11 @@
                                 <strong>Kind:</strong> {{ event.get('kind', '') }}<br>
                                 <strong>Tags:</strong>
                                 <pre class="mt-2 mb-0">{{ event.get('tags', [])|tojson }}</pre>
+                                {% set is_nsfw = event.get('tags', [])|is_nsfw %}
                                 <strong>Content:</strong>
-                                <pre class="mt-2 mb-0">{{ event.get('content', '') }}</pre>
+                                <div class="event-content{% if is_nsfw %} nsfw-container{% endif %}" data-nsfw="{{ is_nsfw }}">
+                                    <pre class="mt-2 mb-0{% if is_nsfw %} nsfw-blur{% endif %}"{% if is_nsfw %} onclick="this.classList.toggle('unblurred')" title="Click to reveal NSFW content"{% endif %}>{{ event.get('content', '')|render_images|safe }}</pre>
+                                </div>
                                 <strong>Sig:</strong> <code class="text-break">{{ event.get('sig', '') }}</code>
                                 {% if not is_banned and current_user.role in ['admin', 'moderator'] %}
                                 <hr>
