@@ -106,7 +106,14 @@ function buildMultiLineData(history) {
     if (keys.length === 0) return { labels: [], datasets: [] };
     
     const labels = history[keys[0]].map(x => formatTime(x[0]));
-    const datasets = keys.map((key, i) => ({
+    
+    const sortedKeys = keys.slice().sort((a, b) => {
+        const sumA = history[a].reduce((acc, x) => acc + x[1], 0);
+        const sumB = history[b].reduce((acc, x) => acc + x[1], 0);
+        return sumB - sumA;
+    });
+    
+    const datasets = sortedKeys.map((key, i) => ({
         label: key,
         data: history[key].map(x => x[1]),
         borderColor: chartColors[i % chartColors.length],
@@ -179,13 +186,22 @@ function updateMultiLineChart(chart, history) {
     const keys = Object.keys(history);
     if (keys.length === 0) return;
     
-    const labels = history[keys[0]].map(x => formatTime(x[0]));
+    const sortedKeys = keys.slice().sort((a, b) => {
+        const sumA = history[a].reduce((acc, x) => acc + x[1], 0);
+        const sumB = history[b].reduce((acc, x) => acc + x[1], 0);
+        return sumB - sumA;
+    });
+    
+    const labels = history[sortedKeys[0]].map(x => formatTime(x[0]));
     chart.data.labels = labels;
     
-    keys.forEach((key, i) => {
+    sortedKeys.forEach((key, i) => {
         const data = history[key].map(x => x[1]);
         if (chart.data.datasets[i]) {
+            chart.data.datasets[i].label = key;
             chart.data.datasets[i].data = data;
+            chart.data.datasets[i].borderColor = chartColors[i % chartColors.length];
+            chart.data.datasets[i].backgroundColor = chartColors[i % chartColors.length] + '33';
         } else {
             chart.data.datasets[i] = {
                 label: key,
