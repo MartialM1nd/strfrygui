@@ -19,6 +19,9 @@ A web-based management portal for [strfry](https://github.com/hoytech/strfry), a
 - **Negentropy Trees** - Create, build, and manage negentropy sync trees
 - **Compression Dictionaries** - View compression dictionary statistics
 - **Database Compaction** - Initiate database compaction to reclaim disk space
+- **Pubkey Banning** - Ban pubkeys from posting with automatic strfry write-policy plugin integration — bans sync in real-time without restart
+- **Plugin Manager** - Configure strfry write-policy plugin path, timeout, and lookback settings
+- **Image Rendering** - Inline image display in event content with NSFW blur (click to unblur, NIP-36 content-warning support)
 - **Configuration Editor** - Edit relay configuration (name, description, pubkey, contact, bind address, port)
 - **Connection Monitoring** - View real-time connection and message statistics
 - **Multi-user Authentication** - Role-based access control (admin, moderator, viewer)
@@ -137,6 +140,45 @@ python3 -c "import secrets; print(secrets.token_hex(32))"
 ### First-Time Registration
 
 The first user must register at `/register` with the correct `REGISTRATION_TOKEN` set in `.env`. This prevents unauthorized registration before you secure your relay. After the first user is created, registration is automatically closed.
+
+## Pubkey Banning
+
+StrfryGUI includes a **write-policy plugin** that blocks banned pubkeys from posting. Bans applied via the Moderation page or Events page take effect immediately — no strfry restart needed.
+
+### One-Time Setup
+
+Add the following to your `strfry.conf`:
+
+```toml
+relay {
+    writePolicy {
+        plugin = "/opt/strfrygui/utils/blocklist_plugin.py"
+        timeoutSeconds = 10
+    }
+}
+```
+
+Then make the plugin executable and restart strfry once:
+
+```bash
+sudo chmod 755 /opt/strfrygui/utils/blocklist_plugin.py
+sudo systemctl restart strfry
+```
+
+You can also configure the plugin path via the **Plugins** page in the admin UI (`/plugins`).
+
+### How It Works
+
+1. You ban a pubkey via the UI (Moderation or Events page)
+2. The pubkey is added to `blocklist.json` and the plugin file is touched
+3. strfry detects the file change and **auto-reloads** the plugin
+4. Any future events from that pubkey are rejected with `blocked: pubkey is banned`
+
+Unbanning triggers the same sync — the pubkey is removed from `blocklist.json` and the plugin reloads automatically.
+
+### Banned Pubkeys File
+
+The blocklist is stored at `/opt/strfrygui/blocklist.json`. This file is automatically created and managed by the app. The plugin monitors this file for changes and reloads on the fly.
 
 ## Files You Must Edit After Cloning
 
