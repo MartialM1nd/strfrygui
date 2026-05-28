@@ -23,6 +23,22 @@ from utils.strfry import (
 from utils.metrics import get_summary, MetricsError
 from utils.auth import admin_required, moderator_required, viewer_or_higher, permission_required
 
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+BANNED_PUBKEYS_FILE = os.path.join(APP_DIR, "blocklist.json")
+BLOCKLIST_PLUGIN_PATH = os.path.join(APP_DIR, "utils", "blocklist_plugin.py")
+
+
+def sync_blocklist():
+    """Write blocklist.json and trigger strfry plugin auto-reload."""
+    from models import BannedPubkey
+    banned = [b.pubkey for b in BannedPubkey.query.all()]
+    with open(BANNED_PUBKEYS_FILE, 'w') as f:
+        json.dump(banned, f)
+    if os.path.exists(BLOCKLIST_PLUGIN_PATH):
+        if not os.access(BLOCKLIST_PLUGIN_PATH, os.X_OK):
+            os.chmod(BLOCKLIST_PLUGIN_PATH, 0o755)
+        os.utime(BLOCKLIST_PLUGIN_PATH, None)
+
 
 class PubkeyMetadataCache:
     def __init__(self, max_size=50000, ttl_days=7):
@@ -271,6 +287,12 @@ class ConfigForm(FlaskForm):
     relay_contact = StringField('Contact', validators=[Optional()])
     relay_bind = StringField('Bind Address', validators=[Optional()])
     relay_port = StringField('Port', validators=[Optional()])
+
+
+class PluginForm(FlaskForm):
+    plugin_path = StringField('Plugin Path', validators=[Optional()])
+    timeout = IntegerField('Timeout (seconds)', default=10, validators=[Optional()])
+    lookback = IntegerField('Lookback (seconds)', default=0, validators=[Optional()])
 
 
 @app.context_processor
@@ -1042,6 +1064,60 @@ def config_view():
     return render_template('config.html', form=form, current_config=current_config, error=error, success=success)
 
 
+@app.route('/plugins', methods=['GET', 'POST'])
+@admin_required
+def plugins():
+    form = PluginForm()
+    error = None
+    success = None
+
+    current_config = get_config()
+    write_policy = current_config.get('relay', {}).get('writePolicy', {}) if current_config else {}
+
+    plugin_installed = os.path.exists(BLOCKLIST_PLUGIN_PATH) and os.access(BLOCKLIST_PLUGIN_PATH, os.X_OK)
+    blocklist_count = 0
+    if os.path.exists(BANNED_PUBKEYS_FILE):
+        try:
+            with open(BANNED_PUBKEYS_FILE) as f:
+                blocklist_count = len(json.load(f))
+        except (json.JSONDecodeError, OSError):
+            pass
+
+    if request.method == 'POST':
+        if form.validate():
+            updates = {}
+            if form.plugin_path.data:
+                updates['relay.writePolicy.plugin'] = form.plugin_path.data
+            if form.timeout.data is not None:
+                updates['relay.writePolicy.timeoutSeconds'] = str(form.timeout.data)
+            if form.lookback.data is not None:
+                updates['relay.writePolicy.lookbackSeconds'] = str(form.lookback.data)
+
+            if updates:
+                try:
+                    update_config(updates)
+                    sync_blocklist()
+                    success = 'Plugin configuration updated. Restart strfry to apply changes.'
+                    log_audit('plugin_update', f'Updated plugin config: {updates}')
+                    current_config = get_config()
+                    write_policy = current_config.get('relay', {}).get('writePolicy', {}) if current_config else {}
+                except Exception as e:
+                    error = str(e)
+
+    if write_policy:
+        form.plugin_path.data = write_policy.get('plugin', '')
+        form.timeout.data = write_policy.get('timeoutSeconds', 10)
+        form.lookback.data = write_policy.get('lookbackSeconds', 0)
+    else:
+        form.plugin_path.data = BLOCKLIST_PLUGIN_PATH if plugin_installed else ''
+        form.timeout.data = 10
+        form.lookback.data = 0
+
+    return render_template('plugins.html', form=form, error=error, success=success,
+                           plugin_installed=plugin_installed, blocklist_count=blocklist_count,
+                           plugin_path=BLOCKLIST_PLUGIN_PATH)
+
+
 @app.route('/connections')
 @viewer_or_higher
 def connections():
@@ -1218,6 +1294,7 @@ def moderation_ban(report_id):
         flash(f'Failed to ban user: {e}', 'danger')
     
     db.session.commit()
+    sync_blocklist()
     return redirect(url_for('moderation'))
 
 
@@ -1278,6 +1355,7 @@ def ban_by_pubkey():
         
         log_audit('pubkey_banned', f'Banned pubkey {pubkey} - {reason}')
         db.session.commit()
+        sync_blocklist()
         return 'OK', 200
     except (ValueError, StrfryError) as e:
         return f'Failed to ban user: {e}', 500
@@ -1336,6 +1414,8 @@ def unban_pubkey(ban_id):
     db.session.commit()
     
     log_audit('user_unbanned', f'Unbanned pubkey {pubkey}')
+    db.session.commit()
+    sync_blocklist()
     flash(f'Pubkey unbanned.', 'success')
     
     return redirect(url_for('admin'))
@@ -1438,6 +1518,13 @@ def init_db():
                 relay = MetadataRelay(url=url, enabled=True, is_default=True)
                 db.session.add(relay)
             db.session.commit()
+        
+        if not os.path.exists(BANNED_PUBKEYS_FILE):
+            with open(BANNED_PUBKEYS_FILE, 'w') as f:
+                json.dump([], f)
+        if os.path.exists(BLOCKLIST_PLUGIN_PATH):
+            if not os.access(BLOCKLIST_PLUGIN_PATH, os.X_OK):
+                os.chmod(BLOCKLIST_PLUGIN_PATH, 0o755)
 
 
 init_db()

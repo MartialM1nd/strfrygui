@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+
+{% block title %}Plugin Manager{% if relay_name %} - {{ relay_name }}{% endif %} - StrfryGUI{% endblock %}
+
+{% block content %}
+<h2 class="mb-4"><i class="bi bi-puzzle"></i>{% if relay_name %} Plugin Manager for {{ relay_name }}{% else %} Plugin Manager{% endif %}</h2>
+
+{% if error %}
+<div class="alert alert-danger">
+    <h5>Error</h5>
+    <p>{{ error }}</p>
+</div>
+{% endif %}
+
+{% if success %}
+<div class="alert alert-success">
+    <h5>Success</h5>
+    <p>{{ success }}</p>
+</div>
+{% endif %}
+
+<div class="row mb-4">
+    <div class="col-md-6">
+        <div class="card h-100">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-shield-check"></i> Blocklist Plugin Status</h5>
+            </div>
+            <div class="card-body">
+                <table class="table table-sm">
+                    <tr>
+                        <td>Plugin File:</td>
+                        <td><code>{{ plugin_path }}</code></td>
+                    </tr>
+                    <tr>
+                        <td>Installed:</td>
+                        <td>
+                            {% if plugin_installed %}
+                            <span class="badge bg-success">Yes</span>
+                            {% else %}
+                            <span class="badge bg-danger">No</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>Banned Pubkeys:</td>
+                        <td><span class="badge bg-warning text-dark">{{ blocklist_count }}</span></td>
+                    </tr>
+                    <tr>
+                        <td>Blocklist File:</td>
+                        <td><code>{{ config.BANNED_PUBKEYS_FILE }}</code></td>
+                    </tr>
+                </table>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-6">
+        <div class="card h-100">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="bi bi-info-circle"></i> How It Works</h5>
+            </div>
+            <div class="card-body">
+                <p class="mb-1">The blocklist plugin intercepts every event before it's stored and checks if the pubkey is banned.</p>
+                <ol class="mb-0 small">
+                    <li>User publishes an event</li>
+                    <li>strfry sends event to the plugin via stdin</li>
+                    <li>Plugin checks pubkey against <code>blocklist.json</code></li>
+                    <li>If banned → event rejected with error message</li>
+                    <li>If not banned → event accepted</li>
+                </ol>
+                <hr>
+                <p class="small text-muted mb-0">Changes to bans sync automatically. A strfry restart is only needed when changing the plugin path.</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card mb-4">
+    <div class="card-header">
+        <h5 class="mb-0"><i class="bi bi-gear"></i> strfry Write Policy Configuration</h5>
+    </div>
+    <div class="card-body">
+        <form method="POST">
+            {{ form.hidden_tag() }}
+            <div class="mb-3">
+                {{ form.plugin_path.label(class="form-label") }}
+                {{ form.plugin_path(class="form-control font-monospace", placeholder="/path/to/blocklist_plugin.py") }}
+                <div class="form-text">Full path to the write-policy plugin executable. Set to empty to disable.</div>
+            </div>
+            <div class="row mb-3">
+                <div class="col-md-6">
+                    {{ form.timeout.label(class="form-label") }}
+                    {{ form.timeout(class="form-control", type="number", min="1", max="60") }}
+                    <div class="form-text">Seconds to wait for plugin response (default: 10)</div>
+                </div>
+                <div class="col-md-6">
+                    {{ form.lookback.label(class="form-label") }}
+                    {{ form.lookback(class="form-control", type="number", min="0", max="3600") }}
+                    <div class="form-text">Seconds of initial state to send to plugin (default: 0)</div>
+                </div>
+            </div>
+            <button type="submit" class="btn btn-primary">
+                <i class="bi bi-save"></i> Save Configuration
+            </button>
+        </form>
+    </div>
+</div>
+
+{% if plugin_installed %}
+<div class="card">
+    <div class="card-header">
+        <h5 class="mb-0"><i class="bi bi-terminal"></i> Example strfry.conf Entry</h5>
+    </div>
+    <div class="card-body">
+        <pre class="mb-0">relay {
+    writePolicy {
+        plugin = "{{ plugin_path }}"
+        timeoutSeconds = 10
+    }
+}</pre>
+        <p class="small text-muted mt-2 mb-0">
+            <i class="bi bi-arrow-repeat"></i> After saving, restart strfry: <code>systemctl restart strfry</code>
+        </p>
+    </div>
+</div>
+{% endif %}
+{% endblock %}
