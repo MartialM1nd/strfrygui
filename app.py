@@ -1,4 +1,5 @@
 import os
+import json
 from datetime import datetime, timedelta
 from flask import Flask, render_template, redirect, url_for, flash, request, send_file, jsonify, abort
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
@@ -30,14 +31,17 @@ BLOCKLIST_PLUGIN_PATH = os.path.join(APP_DIR, "utils", "blocklist_plugin.py")
 
 def sync_blocklist():
     """Write blocklist.json and trigger strfry plugin auto-reload."""
-    from models import BannedPubkey
-    banned = [b.pubkey for b in BannedPubkey.query.all()]
-    with open(BANNED_PUBKEYS_FILE, 'w') as f:
-        json.dump(banned, f)
-    if os.path.exists(BLOCKLIST_PLUGIN_PATH):
-        if not os.access(BLOCKLIST_PLUGIN_PATH, os.X_OK):
-            os.chmod(BLOCKLIST_PLUGIN_PATH, 0o755)
-        os.utime(BLOCKLIST_PLUGIN_PATH, None)
+    try:
+        from models import BannedPubkey
+        banned = [b.pubkey for b in BannedPubkey.query.all()]
+        with open(BANNED_PUBKEYS_FILE, 'w') as f:
+            json.dump(banned, f)
+        if os.path.exists(BLOCKLIST_PLUGIN_PATH):
+            if not os.access(BLOCKLIST_PLUGIN_PATH, os.X_OK):
+                os.chmod(BLOCKLIST_PLUGIN_PATH, 0o755)
+            os.utime(BLOCKLIST_PLUGIN_PATH, None)
+    except Exception:
+        pass
 
 
 class PubkeyMetadataCache:
