@@ -1185,6 +1185,16 @@ def sync_moderation_reports():
                 elif tag[0] == 'e' and len(tag) >= 3:
                     reported_event_id = tag[1]
             
+            if reported_pubkey:
+                existing = scan_events({'authors': [reported_pubkey], 'limit': 1}, limit=1)
+                if not existing:
+                    continue
+            
+            if reported_event_id:
+                existing = scan_events({'ids': [reported_event_id], 'limit': 1}, limit=1)
+                if not existing:
+                    continue
+            
             new_report = ModerationReport(
                 event_id=event_id,
                 reporter_pubkey=report.get('pubkey'),
