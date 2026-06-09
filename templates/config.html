@@ -78,13 +78,23 @@
     </div>
 </div>
 
+{%- macro section(key, config, indent) %}{{ '    ' * indent }}{{ key }} {
+{% for k, v in config.items() %}{% if v is mapping %}{{ section(k, v, indent + 1) }}{% else %}{{ '    ' * (indent + 1) }}{{ k }} = "{{ v }}"
+{% endif %}{% endfor -%}
+{{ '    ' * indent }}}
+{% endmacro -%}
+
+{%- macro render_config(config) %}{% for key, value in config.items() %}{% if value is mapping %}{{ section(key, value, 0) }}{% else %}{{ key }} = "{{ value }}"
+{% endif %}{% endfor -%}
+{% endmacro -%}
+
 {% if current_config %}
 <div class="card">
     <div class="card-header">
         <h5 class="mb-0">Current Configuration</h5>
     </div>
     <div class="card-body">
-        <pre class="p-3 bg-body-secondary">{{ current_config }}</pre>
+        <pre class="p-3 bg-body-secondary">{{ render_config(current_config) }}</pre>
     </div>
 </div>
 {% endif %}
