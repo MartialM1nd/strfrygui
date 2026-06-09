@@ -222,7 +222,7 @@ def get_config():
         content = f.read()
     
     config = {}
-    current_section = 'root'
+    section_stack = []
     
     for line in content.split('\n'):
         line = line.strip()
@@ -230,73 +230,63 @@ def get_config():
             continue
         
         if line.endswith('{'):
-            current_section = line[:-1].strip()
-            if current_section not in config:
-                config[current_section] = {}
+            section_stack.append(line[:-1].strip())
+        elif line == '}':
+            if section_stack:
+                section_stack.pop()
         elif '=' in line:
             key, value = line.split('=', 1)
             key = key.strip()
             value = value.strip().strip('"')
             
-            if current_section == 'root':
-                config[key] = value
-            else:
-                if current_section in config:
-                    config[current_section][key] = value
+            target = config
+            for section in section_stack:
+                if section not in target:
+                    target[section] = {}
+                target = target[section]
+            target[key] = value
     
     return config
 
 
 def update_config(updates):
     config_path = Config.STRFRY_CONFIG
-    
-    current_config = {}
-    if os.path.exists(config_path):
-        with open(config_path, 'r') as f:
-            content = f.read()
-            current_config = parse_toml_like(content)
-    
-    for key, value in updates.items():
-        current_config[key] = value
-    
+    if not os.path.exists(config_path):
+        raise FileNotFoundError(f"Config file not found: {config_path}")
+
+    with open(config_path, 'r') as f:
+        lines = f.readlines()
+
+    for dotted_key, new_value in updates.items():
+        parts = dotted_key.split('.')
+        target_key = parts[-1]
+        target_sections = parts[:-1]
+
+        section_stack = []
+        found = False
+
+        for i, line in enumerate(lines):
+            stripped = line.strip()
+            if not stripped or stripped.startswith('#'):
+                continue
+
+            if stripped.endswith('{'):
+                section_stack.append(stripped[:-1].strip())
+            elif stripped == '}':
+                if section_stack:
+                    section_stack.pop()
+            elif '=' in stripped and not stripped.startswith('#'):
+                key = stripped.split('=', 1)[0].strip()
+                if key == target_key and section_stack == target_sections:
+                    indent = line[:len(line) - len(line.lstrip())]
+                    lines[i] = f'{indent}{key} = "{new_value}"\n'
+                    found = True
+                    break
+
+        if not found:
+            raise KeyError(f"Key '{dotted_key}' not found in config")
+
     with open(config_path, 'w') as f:
-        for key, value in current_config.items():
-            if isinstance(value, dict):
-                f.write(f"{key} {{\n")
-                for k, v in value.items():
-                    f.write(f'    {k} = "{v}"\n')
-                f.write("}\n\n")
-            else:
-                f.write(f'{key} = "{value}"\n')
-    
+        f.writelines(lines)
+
     return True
-
-
-def parse_toml_like(content):
-    config = {}
-    current_section = 'root'
-    
-    for line in content.split('\n'):
-        line = line.strip()
-        if not line or line.startswith('#'):
-            continue
-        
-        if line.endswith('{'):
-            current_section = line[:-1].strip()
-            if current_section not in config:
-                config[current_section] = {}
-        elif '}' in line:
-            current_section = 'root'
-        elif '=' in line:
-            key, value = line.split('=', 1)
-            key = key.strip()
-            value = value.strip().strip('"')
-            
-            if current_section == 'root':
-                config[key] = value
-            else:
-                if current_section not in config:
-                    config[current_section] = {}
-                config[current_section][key] = value
-    
-    return config
