@@ -125,9 +125,27 @@
             </div>
             <div class="card-body">
                 <p>Compaction reclaims disk space by removing fragmentation. The relay should be stopped during compaction.</p>
+
+                {% if compaction_status.running %}
+                <div class="d-flex align-items-center mb-3">
+                    <div class="spinner-border spinner-border-sm text-warning me-2" role="status">
+                        <span class="visually-hidden">Compacting...</span>
+                    </div>
+                    <span>Compaction in progress since <strong>{{ compaction_status.started_at.strftime('%Y-%m-%d %H:%M:%S') }}</strong>...</span>
+                </div>
+                {% elif compaction_status.finished_at %}
+                <div class="mb-3">
+                    {% if compaction_status.error %}
+                    <div class="alert alert-danger mb-2 py-2">Compaction failed: {{ compaction_status.error }}</div>
+                    {% else %}
+                    <div class="alert alert-success mb-2 py-2">Compaction completed successfully at {{ compaction_status.finished_at.strftime('%Y-%m-%d %H:%M:%S') }}.</div>
+                    {% endif %}
+                </div>
+                {% endif %}
+
                 <form method="POST">
-                    <button type="submit" name="compact" class="btn btn-warning">
-                        <i class="bi bi-hdd"></i> Compact Database
+                    <button type="submit" name="compact" class="btn btn-warning" {% if compaction_status.running %}disabled{% endif %}>
+                        <i class="bi bi-hdd{% if compaction_status.running %}-stack{% endif %}"></i> {% if compaction_status.running %}Compacting...{% else %}Compact Database{% endif %}
                     </button>
                 </form>
             </div>

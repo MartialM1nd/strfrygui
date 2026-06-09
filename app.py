@@ -1,5 +1,7 @@
 import os
 import json
+import threading
+import time
 from datetime import datetime, timedelta
 from flask import Flask, render_template, redirect, url_for, flash, request, send_file, jsonify, abort
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
@@ -27,6 +29,24 @@ from utils.auth import admin_required, moderator_required, viewer_or_higher, per
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
 BANNED_PUBKEYS_FILE = os.path.join(APP_DIR, "blocklist.json")
 BLOCKLIST_PLUGIN_PATH = os.path.join(APP_DIR, "utils", "blocklist_plugin.py")
+
+_compaction = {
+    'running': False,
+    'started_at': None,
+    'finished_at': None,
+    'error': None,
+    'thread': None,
+}
+
+
+def _run_compaction():
+    try:
+        compact_database()
+    except StrfryError as e:
+        _compaction['error'] = str(e)
+    finally:
+        _compaction['finished_at'] = datetime.now()
+        _compaction['running'] = False
 
 
 def sync_blocklist():
@@ -1005,12 +1025,18 @@ def db_management():
             return redirect(url_for('db_management'))
         
         elif 'compact' in request.form:
-            try:
-                result = compact_database()
-                flash('Database compaction initiated. Check strfry logs for progress.', 'info')
+            if _compaction['running']:
+                flash('Compaction is already in progress.', 'warning')
+            else:
+                _compaction['running'] = True
+                _compaction['started_at'] = datetime.now()
+                _compaction['finished_at'] = None
+                _compaction['error'] = None
+                t = threading.Thread(target=_run_compaction, daemon=True)
+                _compaction['thread'] = t
+                t.start()
+                flash('Database compaction started in background.', 'info')
                 log_audit('compact', 'Database compaction initiated')
-            except StrfryError as e:
-                flash(str(e), 'danger')
             return redirect(url_for('db_management'))
         
         elif 'refresh_negentropy' in request.form:
@@ -1025,6 +1051,12 @@ def db_management():
             except StrfryError as e:
                 dict_error = str(e)
     
+    compaction_status = {
+        'running': _compaction['running'],
+        'started_at': _compaction.get('started_at'),
+        'finished_at': _compaction.get('finished_at'),
+        'error': _compaction.get('error'),
+    }
     return render_template(
         'db.html',
         trees=trees,
@@ -1032,7 +1064,8 @@ def db_management():
         negentropy_error=negentropy_error,
         negentropy_success=negentropy_success,
         dict_output=dict_output,
-        dict_error=dict_error
+        dict_error=dict_error,
+        compaction_status=compaction_status,
     )
 
 
