@@ -354,6 +354,21 @@ def render_images_filter(content):
     return re.sub(url_pattern, replace_url, content)
 
 
+@app.template_filter('human_size')
+def human_size_filter(size):
+    if not size:
+        return '0 B'
+    try:
+        size = int(size)
+    except (ValueError, TypeError):
+        return str(size)
+    for unit in ('B', 'KB', 'MB', 'GB', 'TB'):
+        if size < 1024:
+            return f'{size:.1f} {unit}' if unit != 'B' else f'{size} B'
+        size /= 1024
+    return f'{size:.1f} PB'
+
+
 def get_client_ip():
     xff = request.headers.get('X-Forwarded-For')
     if xff:
@@ -954,11 +969,7 @@ def db_management():
     dict_error = None
     
     trees = []
-    try:
-        trees = negentropy_list()
-    except StrfryError as e:
-        negentropy_error = str(e)
-    
+    dict_output = None
     negentropy_add_form = EventSearchForm()
     negentropy_add_form.limit.data = 0
     
@@ -967,31 +978,31 @@ def db_management():
             try:
                 filter_obj = validate_filter_json(negentropy_add_form.filter_json.data)
                 result = negentropy_add(filter_obj)
-                negentropy_success = f'Created negentropy tree: {result}'
+                flash(f'Created negentropy tree: {result}')
                 log_audit('negentropy_add', f'Added tree: {filter_obj}')
-                trees = negentropy_list()
             except (ValueError, StrfryError) as e:
-                negentropy_error = str(e)
+                flash(str(e), 'danger')
+            return redirect(url_for('db_management'))
         
         elif 'negentropy_build' in request.form:
             tree_id = request.form.get('tree_id')
             try:
                 result = negentropy_build(tree_id)
-                negentropy_success = f'Built tree {tree_id}'
+                flash(f'Built tree {tree_id}')
                 log_audit('negentropy_build', f'Built tree: {tree_id}')
-                trees = negentropy_list()
             except StrfryError as e:
-                negentropy_error = str(e)
+                flash(str(e), 'danger')
+            return redirect(url_for('db_management'))
         
         elif 'negentropy_delete' in request.form:
             tree_id = request.form.get('tree_id')
             try:
                 result = negentropy_delete(tree_id)
-                negentropy_success = f'Deleted tree {tree_id}'
+                flash(f'Deleted tree {tree_id}')
                 log_audit('negentropy_delete', f'Deleted tree: {tree_id}')
-                trees = negentropy_list()
             except StrfryError as e:
-                negentropy_error = str(e)
+                flash(str(e), 'danger')
+            return redirect(url_for('db_management'))
         
         elif 'compact' in request.form:
             try:
@@ -999,13 +1010,20 @@ def db_management():
                 flash('Database compaction initiated. Check strfry logs for progress.', 'info')
                 log_audit('compact', 'Database compaction initiated')
             except StrfryError as e:
+                flash(str(e), 'danger')
+            return redirect(url_for('db_management'))
+        
+        elif 'refresh_negentropy' in request.form:
+            try:
+                trees = negentropy_list()
+            except StrfryError as e:
+                negentropy_error = str(e)
+        
+        elif 'refresh_dict' in request.form:
+            try:
+                dict_output = dict_list()
+            except StrfryError as e:
                 dict_error = str(e)
-    
-    dict_output = None
-    try:
-        dict_output = dict_list()
-    except StrfryError as e:
-        dict_error = str(e)
     
     return render_template(
         'db.html',
