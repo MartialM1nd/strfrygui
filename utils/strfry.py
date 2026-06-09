@@ -164,7 +164,7 @@ def negentropy_list():
         return cached
 
     cmd = ['negentropy', 'list']
-    output = run_strfry_command(cmd, timeout=15)
+    output = run_strfry_command(cmd, timeout=120)
     
     trees = []
     current_tree = {}
@@ -221,7 +221,7 @@ def dict_list():
         return cached
 
     cmd = ['dict', 'stats']
-    output = run_strfry_command(cmd, timeout=15)
+    output = run_strfry_command(cmd, timeout=120)
     _cache_set('dict_list', output)
     return output
 
