@@ -2,7 +2,22 @@ import subprocess
 import json
 import os
 import re
+import time
 from config import Config
+
+
+_cache = {}
+
+
+def _cache_get(key, ttl=30):
+    entry = _cache.get(key)
+    if entry and time.time() - entry['time'] < ttl:
+        return entry['value']
+    return None
+
+
+def _cache_set(key, value):
+    _cache[key] = {'value': value, 'time': time.time()}
 
 
 class StrfryError(Exception):
@@ -35,7 +50,7 @@ def validate_filter_json(filter_str):
         raise ValueError(f"Invalid JSON: {e}")
 
 
-def run_strfry_command(args, input_data=None, capture_output=True):
+def run_strfry_command(args, input_data=None, capture_output=True, timeout=300):
     binary = Config.STRFRY_BINARY
     
     if not os.path.exists(binary):
@@ -52,7 +67,7 @@ def run_strfry_command(args, input_data=None, capture_output=True):
             input=input_data,
             capture_output=capture_output,
             text=True,
-            timeout=300
+            timeout=timeout
         )
         if result.returncode != 0:
             raise StrfryError(result.stderr.strip() or f"Command failed with code {result.returncode}")
@@ -144,54 +159,70 @@ def compact_database():
 
 
 def negentropy_list():
+    cached = _cache_get('negentropy_list')
+    if cached is not None:
+        return cached
+
     cmd = ['negentropy', 'list']
-    output = run_strfry_command(cmd)
+    output = run_strfry_command(cmd, timeout=15)
     
     trees = []
     current_tree = {}
-    if not output:
-        return trees
-    for line in output.split('\n'):
-        line = line.strip()
-        if line.startswith('tree '):
-            if current_tree:
-                trees.append(current_tree)
-            current_tree = {'id': line.split()[1].rstrip(':')}
-        elif line.startswith('filter:'):
-            current_tree['filter'] = line.split(':', 1)[1].strip()
-        elif line.startswith('size:'):
-            current_tree['size'] = line.split(':', 1)[1].strip()
-        elif line.startswith('fingerprint:'):
-            current_tree['fingerprint'] = line.split(':', 1)[1].strip()
+    if output:
+        for line in output.split('\n'):
+            line = line.strip()
+            if line.startswith('tree '):
+                if current_tree:
+                    trees.append(current_tree)
+                current_tree = {'id': line.split()[1].rstrip(':')}
+            elif line.startswith('filter:'):
+                current_tree['filter'] = line.split(':', 1)[1].strip()
+            elif line.startswith('size:'):
+                current_tree['size'] = line.split(':', 1)[1].strip()
+            elif line.startswith('fingerprint:'):
+                current_tree['fingerprint'] = line.split(':', 1)[1].strip()
+        
+        if current_tree:
+            trees.append(current_tree)
     
-    if current_tree:
-        trees.append(current_tree)
-    
+    _cache_set('negentropy_list', trees)
     return trees
+
+
+def _clear_negentropy_cache():
+    _cache.pop('negentropy_list', None)
 
 
 def negentropy_add(filter_json):
     filter_str = json.dumps(filter_json)
     cmd = ['negentropy', 'add', filter_str]
     output = run_strfry_command(cmd)
+    _clear_negentropy_cache()
     return output
 
 
 def negentropy_build(tree_id):
     cmd = ['negentropy', 'build', str(tree_id)]
     output = run_strfry_command(cmd)
+    _clear_negentropy_cache()
     return output
 
 
 def negentropy_delete(tree_id):
     cmd = ['negentropy', 'delete', str(tree_id)]
     output = run_strfry_command(cmd)
+    _clear_negentropy_cache()
     return output
 
 
 def dict_list():
+    cached = _cache_get('dict_list')
+    if cached is not None:
+        return cached
+
     cmd = ['dict', 'stats']
-    output = run_strfry_command(cmd)
+    output = run_strfry_command(cmd, timeout=15)
+    _cache_set('dict_list', output)
     return output
 
 
