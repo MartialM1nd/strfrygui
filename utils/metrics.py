@@ -2,6 +2,7 @@ import requests
 import time
 from collections import deque
 from config import Config
+from utils.strfry import get_strfry_uptime
 
 
 class MetricsError(Exception):
@@ -140,6 +141,7 @@ def get_summary():
         'total_client_messages': total_client,
         'total_relay_messages': total_relay,
         'total_events': total_events,
+        'strfry_uptime_seconds': get_strfry_uptime(),
         'client_messages_breakdown': metrics['client_messages'],
         'relay_messages_breakdown': metrics['relay_messages'],
         'top_event_kinds': sorted(metrics['events_by_kind'].items(), key=lambda x: x[1], reverse=True),

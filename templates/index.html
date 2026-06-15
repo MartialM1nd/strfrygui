@@ -13,7 +13,7 @@
 </div>
 {% else %}
 <div class="row mb-3">
-    <div class="col-md-4">
+    <div class="col-md-3">
         <div class="card text-center border-primary">
             <div class="card-body py-2">
                 <span class="badge bg-primary mb-1"><i class="bi bi-lightning-event"></i></span>
@@ -22,7 +22,7 @@
             </div>
         </div>
     </div>
-    <div class="col-md-4">
+    <div class="col-md-3">
         <div class="card text-center border-success">
             <div class="card-body py-2">
                 <span class="badge bg-success mb-1"><i class="bi bi-arrow-down-circle"></i></span>
@@ -31,12 +31,21 @@
             </div>
         </div>
     </div>
-    <div class="col-md-4">
+    <div class="col-md-3">
         <div class="card text-center border-warning">
             <div class="card-body py-2">
                 <span class="badge bg-warning text-dark mb-1"><i class="bi bi-arrow-up-circle"></i></span>
                 <h6 class="card-title text-muted mb-1">Relay Messages</h6>
                 <h4 class="text-warning mb-0" id="stat-relay">{{ "{:,}".format(metrics.total_relay_messages) }}</h4>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="card text-center border-info">
+            <div class="card-body py-2">
+                <span class="badge bg-info text-dark mb-1"><i class="bi bi-clock-history"></i></span>
+                <h6 class="card-title text-muted mb-1">Relay Uptime</h6>
+                <h4 class="text-info mb-0" id="stat-uptime">{{ metrics.strfry_uptime_seconds | format_uptime }}</h4>
             </div>
         </div>
     </div>
@@ -219,6 +228,18 @@ function updateMultiLineChart(chart, history) {
     chart.update('none');
 }
 
+function formatUptime(seconds) {
+    if (seconds === null || seconds === undefined) return 'N/A';
+    const parts = [];
+    const days = Math.floor(seconds / 86400);
+    const hours = Math.floor((seconds % 86400) / 3600);
+    const mins = Math.floor((seconds % 3600) / 60);
+    if (days) parts.push(days + 'd');
+    if (hours) parts.push(hours + 'h');
+    if (mins || !parts.length) parts.push(mins + 'm');
+    return parts.join(' ');
+}
+
 setInterval(async function() {
     try {
         const resp = await fetch('/api/metrics');
@@ -229,6 +250,7 @@ setInterval(async function() {
         document.getElementById('stat-events').textContent = data.total_events.toLocaleString();
         document.getElementById('stat-client').textContent = data.total_client_messages.toLocaleString();
         document.getElementById('stat-relay').textContent = data.total_relay_messages.toLocaleString();
+        document.getElementById('stat-uptime').textContent = formatUptime(data.strfry_uptime_seconds);
         
         updateMultiLineChart(clientChart, data.client_rate_history);
         updateMultiLineChart(relayChart, data.relay_rate_history);

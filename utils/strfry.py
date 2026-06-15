@@ -158,6 +158,30 @@ def compact_database():
     return output
 
 
+def get_strfry_uptime():
+    """Return strfry process uptime in seconds, or None if not found."""
+    try:
+        import subprocess
+        result = subprocess.run(
+            ['pgrep', '-x', 'strfry'],
+            capture_output=True, text=True, timeout=5
+        )
+        if result.returncode != 0 or not result.stdout.strip():
+            return None
+        pid = result.stdout.strip().split()[0]
+
+        with open(f'/proc/{pid}/stat') as f:
+            stat = f.read().split()
+        starttime = int(stat[21])
+        clk_tck = os.sysconf(os.sysconf_names['SC_CLK_TCK'])
+        with open('/proc/uptime') as f:
+            system_uptime = float(f.read().split()[0])
+        uptime = system_uptime - (starttime / clk_tck)
+        return max(0, int(uptime))
+    except (FileNotFoundError, IndexError, ValueError, subprocess.TimeoutExpired):
+        return None
+
+
 def negentropy_list():
     cached = _cache_get('negentropy_list')
     if cached is not None:

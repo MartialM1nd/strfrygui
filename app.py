@@ -389,6 +389,20 @@ def human_size_filter(size):
     return f'{size:.1f} PB'
 
 
+@app.template_filter('format_uptime')
+def format_uptime_filter(seconds):
+    if seconds is None:
+        return 'N/A'
+    days, rem = divmod(int(seconds), 86400)
+    hours, rem = divmod(rem, 3600)
+    mins = rem // 60
+    parts = []
+    if days: parts.append(f'{days}d')
+    if hours: parts.append(f'{hours}h')
+    if mins or not parts: parts.append(f'{mins}m')
+    return ' '.join(parts)
+
+
 def get_client_ip():
     xff = request.headers.get('X-Forwarded-For')
     if xff:
