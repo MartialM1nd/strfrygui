@@ -3,6 +3,8 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+APP_DIR = os.path.dirname(os.path.abspath(__file__))
+
 
 class Config:
     SECRET_KEY = os.getenv('SECRET_KEY')
@@ -15,6 +17,9 @@ class Config:
     STRFRY_CONFIG = os.getenv('STRFRY_CONFIG', '/etc/strfry.conf')
     STRFRY_DB_PATH = os.getenv('STRFRY_DB_PATH', '/var/lib/strfry')
     STRFRY_METRICS_URL = os.getenv('STRFRY_METRICS_URL', 'http://localhost:7777/metrics')
+    BANNED_PUBKEYS_FILE = os.path.join(APP_DIR, 'blocklist.json')
+    BLOCKLIST_PLUGIN_PATH = os.path.join(APP_DIR, 'utils', 'blocklist_plugin.py')
+    MODERATION_PURGE_TIMEOUT = int(os.getenv('MODERATION_PURGE_TIMEOUT', '30'))
     
     EXTERNAL_RELAYS = os.getenv('EXTERNAL_RELAYS', 'wss://relay.damus.io\nwss://nos.lol').split('\n')
     EXTERNAL_RELAYS = [r.strip() for r in EXTERNAL_RELAYS if r.strip()]

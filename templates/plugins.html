@@ -49,7 +49,25 @@
                         <td>Blocklist File:</td>
                         <td><code>{{ config.BANNED_PUBKEYS_FILE }}</code></td>
                     </tr>
+                    <tr>
+                        <td>Enforcement:</td>
+                        <td>
+                            {% if projection.status == 'published' %}
+                            <span class="badge bg-success">Published revision {{ projection.published_revision }}</span>
+                            {% else %}
+                            <span class="badge bg-warning text-dark">Revision {{ projection.desired_revision }} pending</span>
+                            {% endif %}
+                        </td>
+                    </tr>
                 </table>
+                {% if projection.status == 'pending' %}
+                <p class="small text-danger">{{ projection.last_error }}</p>
+                <form method="POST" action="{{ url_for('moderation_retry_enforcement') }}">
+                    <input type="hidden" name="csrf_token" value="{{ form.csrf_token.current_token }}">
+                    <input type="hidden" name="next" value="plugins">
+                    <button type="submit" class="btn btn-sm btn-outline-warning">Retry enforcement</button>
+                </form>
+                {% endif %}
             </div>
         </div>
     </div>

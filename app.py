@@ -1,5 +1,4 @@
 import os
-import json
 import threading
 import time
 from datetime import datetime, timedelta
@@ -16,7 +15,10 @@ from io import StringIO, BytesIO
 import tempfile
 
 from config import Config, Security
-from models import db, User, AuditLog, ModerationReport, BannedPubkey, MetadataRelay
+from models import (
+    db, User, AuditLog, ModerationReport, BannedPubkey, MetadataRelay,
+    EventPurge,
+)
 from utils.strfry import (
     scan_events, delete_events, export_events, import_events,
     compact_database, negentropy_list, negentropy_add, negentropy_build,
@@ -25,10 +27,7 @@ from utils.strfry import (
 )
 from utils.metrics import get_summary, MetricsError
 from utils.auth import admin_required, moderator_required, viewer_or_higher, permission_required
-
-APP_DIR = os.path.dirname(os.path.abspath(__file__))
-BANNED_PUBKEYS_FILE = os.path.join(APP_DIR, "blocklist.json")
-BLOCKLIST_PLUGIN_PATH = os.path.join(APP_DIR, "utils", "blocklist_plugin.py")
+from utils.moderation import ModerationDecisions, ModerationError
 
 _compaction = {
     'running': False,
@@ -47,21 +46,6 @@ def _run_compaction():
     finally:
         _compaction['finished_at'] = datetime.now()
         _compaction['running'] = False
-
-
-def sync_blocklist():
-    """Write blocklist.json and trigger strfry plugin auto-reload."""
-    try:
-        from models import BannedPubkey
-        banned = [b.pubkey for b in BannedPubkey.query.all()]
-        with open(BANNED_PUBKEYS_FILE, 'w') as f:
-            json.dump(banned, f)
-        if os.path.exists(BLOCKLIST_PLUGIN_PATH):
-            if not os.access(BLOCKLIST_PLUGIN_PATH, os.X_OK):
-                os.chmod(BLOCKLIST_PLUGIN_PATH, 0o755)
-            os.utime(BLOCKLIST_PLUGIN_PATH, None)
-    except Exception:
-        pass
 
 
 class PubkeyMetadataCache:
@@ -408,6 +392,16 @@ def get_client_ip():
     if xff:
         return xff.split(',')[0].strip()
     return request.remote_addr
+
+
+def moderation_decisions():
+    return ModerationDecisions(current_user.id, get_client_ip())
+
+
+def flash_moderation_outcome(outcome, success_message):
+    flash(success_message, 'success')
+    for warning in outcome.warnings:
+        flash(warning, 'warning')
 
 
 def log_audit(action, details=None, user_id=None):
@@ -1143,14 +1137,10 @@ def plugins():
     current_config = get_config()
     write_policy = current_config.get('relay', {}).get('writePolicy', {}) if current_config else {}
 
-    plugin_installed = os.path.exists(BLOCKLIST_PLUGIN_PATH) and os.access(BLOCKLIST_PLUGIN_PATH, os.X_OK)
-    blocklist_count = 0
-    if os.path.exists(BANNED_PUBKEYS_FILE):
-        try:
-            with open(BANNED_PUBKEYS_FILE) as f:
-                blocklist_count = len(json.load(f))
-        except (json.JSONDecodeError, OSError):
-            pass
+    plugin_path = app.config['BLOCKLIST_PLUGIN_PATH']
+    plugin_installed = os.path.exists(plugin_path) and os.access(plugin_path, os.X_OK)
+    blocklist_count = BannedPubkey.query.count()
+    projection = ModerationDecisions.initialize_projection()
 
     if request.method == 'POST':
         if form.validate():
@@ -1165,12 +1155,12 @@ def plugins():
             if updates:
                 try:
                     update_config(updates)
-                    sync_blocklist()
+                    projection = ModerationDecisions.request_republication()
                     success = 'Plugin configuration updated. Restart strfry to apply changes.'
                     log_audit('plugin_update', f'Updated plugin config: {updates}')
                     current_config = get_config()
                     write_policy = current_config.get('relay', {}).get('writePolicy', {}) if current_config else {}
-                except Exception as e:
+                except (KeyError, OSError, ModerationError) as e:
                     error = str(e)
 
     if write_policy:
@@ -1178,13 +1168,13 @@ def plugins():
         form.timeout.data = write_policy.get('timeoutSeconds', 10)
         form.lookback.data = write_policy.get('lookbackSeconds', 0)
     else:
-        form.plugin_path.data = BLOCKLIST_PLUGIN_PATH if plugin_installed else ''
+        form.plugin_path.data = plugin_path if plugin_installed else ''
         form.timeout.data = 10
         form.lookback.data = 0
 
     return render_template('plugins.html', form=form, error=error, success=success,
                            plugin_installed=plugin_installed, blocklist_count=blocklist_count,
-                           plugin_path=BLOCKLIST_PLUGIN_PATH)
+                           plugin_path=plugin_path, projection=projection)
 
 
 @app.route('/connections')
@@ -1312,31 +1302,37 @@ def moderation():
     reports = query.order_by(sort_column).offset(offset).limit(limit).all()
     total_count = query.count()
     has_more = (offset + len(reports)) < total_count
+    pending_purges = EventPurge.query.filter_by(status='pending').order_by(EventPurge.created_at.desc()).all()
+    completed_purges = EventPurge.query.filter_by(status='completed').order_by(
+        EventPurge.created_at.desc()
+    ).limit(25).all()
+    purges = pending_purges + completed_purges
+    projection = ModerationDecisions.initialize_projection()
     
     return render_template('moderation.html', reports=reports, 
                            report_type_filter=report_type_filter,
                            reporter_filter=reporter_filter,
                            reported_filter=reported_filter,
+                           event_id_filter=event_id_filter,
                            show_reviewed=show_reviewed,
                            sort_order=sort_order,
                            offset=offset,
                            limit=limit,
                            has_more=has_more,
                            total_count=total_count,
+                           purges=purges,
+                           projection=projection,
                            form=form)
 
 
 @app.route('/moderation/report/<int:report_id>/review', methods=['POST'])
 @moderator_required
 def moderation_review(report_id):
-    report = ModerationReport.query.get_or_404(report_id)
-    report.reviewed = True
-    report.reviewed_by = current_user.id
-    report.reviewed_at = datetime.utcnow()
-    db.session.commit()
-    
-    log_audit('moderation_review', f'Reviewed report {report.id} (type: {report.report_type})')
-    flash('Report marked as reviewed.', 'success')
+    try:
+        outcome = moderation_decisions().review_report(report_id)
+        flash_moderation_outcome(outcome, 'Report marked as reviewed.')
+    except ModerationError as e:
+        flash(str(e), 'danger')
     
     return redirect(url_for('moderation'))
 
@@ -1344,48 +1340,23 @@ def moderation_review(report_id):
 @app.route('/moderation/report/<int:report_id>/ban', methods=['POST'])
 @moderator_required
 def moderation_ban(report_id):
-    report = ModerationReport.query.get_or_404(report_id)
-    reason = request.form.get('reason', f'Report type: {report.report_type}')
-    
+    reason = request.form.get('reason', 'Banned via moderation report')
     try:
-        if report.reported_pubkey:
-            delete_events({'authors': [report.reported_pubkey]})
-        
-        existing_ban = BannedPubkey.query.filter_by(pubkey=report.reported_pubkey).first()
-        if not existing_ban:
-            ban = BannedPubkey(
-                pubkey=report.reported_pubkey,
-                reason=reason,
-                banned_by=current_user.id
-            )
-            db.session.add(ban)
-        
-        report.banned = True
-        report.banned_by = current_user.id
-        report.banned_at = datetime.utcnow()
-        report.reviewed = True
-        report.reviewed_by = current_user.id
-        report.reviewed_at = datetime.utcnow()
-        
-        log_audit('pubkey_banned', f'Banned pubkey {report.reported_pubkey} - {reason}')
-        flash('User banned and all events deleted.', 'success')
-    except (ValueError, StrfryError) as e:
+        outcome = moderation_decisions().ban_report(report_id, reason)
+        flash_moderation_outcome(outcome, 'Ban recorded.')
+    except ModerationError as e:
         flash(f'Failed to ban user: {e}', 'danger')
-    
-    db.session.commit()
-    sync_blocklist()
     return redirect(url_for('moderation'))
 
 
 @app.route('/moderation/report/<int:report_id>/delete', methods=['POST'])
 @moderator_required
 def moderation_delete_report(report_id):
-    report = ModerationReport.query.get_or_404(report_id)
-    db.session.delete(report)
-    db.session.commit()
-    
-    log_audit('moderation_report_deleted', f'Deleted report {report_id}')
-    flash('Report deleted.', 'success')
+    try:
+        outcome = moderation_decisions().delete_report(report_id)
+        flash_moderation_outcome(outcome, 'Report deleted.')
+    except ModerationError as e:
+        flash(str(e), 'danger')
     
     return redirect(url_for('moderation'))
 
@@ -1393,26 +1364,41 @@ def moderation_delete_report(report_id):
 @app.route('/moderation/report/<int:report_id>/delete-event', methods=['POST'])
 @moderator_required
 def moderation_delete_event(report_id):
-    report = ModerationReport.query.get_or_404(report_id)
-    
-    if not report.reported_event_id:
-        flash('No event ID associated with this report.', 'danger')
-        return redirect(url_for('moderation'))
-    
     try:
-        delete_events({'ids': [report.reported_event_id]})
-        log_audit('moderation_event_deleted', f'Deleted event {report.reported_event_id} from report {report_id}')
-        flash('Event deleted.', 'success')
-    except (ValueError, StrfryError) as e:
+        outcome = moderation_decisions().delete_reported_event(report_id)
+        flash_moderation_outcome(outcome, 'Event purge recorded.')
+    except ModerationError as e:
         flash(f'Failed to delete event: {e}', 'danger')
-        return redirect(url_for('moderation'))
-    
-    report.reviewed = True
-    report.reviewed_by = current_user.id
-    report.reviewed_at = datetime.utcnow()
-    db.session.commit()
     
     return redirect(url_for('moderation'))
+
+
+@app.route('/moderation/purge/<int:purge_id>/retry', methods=['POST'])
+@moderator_required
+def moderation_retry_purge(purge_id):
+    try:
+        purge = moderation_decisions().retry_purge(purge_id)
+        if purge.status == 'completed':
+            flash('Event purge completed.', 'success')
+        else:
+            flash(f'Event purge remains pending: {purge.last_error}', 'warning')
+    except ModerationError as e:
+        flash(str(e), 'danger')
+    return redirect(url_for('moderation'))
+
+
+@app.route('/moderation/enforcement/retry', methods=['POST'])
+@moderator_required
+def moderation_retry_enforcement():
+    outcome = moderation_decisions().retry_write_policy()
+    if outcome.enforcement_status == 'published':
+        flash('Ban enforcement published.', 'success')
+    else:
+        flash(f'Ban enforcement remains pending: {outcome.enforcement_error}', 'warning')
+    next_endpoint = request.form.get('next', 'moderation')
+    if next_endpoint not in {'moderation', 'plugins'}:
+        next_endpoint = 'moderation'
+    return redirect(url_for(next_endpoint))
 
 
 @app.route('/moderation/ban-by-pubkey', methods=['POST'])
@@ -1425,18 +1411,13 @@ def ban_by_pubkey():
         return 'No pubkey provided', 400
     
     try:
-        delete_events({'authors': [pubkey]})
-        
-        existing_ban = BannedPubkey.query.filter_by(pubkey=pubkey).first()
-        if not existing_ban:
-            ban = BannedPubkey(pubkey=pubkey, reason=reason, banned_by=current_user.id)
-            db.session.add(ban)
-        
-        log_audit('pubkey_banned', f'Banned pubkey {pubkey} - {reason}')
-        db.session.commit()
-        sync_blocklist()
-        return 'OK', 200
-    except (ValueError, StrfryError) as e:
+        outcome = moderation_decisions().ban_pubkey(pubkey, reason)
+        flash_moderation_outcome(outcome, 'Ban recorded.')
+        message = 'Ban recorded.'
+        if outcome.warnings:
+            message += ' ' + ' '.join(outcome.warnings)
+        return message, 200
+    except ModerationError as e:
         return f'Failed to ban user: {e}', 500
 
 
@@ -1487,15 +1468,11 @@ def delete_user(user_id):
 @app.route('/admin/banned/<int:ban_id>/unban', methods=['POST'])
 @admin_required
 def unban_pubkey(ban_id):
-    ban = BannedPubkey.query.get_or_404(ban_id)
-    pubkey = ban.pubkey
-    db.session.delete(ban)
-    db.session.commit()
-    
-    log_audit('user_unbanned', f'Unbanned pubkey {pubkey}')
-    db.session.commit()
-    sync_blocklist()
-    flash(f'Pubkey unbanned.', 'success')
+    try:
+        outcome = moderation_decisions().unban(ban_id)
+        flash_moderation_outcome(outcome, 'Pubkey unbanned.')
+    except ModerationError as e:
+        flash(str(e), 'danger')
     
     return redirect(url_for('admin'))
 
@@ -1598,12 +1575,8 @@ def init_db():
                 db.session.add(relay)
             db.session.commit()
         
-        if not os.path.exists(BANNED_PUBKEYS_FILE):
-            with open(BANNED_PUBKEYS_FILE, 'w') as f:
-                json.dump([], f)
-        if os.path.exists(BLOCKLIST_PLUGIN_PATH):
-            if not os.access(BLOCKLIST_PLUGIN_PATH, os.X_OK):
-                os.chmod(BLOCKLIST_PLUGIN_PATH, 0o755)
+        ModerationDecisions.initialize_projection()
+        ModerationDecisions.reconcile_write_policy(force=True)
 
 
 init_db()

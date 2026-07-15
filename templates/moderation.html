@@ -5,6 +5,52 @@
 {% block content %}
 <h2 class="mb-4"><i class="bi bi-shield-exclamation"></i>{% if relay_name %} Moderation for {{ relay_name }}{% else %} Moderation{% endif %}</h2>
 
+{% if projection.status == 'pending' %}
+<div class="alert alert-warning d-flex justify-content-between align-items-center">
+    <div>
+        <strong>Ban enforcement pending.</strong>
+        Revision {{ projection.desired_revision }} has not been published{% if projection.last_error %}: {{ projection.last_error }}{% endif %}.
+    </div>
+    <form method="POST" action="{{ url_for('moderation_retry_enforcement') }}" class="ms-3">
+        <input type="hidden" name="csrf_token" value="{{ form.csrf_token.current_token }}">
+        <input type="hidden" name="next" value="moderation">
+        <button type="submit" class="btn btn-sm btn-warning">Retry enforcement</button>
+    </form>
+</div>
+{% endif %}
+
+{% if purges %}
+<div class="card border-warning mb-4">
+    <div class="card-header bg-warning-subtle">
+        <h5 class="mb-0"><i class="bi bi-hourglass-split"></i> Recent Event Purges</h5>
+    </div>
+    <div class="table-responsive">
+        <table class="table table-sm mb-0">
+            <thead><tr><th>Target</th><th>Attempts</th><th>Last failure</th><th></th></tr></thead>
+            <tbody>
+                {% for purge in purges %}
+                <tr>
+                    <td>
+                        <span class="badge bg-secondary">{{ purge.target_type }}</span>
+                        <code>{{ purge.target }}</code>
+                        {% if purge.status == 'completed' %}<span class="badge bg-success">Completed</span>{% else %}<span class="badge bg-warning text-dark">Pending</span>{% endif %}
+                    </td>
+                    <td>{{ purge.attempts }}</td>
+                    <td><small class="{% if purge.last_error %}text-danger{% else %}text-muted{% endif %}">{% if purge.last_error %}{{ purge.last_error }}{% elif purge.status == 'pending' %}Not attempted{% else %}-{% endif %}</small></td>
+                    <td class="text-end">
+                        {% if purge.status == 'pending' %}<form method="POST" action="{{ url_for('moderation_retry_purge', purge_id=purge.id) }}">
+                            <input type="hidden" name="csrf_token" value="{{ form.csrf_token.current_token }}">
+                            <button type="submit" class="btn btn-sm btn-outline-warning">Retry purge</button>
+                        </form>{% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</div>
+{% endif %}
+
 <div class="card mb-4">
     <div class="card-header">
         <h5 class="mb-0">Filter Reports</h5>
@@ -40,7 +86,7 @@
             </div>
             <div class="col-md-2">
                 <label class="form-label">Event ID</label>
-                <input type="text" name="event_id" class="form-control" placeholder="Filter by event ID">
+                <input type="text" name="event_id" class="form-control" placeholder="Filter by event ID" value="{{ event_id_filter }}">
             </div>
             <div class="col-md-2 d-flex align-items-end">
                 <div>
@@ -209,12 +255,12 @@
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
-                <p class="text-danger"><strong>WARNING: This action is IRREVERSIBLE!</strong></p>
+                <p class="text-danger"><strong>This records a Ban immediately.</strong></p>
                 <p>Banning this user will:</p>
                 <ul>
-                    <li>Delete ALL their events from this relay</li>
-                    <li>Add their pubkey to the ban list</li>
-                    <li>This cannot be undone!</li>
+                    <li>Deny future writes from their pubkey</li>
+                    <li>Attempt to purge all existing events</li>
+                    <li>Keep failed enforcement or purge work visible for retry</li>
                 </ul>
                 <div class="mb-3">
                     <label class="form-label">Reason (optional note):</label>
@@ -247,7 +293,7 @@ function showBanModal(reportId, pubkey) {
 }
 
 function confirmBan() {
-    if (!confirm('Are you sure you want to ban this user? This will delete all their events and cannot be undone.')) return;
+    if (!confirm('Record this Ban and attempt to purge the user\'s existing events?')) return;
     const reportId = document.getElementById('banReportId').value;
     const reason = document.getElementById('banReason').value || 'Banned via moderation page';
     const form = document.getElementById('actionForm');

@@ -76,6 +76,8 @@ def run_strfry_command(args, input_data=None, capture_output=True, timeout=300):
         raise StrfryError("Command timed out")
     except FileNotFoundError:
         raise StrfryError(f"strfry binary not found at {binary}")
+    except OSError as e:
+        raise StrfryError(f"Failed to execute strfry: {e}")
 
 
 def scan_events(filter_json, limit=100):
@@ -110,10 +112,10 @@ def count_events(filter_json):
     return count
 
 
-def delete_events(filter_json):
+def delete_events(filter_json, timeout=300):
     filter_str = json.dumps(filter_json)
     cmd = ['delete', '--filter', filter_str]
-    output = run_strfry_command(cmd)
+    output = run_strfry_command(cmd, timeout=timeout)
     return output
 
 

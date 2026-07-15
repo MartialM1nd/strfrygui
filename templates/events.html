@@ -271,12 +271,12 @@
                 <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
-                <p class="text-danger"><strong>WARNING: This action is IRREVERSIBLE!</strong></p>
+                <p class="text-danger"><strong>This records a Ban immediately.</strong></p>
                 <p>Banning this user will:</p>
                 <ul>
-                    <li>Delete ALL their events from this relay</li>
-                    <li>Add their pubkey to the ban list</li>
-                    <li>This cannot be undone!</li>
+                    <li>Deny future writes from their pubkey</li>
+                    <li>Attempt to purge all existing events</li>
+                    <li>Keep failed work visible for retry</li>
                 </ul>
                 <p>Type <strong>DELETE</strong> to confirm:</p>
                 <input type="hidden" id="eventBanPubkey">
