@@ -37,6 +37,8 @@ def app(tmp_path):
     old_scan_timeout = Config.DOMAIN_SCAN_TIMEOUT
     old_candidate_limit = Config.DOMAIN_SCAN_CANDIDATE_LIMIT
     old_total_timeout = Config.DOMAIN_SCAN_TOTAL_TIMEOUT
+    old_max_names = Config.NIP05_MAX_NAMES
+    old_max_relays = Config.NIP05_MAX_RELAYS
     Config.STRFRY_BINARY = "/bin/true"
     Config.STRFRY_CONFIG = ""
     Config.BANNED_PUBKEYS_FILE = str(blocklist_path)
@@ -46,6 +48,8 @@ def app(tmp_path):
     Config.DOMAIN_SCAN_TIMEOUT = 30
     Config.DOMAIN_SCAN_CANDIDATE_LIMIT = 50
     Config.DOMAIN_SCAN_TOTAL_TIMEOUT = 30
+    Config.NIP05_MAX_NAMES = 1000
+    Config.NIP05_MAX_RELAYS = 8
 
     with app.app_context():
         db.create_all()
@@ -62,3 +66,5 @@ def app(tmp_path):
     Config.DOMAIN_SCAN_TIMEOUT = old_scan_timeout
     Config.DOMAIN_SCAN_CANDIDATE_LIMIT = old_candidate_limit
     Config.DOMAIN_SCAN_TOTAL_TIMEOUT = old_total_timeout
+    Config.NIP05_MAX_NAMES = old_max_names
+    Config.NIP05_MAX_RELAYS = old_max_relays

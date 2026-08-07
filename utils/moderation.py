@@ -6,7 +6,8 @@ import time
 from dataclasses import dataclass
 
 from sqlalchemy import update
-from sqlalchemy.exc import IntegrityError, SQLAlchemyError
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.exc import SQLAlchemyError
 
 from config import Config
 from models import (
@@ -14,22 +15,27 @@ from models import (
     BannedDomain,
     BannedPubkey,
     EventPurge,
+    MetadataRelay,
     ModerationReport,
+    PubkeyBanSource,
+    User,
     WritePolicyProjection,
     db,
     utcnow,
 )
 from utils.nip05 import (
+    ProfileClaimResult,
     Nip05VerificationError,
-    find_domain_candidates,
+    fetch_nip05_directory,
+    lookup_profile_claim,
     normalize_domain,
-    verify_nip05,
 )
-from utils.strfry import StrfryError, delete_events, scan_events
+from utils.strfry import StrfryError, delete_events
 
 
 _projection_lock = threading.Lock()
 _domain_scan_lock = threading.Lock()
+_purge_lock = threading.Lock()
 
 
 class ModerationError(Exception):
@@ -43,6 +49,7 @@ class DecisionOutcome:
     purge_status: str | None = None
     enforcement_error: str | None = None
     purge_error: str | None = None
+    active_set_changed: bool = True
 
     @property
     def warnings(self):
@@ -56,11 +63,14 @@ class DecisionOutcome:
 
 @dataclass(frozen=True)
 class DomainScanOutcome:
-    scanned_events: int
-    candidates: int
+    names: int
     verified: int
+    unresolved: int
+    invalid_entries: int
+    new_sources: int
     new_bans: int
-    queued_purges: int
+    purge_completed: int
+    purge_pending: int
     enforcement_status: str | None = None
     enforcement_error: str | None = None
     scan_error: str | None = None
@@ -75,15 +85,35 @@ class DomainScanOutcome:
         return warnings
 
 
+@dataclass(frozen=True)
+class DomainUnbanOutcome:
+    removed_sources: int
+    unbanned_pubkeys: int
+    remaining_bans: int
+    enforcement_status: str | None = None
+    enforcement_error: str | None = None
+
+    @property
+    def warnings(self):
+        if self.enforcement_status == 'pending':
+            return [f'Ban enforcement pending: {self.enforcement_error}']
+        return []
+
+
 class ModerationDecisions:
     """Record operator decisions and coordinate their follow-up effects."""
 
-    def __init__(self, actor_id, ip_address=None, event_scanner=None, nip05_verifier=None):
+    def __init__(
+        self,
+        actor_id,
+        ip_address=None,
+        directory_fetcher=None,
+        profile_lookup=None,
+    ):
         self.actor_id = actor_id
         self.ip_address = ip_address
-        self.event_scanner = event_scanner or scan_events
-        self.nip05_verifier = nip05_verifier or verify_nip05
-        self.uses_default_nip05_verifier = nip05_verifier is None
+        self.directory_fetcher = directory_fetcher or fetch_nip05_directory
+        self.profile_lookup = profile_lookup or lookup_profile_claim
 
     def ban_report(self, report_id, reason):
         report = db.session.get(ModerationReport, report_id)
@@ -120,13 +150,13 @@ class ModerationDecisions:
         db.session.add(banned_domain)
         self._add_audit(
             'domain_banned',
-            f'Banned NIP-05 domain {domain} and its subdomains - {reason or "No reason provided"}',
+            f'Banned NIP-05 domain {domain} - {reason or "No reason provided"}',
         )
         self._commit()
         return banned_domain
 
     def reconcile_domain(self, domain_id):
-        """Discover verified local NIP-05 profiles and batch their pubkey bans."""
+        """Enumerate a NIP-05 directory and materialize verified profile claims."""
         with _domain_scan_lock:
             banned_domain = db.session.get(BannedDomain, domain_id)
             if banned_domain is None:
@@ -135,154 +165,231 @@ class ModerationDecisions:
             banned_domain.scan_started_at = utcnow()
             domain = banned_domain.domain
             domain_reason = banned_domain.reason
-            scan_cursor = banned_domain.last_scan_cursor or 0
             self._commit()
 
-            scan_limit = max(1, min(Config.DOMAIN_SCAN_EVENT_LIMIT, 5000))
-            scan_timeout = max(1, min(Config.DOMAIN_SCAN_TIMEOUT, 300))
-            try:
-                events = self.event_scanner(
-                    {'kinds': [0]},
-                    limit=scan_limit,
-                    timeout=scan_timeout,
-                )
-            except (StrfryError, ValueError) as exc:
-                banned_domain = db.session.get(BannedDomain, domain_id)
-                if banned_domain is None:
-                    raise ModerationError('Banned domain not found') from exc
-                banned_domain.scan_status = 'idle'
-                banned_domain.scan_started_at = None
-                banned_domain.last_scanned_at = utcnow()
-                banned_domain.last_scan_error = str(exc)
-                self._add_audit(
-                    'banned_domain_reconciled',
-                    f'Failed to scan NIP-05 domain {domain}: {exc}',
-                )
-                self._commit()
-                return DomainScanOutcome(0, 0, 0, 0, 0, scan_error=str(exc))
-
-            candidates = find_domain_candidates(events, domain)
-            candidate_pubkeys = {pubkey for _, _, pubkey in candidates}
-            existing_pubkeys = set()
-            if candidate_pubkeys:
-                existing_pubkeys = {
-                    ban.pubkey
-                    for ban in BannedPubkey.query.filter(
-                        BannedPubkey.pubkey.in_(candidate_pubkeys)
-                    )
-                }
-            db.session.rollback()
-
-            candidate_limit = max(1, min(Config.DOMAIN_SCAN_CANDIDATE_LIMIT, 500))
             total_timeout = max(1, min(Config.DOMAIN_SCAN_TOTAL_TIMEOUT, 300))
             deadline = time.monotonic() + total_timeout
-            verified_pubkeys = set()
-            unchecked_candidates = [
-                candidate for candidate in candidates if candidate[2] not in existing_pubkeys
-            ]
-            if unchecked_candidates:
-                start = scan_cursor % len(unchecked_candidates)
-                ordered_candidates = unchecked_candidates[start:] + unchecked_candidates[:start]
-            else:
-                start = 0
-                ordered_candidates = []
-            attempted_candidates = 0
-            for local_name, claimed_domain, pubkey in ordered_candidates[:candidate_limit]:
-                if time.monotonic() >= deadline:
-                    break
-                attempted_candidates += 1
-                try:
-                    if self.uses_default_nip05_verifier:
-                        verified = self.nip05_verifier(
-                            local_name,
-                            claimed_domain,
-                            pubkey,
-                            deadline=deadline,
-                        )
-                    else:
-                        verified = self.nip05_verifier(local_name, claimed_domain, pubkey)
-                    if verified:
-                        verified_pubkeys.add(pubkey)
-                except (Nip05VerificationError, OSError, ValueError):
+            try:
+                directory = self.directory_fetcher(domain, deadline)
+            except (Nip05VerificationError, OSError, ValueError) as exc:
+                return self._record_domain_error(domain_id, domain, str(exc))
+
+            configured_relays = tuple(
+                relay.url
+                for relay in MetadataRelay.query.filter_by(enabled=True).order_by(MetadataRelay.id)
+            )
+            existing_sources = {
+                source.banned_pubkey.pubkey: source
+                for source in PubkeyBanSource.query.filter_by(
+                    source_type='domain',
+                    banned_domain_id=domain_id,
+                )
+            }
+            verified = []
+            unresolved = []
+            known_verified = 0
+            for local_name, pubkey in directory.names.items():
+                if pubkey in existing_sources:
+                    existing_sources[pubkey].last_seen_at = utcnow()
+                    known_verified += 1
                     continue
+                if time.monotonic() >= deadline:
+                    unresolved.append({'name': local_name, 'pubkey': pubkey, 'error': 'Scan deadline reached'})
+                    continue
+                try:
+                    profile_timeout = max(
+                        0.1,
+                        min(getattr(Config, 'NIP05_PROFILE_TIMEOUT', 10), 60),
+                    )
+                    profile_deadline = min(deadline, time.monotonic() + profile_timeout)
+                    result = self.profile_lookup(
+                        local_name,
+                        domain,
+                        pubkey,
+                        directory.relays.get(pubkey, ()),
+                        configured_relays,
+                        profile_deadline,
+                    )
+                except (Nip05VerificationError, OSError, ValueError) as exc:
+                    result = ProfileClaimResult(False, error=str(exc))
+                if result.verified:
+                    verified.append((local_name, pubkey, result.source))
+                else:
+                    unresolved.append({
+                        'name': local_name,
+                        'pubkey': pubkey,
+                        'error': result.error or 'Profile claim could not be verified',
+                    })
+
+            verified_pubkeys = {pubkey for _, pubkey, _ in verified}
+            unresolved = [
+                entry for entry in unresolved if entry['pubkey'] not in verified_pubkeys
+            ]
 
             banned_domain = db.session.get(BannedDomain, domain_id)
             if banned_domain is None:
                 raise ModerationError('Banned domain not found')
-            new_pubkeys = []
+            new_bans = []
+            new_sources = 0
             purge_ids = []
-            reason = f'Verified NIP-05 domain {domain}'
+            reason = f'Verified NIP-05 directory {domain}'
             if domain_reason:
                 reason += f': {domain_reason}'
 
-            for pubkey in sorted(verified_pubkeys):
-                try:
-                    with db.session.begin_nested():
-                        db.session.add(BannedPubkey(
-                            pubkey=pubkey,
-                            reason=reason,
-                            banned_by=self.actor_id,
-                            banned_at=utcnow(),
-                        ))
-                        db.session.flush()
-                except IntegrityError:
+            sourced_pubkeys = set(existing_sources)
+            for local_name, pubkey, source_name in verified:
+                if pubkey in sourced_pubkeys:
                     continue
-                new_pubkeys.append(pubkey)
-                purge = self._pending_purge('pubkey', pubkey, None)
-                db.session.flush()
-                purge_ids.append(purge.id)
+                ban = BannedPubkey.query.filter_by(pubkey=pubkey).first()
+                ban_created = ban is None
+                if ban_created:
+                    ban = BannedPubkey(
+                        pubkey=pubkey,
+                        reason=reason,
+                        banned_by=self.actor_id,
+                        banned_at=utcnow(),
+                    )
+                    db.session.add(ban)
+                    db.session.flush()
+                    new_bans.append(pubkey)
+                db.session.add(PubkeyBanSource(
+                    banned_pubkey_id=ban.id,
+                    source_type='domain',
+                    banned_domain_id=domain_id,
+                    local_name=local_name,
+                    reason=reason,
+                    banned_by=self.actor_id,
+                ))
+                new_sources += 1
+                sourced_pubkeys.add(pubkey)
+                if ban_created:
+                    purge = self._pending_purge('pubkey', pubkey, None)
+                    db.session.flush()
+                    purge_ids.append(purge.id)
 
-            if new_pubkeys:
+            if new_bans:
                 self._mark_projection_pending()
 
             banned_domain.last_scanned_at = utcnow()
             banned_domain.scan_status = 'idle'
             banned_domain.scan_started_at = None
-            banned_domain.last_scan_events = len(events)
-            banned_domain.last_scan_candidates = len(candidates)
-            banned_domain.last_scan_verified = len(verified_pubkeys)
-            banned_domain.last_scan_new_bans = len(new_pubkeys)
-            banned_domain.last_scan_cursor = (
-                (start + attempted_candidates) % len(unchecked_candidates)
-                if unchecked_candidates
-                else 0
-            )
+            banned_domain.last_scan_events = len(directory.names)
+            banned_domain.last_scan_candidates = len(directory.names)
+            verified_count = known_verified + len(verified)
+            banned_domain.last_scan_verified = verified_count
+            banned_domain.last_scan_new_bans = len(new_bans)
             banned_domain.last_scan_error = None
+            details = {
+                'invalid_entries': directory.invalid_entries,
+                'unresolved': len(unresolved),
+                'unresolved_entries': unresolved[:50],
+                'new_sources': new_sources,
+                'purge_completed': 0,
+                'purge_pending': len(purge_ids),
+            }
+            banned_domain.last_scan_details = json.dumps(details)
             self._add_audit(
                 'banned_domain_reconciled',
-                f'Reconciled NIP-05 domain {domain}: '
-                f'{len(events)} events, {len(candidates)} candidates, '
-                f'{len(verified_pubkeys)} verified, {len(new_pubkeys)} new bans',
+                f'Reconciled NIP-05 directory {domain}: {len(directory.names)} names, '
+                f'{verified_count} verified, {len(unresolved)} unresolved, '
+                f'{new_sources} new sources, {len(new_bans)} new bans',
             )
             self._commit()
 
             projection = (
                 self.reconcile_write_policy()
-                if new_pubkeys
+                if new_bans
                 else self.initialize_projection()
             )
+            purge_completed = 0
+            purge_pending = 0
+            for purge_id in purge_ids:
+                purge = self._attempt_purge(purge_id)
+                if purge.status == 'completed':
+                    purge_completed += 1
+                else:
+                    purge_pending += 1
+            banned_domain = db.session.get(BannedDomain, domain_id)
+            if banned_domain is not None:
+                details['purge_completed'] = purge_completed
+                details['purge_pending'] = purge_pending
+                banned_domain.last_scan_details = json.dumps(details)
+                self._commit()
             return DomainScanOutcome(
-                scanned_events=len(events),
-                candidates=len(candidates),
-                verified=len(verified_pubkeys),
-                new_bans=len(new_pubkeys),
-                queued_purges=len(purge_ids),
+                names=len(directory.names),
+                verified=verified_count,
+                unresolved=len(unresolved),
+                invalid_entries=directory.invalid_entries,
+                new_sources=new_sources,
+                new_bans=len(new_bans),
+                purge_completed=purge_completed,
+                purge_pending=purge_pending,
                 enforcement_status=projection.status,
                 enforcement_error=projection.last_error,
             )
 
-    def delete_domain(self, domain_id):
+    def _record_domain_error(self, domain_id, domain, error):
+        banned_domain = db.session.get(BannedDomain, domain_id)
+        if banned_domain is None:
+            raise ModerationError('Banned domain not found')
+        banned_domain.scan_status = 'idle'
+        banned_domain.scan_started_at = None
+        banned_domain.last_scanned_at = utcnow()
+        banned_domain.last_scan_error = error
+        banned_domain.last_scan_details = json.dumps({'error': error})
+        self._add_audit(
+            'banned_domain_reconciled',
+            f'Failed to reconcile NIP-05 directory {domain}: {error}',
+        )
+        self._commit()
+        return DomainScanOutcome(0, 0, 0, 0, 0, 0, 0, 0, scan_error=error)
+
+    def unban_domain(self, domain_id):
+        with _domain_scan_lock, _purge_lock:
+            return self._unban_domain(domain_id)
+
+    def _unban_domain(self, domain_id):
         banned_domain = db.session.get(BannedDomain, domain_id)
         if banned_domain is None:
             raise ModerationError('Banned domain not found')
         domain = banned_domain.domain
+        sources = PubkeyBanSource.query.filter_by(
+            source_type='domain',
+            banned_domain_id=domain_id,
+        ).all()
+        affected_bans = {source.banned_pubkey_id: source.banned_pubkey for source in sources}
+        for source in sources:
+            db.session.delete(source)
+        db.session.flush()
+        unbanned_pubkeys = 0
+        remaining_bans = 0
+        for ban in affected_bans.values():
+            if PubkeyBanSource.query.filter_by(banned_pubkey_id=ban.id).count() == 0:
+                db.session.delete(ban)
+                unbanned_pubkeys += 1
+            else:
+                remaining_bans += 1
         db.session.delete(banned_domain)
+        if unbanned_pubkeys:
+            self._mark_projection_pending()
         self._add_audit(
-            'banned_domain_deleted',
-            f'Deleted NIP-05 domain rule {domain}; existing pubkey bans were preserved',
+            'domain_unbanned',
+            f'Unbanned NIP-05 domain {domain}: removed {len(sources)} sources, '
+            f'unbanned {unbanned_pubkeys} pubkeys, preserved {remaining_bans} overlapping bans',
         )
         self._commit()
-        return DecisionOutcome(committed=True)
+        projection = (
+            self.reconcile_write_policy()
+            if unbanned_pubkeys
+            else self.initialize_projection()
+        )
+        return DomainUnbanOutcome(
+            removed_sources=len(sources),
+            unbanned_pubkeys=unbanned_pubkeys,
+            remaining_bans=remaining_bans,
+            enforcement_status=projection.status,
+            enforcement_error=projection.last_error,
+        )
 
     def _ban_pubkey(self, pubkey, reason, report=None):
         """Commit a Ban decision, then attempt enforcement and purge effects."""
@@ -290,11 +397,27 @@ class ModerationDecisions:
         ban = BannedPubkey.query.filter_by(pubkey=pubkey).first()
         ban_created = ban is None
         if ban_created:
-            db.session.add(BannedPubkey(
+            ban = BannedPubkey(
                 pubkey=pubkey,
                 reason=reason,
                 banned_by=self.actor_id,
                 banned_at=now,
+            )
+            db.session.add(ban)
+            db.session.flush()
+
+        direct_source = PubkeyBanSource.query.filter_by(
+            banned_pubkey_id=ban.id,
+            source_type='direct',
+        ).first()
+        if direct_source is None:
+            db.session.add(PubkeyBanSource(
+                banned_pubkey_id=ban.id,
+                source_type='direct',
+                reason=reason,
+                banned_by=self.actor_id,
+                banned_at=now,
+                last_seen_at=now,
             ))
 
         if report is not None:
@@ -328,22 +451,96 @@ class ModerationDecisions:
         )
 
     def unban(self, ban_id):
+        with _purge_lock:
+            return self._unban(ban_id)
+
+    def _unban(self, ban_id):
         ban = db.session.get(BannedPubkey, ban_id)
         if ban is None:
             raise ModerationError('Ban not found')
 
         pubkey = ban.pubkey
-        db.session.delete(ban)
-        self._mark_projection_pending()
-        self._add_audit('user_unbanned', f'Unbanned pubkey {pubkey}')
+        direct_source = PubkeyBanSource.query.filter_by(
+            banned_pubkey_id=ban.id,
+            source_type='direct',
+        ).first()
+        if direct_source is None and ban.sources:
+            raise ModerationError('Pubkey is banned only by a domain rule')
+        if direct_source is not None:
+            db.session.delete(direct_source)
+            db.session.flush()
+        active_set_changed = PubkeyBanSource.query.filter_by(
+            banned_pubkey_id=ban.id,
+        ).count() == 0
+        if active_set_changed:
+            db.session.delete(ban)
+            self._mark_projection_pending()
+        self._add_audit(
+            'user_unbanned',
+            f'Removed direct ban for pubkey {pubkey}'
+            + ('' if active_set_changed else '; domain ban remains active'),
+        )
         self._commit()
 
-        enforcement = self.reconcile_write_policy()
+        enforcement = (
+            self.reconcile_write_policy()
+            if active_set_changed
+            else self.initialize_projection()
+        )
         return DecisionOutcome(
             committed=True,
             enforcement_status=enforcement.status,
             enforcement_error=enforcement.last_error,
+            active_set_changed=active_set_changed,
         )
+
+    @classmethod
+    def backfill_ban_sources(cls):
+        created = 0
+        domains = BannedDomain.query.all()
+        valid_user_ids = {user_id for user_id, in db.session.query(User.id)}
+        sourced_ban_ids = {
+            ban_id for ban_id, in db.session.query(PubkeyBanSource.banned_pubkey_id)
+        }
+        for ban in BannedPubkey.query:
+            if ban.id not in sourced_ban_ids:
+                matched_domain = next((
+                    domain
+                    for domain in domains
+                    if ban.reason
+                    and (
+                        ban.reason == f'Verified NIP-05 domain {domain.domain}'
+                        or ban.reason.startswith(f'Verified NIP-05 domain {domain.domain}:')
+                        or ban.reason == f'Verified NIP-05 directory {domain.domain}'
+                        or ban.reason.startswith(f'Verified NIP-05 directory {domain.domain}:')
+                    )
+                ), None)
+                direct_result = db.session.execute(sqlite_insert(PubkeyBanSource).values(
+                    banned_pubkey_id=ban.id,
+                    source_type='direct',
+                    banned_domain_id=None,
+                    reason=ban.reason,
+                    banned_by=ban.banned_by if ban.banned_by in valid_user_ids else None,
+                    banned_at=ban.banned_at or utcnow(),
+                    last_seen_at=ban.banned_at or utcnow(),
+                ).on_conflict_do_nothing())
+                created += direct_result.rowcount
+                if matched_domain:
+                    domain_result = db.session.execute(sqlite_insert(PubkeyBanSource).values(
+                        banned_pubkey_id=ban.id,
+                        source_type='domain',
+                        banned_domain_id=matched_domain.id,
+                        reason=ban.reason,
+                        banned_by=(
+                            ban.banned_by if ban.banned_by in valid_user_ids else None
+                        ),
+                        banned_at=ban.banned_at or utcnow(),
+                        last_seen_at=ban.banned_at or utcnow(),
+                    ).on_conflict_do_nothing())
+                    created += domain_result.rowcount
+        if created:
+            cls._commit()
+        return created
 
     def review_report(self, report_id):
         report = db.session.get(ModerationReport, report_id)
@@ -528,10 +725,15 @@ class ModerationDecisions:
 
     @staticmethod
     def _publish_blocklist():
-        """Replace the blocklist file atomically and notify the plugin."""
+        """Replace the blocklist file atomically for the polling plugin."""
         blocklist_path = Config.BANNED_PUBKEYS_FILE
         plugin_path = Config.BLOCKLIST_PLUGIN_PATH
         pubkeys = [ban.pubkey for ban in BannedPubkey.query.order_by(BannedPubkey.pubkey)]
+
+        if not os.path.exists(plugin_path):
+            raise FileNotFoundError(f'Write-policy plugin not found: {plugin_path}')
+        if not os.access(plugin_path, os.X_OK):
+            raise PermissionError(f'Write-policy plugin is not executable: {plugin_path}')
 
         directory = os.path.dirname(blocklist_path) or '.'
         fd, temporary_path = tempfile.mkstemp(prefix='.blocklist-', dir=directory, text=True)
@@ -547,12 +749,6 @@ class ModerationDecisions:
                 os.unlink(temporary_path)
             raise
 
-        if not os.path.exists(plugin_path):
-            raise FileNotFoundError(f'Write-policy plugin not found: {plugin_path}')
-        if not os.access(plugin_path, os.X_OK):
-            os.chmod(plugin_path, 0o755)
-        os.utime(plugin_path, None)
-
     def retry_purge(self, purge_id):
         purge = db.session.get(EventPurge, purge_id)
         if purge is None:
@@ -566,6 +762,11 @@ class ModerationDecisions:
 
     @staticmethod
     def _attempt_purge(purge_id):
+        with _purge_lock:
+            return ModerationDecisions._attempt_purge_locked(purge_id)
+
+    @staticmethod
+    def _attempt_purge_locked(purge_id):
         """Run one bounded purge attempt and persist its observable outcome."""
         purge = db.session.get(EventPurge, purge_id)
         if purge is None:
@@ -576,6 +777,12 @@ class ModerationDecisions:
         purge.attempts += 1
         purge.attempted_at = utcnow()
         if purge.target_type == 'pubkey':
+            if BannedPubkey.query.filter_by(pubkey=purge.target).first() is None:
+                purge.status = 'completed'
+                purge.last_error = 'Cancelled: pubkey is no longer banned'
+                purge.completed_at = utcnow()
+                ModerationDecisions._commit()
+                return purge
             event_filter = {'authors': [purge.target]}
         elif purge.target_type == 'event':
             event_filter = {'ids': [purge.target]}

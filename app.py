@@ -11,6 +11,7 @@ from wtforms.validators import DataRequired, Length, EqualTo, Optional, Regexp, 
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from sqlalchemy import or_
+from sqlalchemy.exc import OperationalError
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash
 from io import StringIO, BytesIO
@@ -1467,7 +1468,9 @@ def moderation_delete_event(report_id):
 def moderation_retry_purge(purge_id):
     try:
         purge = moderation_decisions().retry_purge(purge_id)
-        if purge.status == 'completed':
+        if purge.was_cancelled:
+            flash('Event purge cancelled because the pubkey is no longer banned.', 'info')
+        elif purge.status == 'completed':
             flash('Event purge completed.', 'success')
         else:
             flash(f'Event purge remains pending: {purge.last_error}', 'warning')
@@ -1606,7 +1609,12 @@ def delete_user(user_id):
 def unban_pubkey(ban_id):
     try:
         outcome = moderation_decisions().unban(ban_id)
-        flash_moderation_outcome(outcome, 'Pubkey unbanned.')
+        message = (
+            'Pubkey unbanned.'
+            if outcome.active_set_changed
+            else 'Direct ban removed; the pubkey remains banned by a domain rule.'
+        )
+        flash_moderation_outcome(outcome, message)
     except ModerationError as e:
         flash(str(e), 'danger')
     
@@ -1619,8 +1627,16 @@ def delete_banned_domain(domain_id):
     if not EmptyForm().validate_on_submit():
         abort(400)
     try:
-        moderation_decisions().delete_domain(domain_id)
-        flash('Domain rule deleted. Existing pubkey bans were preserved.', 'success')
+        outcome = moderation_decisions().unban_domain(domain_id)
+        flash(
+            f'Domain unbanned: removed {outcome.removed_sources} sources and '
+            f'unbanned {outcome.unbanned_pubkeys} pubkeys. '
+            f'{outcome.remaining_bans} remain banned by other sources. '
+            'Previously purged notes cannot be restored.',
+            'success',
+        )
+        for warning in outcome.warnings:
+            flash(warning, 'warning')
     except ModerationError as e:
         flash(str(e), 'danger')
     return redirect(url_for('admin'))
@@ -1693,7 +1709,13 @@ def internal_error(error):
 
 def init_db():
     with app.app_context():
-        from models import ModerationReport, BannedPubkey, BannedDomain, MetadataRelay
+        from models import (
+            ModerationReport,
+            BannedPubkey,
+            BannedDomain,
+            MetadataRelay,
+            PubkeyBanSource,
+        )
         db.create_all()
         
         from sqlalchemy import text
@@ -1706,6 +1728,20 @@ def init_db():
                     "ALTER TABLE users ADD COLUMN must_change_password BOOLEAN DEFAULT 1"
                 ))
                 conn.commit()
+
+            domain_columns = {
+                row[1]
+                for row in conn.execute(text("PRAGMA table_info('banned_domains')"))
+            }
+            if 'last_scan_details' not in domain_columns:
+                try:
+                    conn.execute(text(
+                        'ALTER TABLE banned_domains ADD COLUMN last_scan_details TEXT'
+                    ))
+                    conn.commit()
+                except OperationalError as exc:
+                    if 'duplicate column name' not in str(exc).lower():
+                        raise
             
             try:
                 conn.execute(text("SELECT 1 FROM metadata_relays LIMIT 1"))
@@ -1737,6 +1773,8 @@ def init_db():
             banned_domain.scan_started_at = None
             banned_domain.last_scan_error = 'Reconciliation resumed after application restart'
         db.session.commit()
+
+        ModerationDecisions.backfill_ban_sources()
         for banned_domain in interrupted_domains:
             if not queue_domain_reconciliation(banned_domain.id, banned_domain.banned_by, None):
                 banned_domain = db.session.get(BannedDomain, banned_domain.id)

@@ -22,6 +22,12 @@ The application of the Write-policy projection to the relay. Enforcement may be 
 **Write-policy projection**:
 The complete set of recorded Bans prepared for relay enforcement. Its publication state belongs to the set as a whole, not to any individual Ban.
 
+**Ban source**:
+The independent direct or NIP-05 domain decision that keeps a pubkey Ban active. A pubkey remains banned until its final source is removed.
+
+**NIP-05 domain ban**:
+An exact-host moderation rule that enumerates a domain's names directory and adds a Ban source only for pubkeys whose signed kind-0 profile claims the matching identifier. Reconciliation adds sources; domain unban removes that domain's sources but cannot restore purged events.
+
 **Event purge**:
 A durable, retryable moderation task to remove existing relay events matching a target. An Event purge is distinct from a Ban and remains visible until its outcome is known.
 _Avoid_: Ban

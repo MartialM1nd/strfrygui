@@ -247,17 +247,20 @@
                 <tbody>
                     {% for ban in banned_pubkeys %}
                     <tr>
-                        <td><code class="text-truncate d-inline-block" style="max-width: 150px;" title="{{ ban.pubkey }}">{{ ban.pubkey }}</code></td>
-                        <td><small>{{ ban.reason or '-' }}</small></td>
-                        <td><small>User ID {{ ban.banned_by }}</small></td>
-                        <td><small>{{ ban.banned_at|datetime if ban.banned_at else '-' }}</small></td>
                         <td>
-                            <form method="POST" action="{{ url_for('unban_pubkey', ban_id=ban.id) }}" style="display:inline;">
+                            <code class="text-truncate d-inline-block" style="max-width: 150px;" title="{{ ban.pubkey }}">{{ ban.pubkey }}</code><br>
+                            {% for source in ban.sources %}<span class="badge bg-{% if source.source_type == 'direct' %}secondary{% else %}danger{% endif %}">{% if source.source_type == 'domain' %}{{ source.banned_domain.domain }}{% else %}direct{% endif %}</span>{% endfor %}
+                        </td>
+                        <td><small>{{ ban.active_reason or '-' }}</small></td>
+                        <td><small>User ID {{ ban.active_banned_by }}</small></td>
+                        <td><small>{{ ban.active_banned_at|datetime if ban.active_banned_at else '-' }}</small></td>
+                        <td>
+                            {% if ban.has_direct_source %}<form method="POST" action="{{ url_for('unban_pubkey', ban_id=ban.id) }}" style="display:inline;">
                                 <input type="hidden" name="csrf_token" value="{{ create_user_form.csrf_token.current_token }}">
                                 <button type="submit" class="btn btn-sm btn-outline-success" onclick="return confirm('Unban this user?')" title="Unban">
                                     <i class="bi bi-arrow-counterclockwise"></i>
                                 </button>
-                            </form>
+                            </form>{% endif %}
                         </td>
                     </tr>
                     {% endfor %}
@@ -290,14 +293,14 @@
                 <tbody>
                     {% for domain_ban in banned_domains %}
                     <tr>
-                        <td><code>{{ domain_ban.domain }}</code><br><small class="text-muted">Includes subdomains</small></td>
+                        <td><code>{{ domain_ban.domain }}</code><br><small class="text-muted">Exact host</small></td>
                         <td><small>{{ domain_ban.reason or '-' }}</small></td>
                         <td><small>User ID {{ domain_ban.banned_by }}</small></td>
                         <td><small>{{ domain_ban.banned_at|datetime if domain_ban.banned_at else '-' }}</small></td>
                         <td>
                             <form method="POST" action="{{ url_for('delete_banned_domain', domain_id=domain_ban.id) }}" style="display:inline;">
                                 <input type="hidden" name="csrf_token" value="{{ create_user_form.csrf_token.current_token }}">
-                                <button type="submit" class="btn btn-sm btn-outline-success" onclick="return confirm('Delete this domain rule? Existing pubkey bans will remain active.')" title="Delete domain rule">
+                                <button type="submit" class="btn btn-sm btn-outline-success" onclick="return confirm('Unban this domain? Domain-only pubkeys will be allowed to write again. Purged notes cannot be restored.')" title="Unban domain">
                                     <i class="bi bi-arrow-counterclockwise"></i>
                                 </button>
                             </form>

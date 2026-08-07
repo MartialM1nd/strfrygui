@@ -25,7 +25,7 @@
     </div>
     <div class="card-body">
         <p class="small text-muted">
-            The domain and all subdomains are scanned against local kind-0 profiles. Only identities whose NIP-05 endpoint maps back to the same pubkey are banned. Reconcile manually to discover new identities.
+            The exact domain's <code>/.well-known/nostr.json</code> directory is enumerated. Listed pubkeys are banned only after a matching signed kind-0 profile is found locally or through configured and advertised relays.
         </p>
         <form method="POST" action="{{ url_for('moderation_ban_domain') }}" class="row g-3">
             {{ domain_form.hidden_tag() }}
@@ -38,7 +38,7 @@
                 {{ domain_form.reason(class="form-control", rows="1", placeholder="Reason for domain ban...") }}
             </div>
             <div class="col-md-2 d-flex align-items-end">
-                <button type="submit" class="btn btn-danger w-100" onclick="return confirm('Ban this NIP-05 domain and scan local profiles?')">
+                <button type="submit" class="btn btn-danger w-100" onclick="return confirm('Ban this NIP-05 domain and enumerate its directory?')">
                     Ban Domain
                 </button>
             </div>
@@ -53,15 +53,30 @@
                 <tbody>
                     {% for domain_ban in banned_domains %}
                     <tr>
-                        <td><code>{{ domain_ban.domain }}</code><br><small class="text-muted">Includes subdomains</small></td>
+                        <td><code>{{ domain_ban.domain }}</code><br><small class="text-muted">Exact host</small></td>
                         <td><small>{{ domain_ban.reason or '-' }}</small></td>
                         <td>
                             <small>{{ domain_ban.last_scanned_at|datetime if domain_ban.last_scanned_at else 'Never' }}</small>
-                            {% if domain_ban.scan_status == 'queued' %}<br><span class="badge bg-secondary">Queued</span>{% elif domain_ban.scan_status == 'running' %}<br><span class="badge bg-info">Running</span>{% endif %}
+                            {% if domain_ban.scan_status == 'queued' %}<br><span class="badge bg-secondary domain-scan-active">Queued</span>{% elif domain_ban.scan_status == 'running' %}<br><span class="badge bg-info domain-scan-active">Running</span>{% endif %}
                             {% if domain_ban.last_scan_error %}<br><small class="text-danger">{{ domain_ban.last_scan_error }}</small>{% endif %}
                         </td>
                         <td>
-                            <small>{{ domain_ban.last_scan_events }} profiles, {{ domain_ban.last_scan_verified }} verified, {{ domain_ban.last_scan_new_bans }} new</small>
+                            <small>
+                                {{ domain_ban.last_scan_events }} names,
+                                {{ domain_ban.last_scan_verified }} verified,
+                                {{ domain_ban.scan_details.get('unresolved', 0) }} unresolved,
+                                {{ domain_ban.last_scan_new_bans }} new bans
+                            </small>
+                            {% if domain_ban.scan_details.get('invalid_entries', 0) %}<br><small class="text-warning">{{ domain_ban.scan_details.get('invalid_entries') }} invalid directory entries</small>{% endif %}
+                            {% if domain_ban.scan_details.get('purge_completed', 0) or domain_ban.scan_details.get('purge_pending', 0) %}<br><small>Last scan: {{ domain_ban.scan_details.get('purge_completed', 0) }} purges completed, {{ domain_ban.scan_details.get('purge_pending', 0) }} pending</small>{% endif %}
+                            {% if domain_ban.scan_details.get('unresolved_entries') %}
+                            <details class="mt-1">
+                                <summary class="small text-warning">Unresolved identities</summary>
+                                {% for entry in domain_ban.scan_details.get('unresolved_entries', []) %}
+                                <div class="small"><code>{{ entry.name }}</code>: {{ entry.error }}</div>
+                                {% endfor %}
+                            </details>
+                            {% endif %}
                         </td>
                         <td class="text-end">
                             <form method="POST" action="{{ url_for('moderation_reconcile_domain', domain_id=domain_ban.id) }}">
@@ -74,7 +89,7 @@
                 </tbody>
             </table>
         </div>
-        <p class="small text-muted mt-3 mb-0">Admins can delete domain rules from the Admin page. Already discovered pubkeys remain banned.</p>
+        <p class="small text-muted mt-3 mb-0">Admins can unban domains from the Admin page. Pubkeys with independent direct or domain sources remain banned; purged notes cannot be restored.</p>
         {% endif %}
     </div>
 </div>
@@ -93,10 +108,10 @@
                     <td>
                         <span class="badge bg-secondary">{{ purge.target_type }}</span>
                         <code>{{ purge.target }}</code>
-                        {% if purge.status == 'completed' %}<span class="badge bg-success">Completed</span>{% else %}<span class="badge bg-warning text-dark">Pending</span>{% endif %}
+                        {% if purge.was_cancelled %}<span class="badge bg-secondary">Cancelled</span>{% elif purge.status == 'completed' %}<span class="badge bg-success">Completed</span>{% else %}<span class="badge bg-warning text-dark">Pending</span>{% endif %}
                     </td>
                     <td>{{ purge.attempts }}</td>
-                    <td><small class="{% if purge.last_error %}text-danger{% else %}text-muted{% endif %}">{% if purge.last_error %}{{ purge.last_error }}{% elif purge.status == 'pending' %}Not attempted{% else %}-{% endif %}</small></td>
+                    <td><small class="{% if purge.last_error and not purge.was_cancelled %}text-danger{% else %}text-muted{% endif %}">{% if purge.last_error %}{{ purge.last_error }}{% elif purge.status == 'pending' %}Not attempted{% else %}-{% endif %}</small></td>
                     <td class="text-end">
                         {% if purge.status == 'pending' %}<form method="POST" action="{{ url_for('moderation_retry_purge', purge_id=purge.id) }}">
                             <input type="hidden" name="csrf_token" value="{{ form.csrf_token.current_token }}">
@@ -345,6 +360,10 @@
 {% block scripts %}
 <script>
 const banModal = new bootstrap.Modal(document.getElementById('banModal'));
+
+if (document.querySelector('.domain-scan-active')) {
+    setTimeout(function() { location.reload(); }, 3000);
+}
 
 function showBanModal(reportId, pubkey) {
     document.getElementById('banReportId').value = reportId;

@@ -3,7 +3,16 @@ import os
 import stat
 
 from config import Config
-from models import AuditLog, BannedPubkey, EventPurge, ModerationReport, WritePolicyProjection, db
+from models import (
+    AuditLog,
+    BannedDomain,
+    BannedPubkey,
+    EventPurge,
+    ModerationReport,
+    PubkeyBanSource,
+    WritePolicyProjection,
+    db,
+)
 from utils.moderation import ModerationDecisions
 
 
@@ -221,6 +230,49 @@ def test_direct_ban_and_unban_change_active_set_and_projection(app):
     assert projection.desired_revision == projection.published_revision == 2
     with open(app.config["BANNED_PUBKEYS_FILE"]) as blocklist_file:
         assert json.load(blocklist_file) == []
+
+
+def test_projection_does_not_modify_non_writable_plugin(app):
+    plugin_path = app.config["BLOCKLIST_PLUGIN_PATH"]
+    os.chmod(plugin_path, 0o555)
+    plugin_mtime = os.stat(plugin_path).st_mtime_ns
+
+    outcome = ModerationDecisions(actor_id=7).ban_pubkey("direct-pubkey", "Spam")
+
+    assert outcome.enforcement_status == "published"
+    assert os.stat(plugin_path).st_mtime_ns == plugin_mtime
+
+
+def test_backfill_marks_legacy_bans_as_direct_sources(app):
+    ban = BannedPubkey(pubkey="legacy-pubkey", reason="Legacy", banned_by=7)
+    db.session.add(ban)
+    db.session.commit()
+
+    created = ModerationDecisions.backfill_ban_sources()
+    repeated = ModerationDecisions.backfill_ban_sources()
+
+    assert (created, repeated) == (1, 0)
+    source = PubkeyBanSource.query.one()
+    assert (source.banned_pubkey_id, source.source_type) == (ban.id, "direct")
+
+
+def test_backfill_recovers_legacy_domain_sources(app):
+    domain = BannedDomain(domain="example.com", reason="Spam", banned_by=7)
+    ban = BannedPubkey(
+        pubkey="legacy-domain-pubkey",
+        reason="Verified NIP-05 domain example.com: Spam",
+        banned_by=7,
+    )
+    db.session.add_all([domain, ban])
+    db.session.commit()
+
+    ModerationDecisions.backfill_ban_sources()
+
+    sources = PubkeyBanSource.query.order_by(PubkeyBanSource.source_type).all()
+    assert [(source.source_type, source.banned_domain_id) for source in sources] == [
+        ("direct", None),
+        ("domain", domain.id),
+    ]
 
 
 def test_delete_reported_event_resolves_report_when_purge_is_pending(app):

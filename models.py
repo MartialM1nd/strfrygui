@@ -1,8 +1,10 @@
+import json
 from datetime import UTC, datetime
 
 import bcrypt
 from flask_login import UserMixin
 from flask_sqlalchemy import SQLAlchemy
+from sqlalchemy import text
 
 db = SQLAlchemy()
 
@@ -100,6 +102,36 @@ class BannedPubkey(db.Model):
     banned_at = db.Column(db.DateTime, default=utcnow)
     
     banner = db.relationship('User', backref='banned_pubkeys')
+    sources = db.relationship(
+        'PubkeyBanSource',
+        back_populates='banned_pubkey',
+        cascade='all, delete-orphan',
+    )
+
+    @property
+    def has_direct_source(self):
+        return any(source.source_type == 'direct' for source in self.sources) or not self.sources
+
+    @property
+    def active_source(self):
+        if not self.sources:
+            return None
+        return next(
+            (source for source in self.sources if source.source_type == 'direct'),
+            self.sources[0],
+        )
+
+    @property
+    def active_reason(self):
+        return self.active_source.reason if self.active_source else self.reason
+
+    @property
+    def active_banned_by(self):
+        return self.active_source.banned_by if self.active_source else self.banned_by
+
+    @property
+    def active_banned_at(self):
+        return self.active_source.banned_at if self.active_source else self.banned_at
 
 
 class BannedDomain(db.Model):
@@ -119,8 +151,63 @@ class BannedDomain(db.Model):
     last_scan_new_bans = db.Column(db.Integer, nullable=False, default=0)
     last_scan_cursor = db.Column(db.Integer, nullable=False, default=0)
     last_scan_error = db.Column(db.Text)
+    last_scan_details = db.Column(db.Text)
 
     banner = db.relationship('User', backref='banned_domains')
+    pubkey_sources = db.relationship(
+        'PubkeyBanSource',
+        back_populates='banned_domain',
+    )
+
+    @property
+    def scan_details(self):
+        try:
+            return json.loads(self.last_scan_details or '{}')
+        except json.JSONDecodeError:
+            return {}
+
+
+class PubkeyBanSource(db.Model):
+    __tablename__ = 'pubkey_ban_sources'
+    __table_args__ = (
+        db.CheckConstraint(
+            "(source_type = 'direct' AND banned_domain_id IS NULL) OR "
+            "(source_type = 'domain' AND banned_domain_id IS NOT NULL)",
+            name='ck_pubkey_ban_source_shape',
+        ),
+        db.UniqueConstraint(
+            'banned_pubkey_id',
+            'banned_domain_id',
+            name='uq_pubkey_ban_source_domain',
+        ),
+        db.Index(
+            'uq_pubkey_ban_source_direct',
+            'banned_pubkey_id',
+            unique=True,
+            sqlite_where=text("source_type = 'direct'"),
+        ),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    banned_pubkey_id = db.Column(
+        db.Integer,
+        db.ForeignKey('banned_pubkeys.id', ondelete='CASCADE'),
+        nullable=False,
+    )
+    source_type = db.Column(db.String(20), nullable=False, index=True)
+    banned_domain_id = db.Column(
+        db.Integer,
+        db.ForeignKey('banned_domains.id', ondelete='CASCADE'),
+    )
+    local_name = db.Column(db.String(128))
+    reason = db.Column(db.Text)
+    banned_by = db.Column(db.Integer, db.ForeignKey('users.id', ondelete='SET NULL'))
+    banned_at = db.Column(db.DateTime, default=utcnow, nullable=False)
+    last_seen_at = db.Column(db.DateTime, default=utcnow, nullable=False)
+
+    banned_pubkey = db.relationship('BannedPubkey', back_populates='sources')
+    banned_domain = db.relationship('BannedDomain', back_populates='pubkey_sources')
+    banner = db.relationship('User')
 
 
 class WritePolicyProjection(db.Model):
@@ -161,6 +248,12 @@ class EventPurge(db.Model):
     created_at = db.Column(db.DateTime, default=utcnow)
     attempted_at = db.Column(db.DateTime)
     completed_at = db.Column(db.DateTime)
+
+    @property
+    def was_cancelled(self):
+        return self.status == 'completed' and bool(
+            self.last_error and self.last_error.startswith('Cancelled:')
+        )
 
 
 class MetadataRelay(db.Model):

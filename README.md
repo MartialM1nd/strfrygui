@@ -170,19 +170,23 @@ You can also configure the plugin path via the **Plugins** page in the admin UI 
 ### How It Works
 
 1. You ban a pubkey via the UI (Moderation or Events page)
-2. The pubkey is added to `blocklist.json` and the plugin file is touched
-3. strfry detects the file change and **auto-reloads** the plugin
+2. The pubkey is added to `blocklist.json`
+3. The running plugin detects the blocklist mtime change and reloads it
 4. Any future events from that pubkey are rejected with `blocked: pubkey is banned`
 
 Unbanning triggers the same sync — the pubkey is removed from `blocklist.json` and the plugin reloads automatically.
 
 ### NIP-05 Domain Bans
 
-Moderators can add a NIP-05 domain rule from the Moderation page. The rule includes all subdomains. StrfryGUI starts a background scan of a bounded set of local kind-0 profiles and verifies each identity against its HTTPS `/.well-known/nostr.json` mapping before adding the pubkey to the normal blocklist.
+Moderators can add an exact NIP-05 domain rule from the Moderation page. StrfryGUI enumerates the domain's HTTPS `/.well-known/nostr.json` names map, then requires each listed pubkey's latest signed kind-0 profile to claim the matching identifier. Profiles are searched locally, on configured metadata relays, and on valid `wss://` relay hints from the directory.
 
-Domain enforcement is discovery-based because ordinary Nostr events do not contain NIP-05 identifiers. Use **Reconcile** to scan again for newly observed profiles. Deleting a domain rule stops future reconciliation but intentionally keeps pubkeys already discovered through that rule banned.
+Directory enumeration is an extension used by many static NIP-05 providers, but it is not required by NIP-05. Dynamic endpoints that only answer `?name=` lookups cannot be domain-banned this way and are reported as reconciliation errors.
 
-The scan and HTTP limits can be configured with `DOMAIN_SCAN_EVENT_LIMIT`, `DOMAIN_SCAN_TIMEOUT`, `DOMAIN_SCAN_CANDIDATE_LIMIT`, `DOMAIN_SCAN_TOTAL_TIMEOUT`, `NIP05_HTTP_TIMEOUT`, `NIP05_MAX_RESPONSE_BYTES`, and `NIP05_MAX_ADDRESSES`.
+Reconciliation is additive: newly verified pubkeys are banned and purged, while names omitted by later directory responses stay banned until an admin explicitly unbans the domain. Domain unban removes only that domain's source; direct and overlapping domain bans remain active. Purged notes cannot be restored, and a purge already in progress may finish before an unban completes.
+
+During upgrade, pre-existing pubkey bans are conservatively retained as direct sources because older releases did not record complete overlap provenance. Unbanning a migrated domain may therefore leave those legacy pubkeys active for explicit individual review.
+
+The network limits can be configured with `DOMAIN_SCAN_TOTAL_TIMEOUT`, `NIP05_HTTP_TIMEOUT`, `NIP05_MAX_RESPONSE_BYTES`, `NIP05_MAX_ADDRESSES`, `NIP05_MAX_NAMES`, `NIP05_MAX_RELAYS`, `NIP05_PROFILE_TIMEOUT`, `NIP05_RELAY_TIMEOUT`, and `NIP05_MAX_WS_MESSAGE_BYTES`.
 
 ### Banned Pubkeys File
 
