@@ -187,12 +187,7 @@ class ModerationDecisions:
             }
             verified = []
             unresolved = []
-            known_verified = 0
             for local_name, pubkey in directory.names.items():
-                if pubkey in existing_sources:
-                    existing_sources[pubkey].last_seen_at = utcnow()
-                    known_verified += 1
-                    continue
                 if time.monotonic() >= deadline:
                     unresolved.append({'name': local_name, 'pubkey': pubkey, 'error': 'Scan deadline reached'})
                     continue
@@ -221,11 +216,6 @@ class ModerationDecisions:
                         'error': result.error or 'Profile claim could not be verified',
                     })
 
-            verified_pubkeys = {pubkey for _, pubkey, _ in verified}
-            unresolved = [
-                entry for entry in unresolved if entry['pubkey'] not in verified_pubkeys
-            ]
-
             banned_domain = db.session.get(BannedDomain, domain_id)
             if banned_domain is None:
                 raise ModerationError('Banned domain not found')
@@ -239,6 +229,10 @@ class ModerationDecisions:
             sourced_pubkeys = set(existing_sources)
             for local_name, pubkey, source_name in verified:
                 if pubkey in sourced_pubkeys:
+                    source = existing_sources.get(pubkey)
+                    if source is not None:
+                        source.local_name = local_name
+                        source.last_seen_at = utcnow()
                     continue
                 ban = BannedPubkey.query.filter_by(pubkey=pubkey).first()
                 ban_created = ban is None
@@ -275,14 +269,14 @@ class ModerationDecisions:
             banned_domain.scan_started_at = None
             banned_domain.last_scan_events = len(directory.names)
             banned_domain.last_scan_candidates = len(directory.names)
-            verified_count = known_verified + len(verified)
+            verified_count = len(verified)
             banned_domain.last_scan_verified = verified_count
             banned_domain.last_scan_new_bans = len(new_bans)
             banned_domain.last_scan_error = None
             details = {
                 'invalid_entries': directory.invalid_entries,
                 'unresolved': len(unresolved),
-                'unresolved_entries': unresolved[:50],
+                'unresolved_entries': unresolved,
                 'new_sources': new_sources,
                 'purge_completed': 0,
                 'purge_pending': len(purge_ids),

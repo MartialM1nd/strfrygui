@@ -1,7 +1,6 @@
 import subprocess
 import json
 import os
-import re
 import time
 from config import Config
 
@@ -33,11 +32,26 @@ def npub_to_hex(npub):
         if not data:
             raise ValueError("Empty npub data")
         converted = bech32.convertbits(data, 5, 8, False)
-        if converted is None:
+        if converted is None or len(converted) != 32:
             raise ValueError("Failed to convert bits")
         return ''.join(f'{b:02x}' for b in converted)
     except Exception as e:
         raise ValueError(f"Invalid npub: {e}")
+
+
+def hex_to_npub(pubkey):
+    try:
+        import bech32
+
+        if not isinstance(pubkey, str) or len(pubkey) != 64:
+            raise ValueError("Pubkey must be 64 hexadecimal characters")
+        raw_pubkey = bytes.fromhex(pubkey)
+        data = bech32.convertbits(raw_pubkey, 8, 5, True)
+        if data is None:
+            raise ValueError("Failed to convert bits")
+        return bech32.bech32_encode('npub', data)
+    except (TypeError, ValueError) as e:
+        raise ValueError(f"Invalid hex pubkey: {e}") from e
 
 
 def validate_filter_json(filter_str):

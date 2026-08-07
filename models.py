@@ -186,6 +186,11 @@ class PubkeyBanSource(db.Model):
             unique=True,
             sqlite_where=text("source_type = 'direct'"),
         ),
+        db.Index(
+            'ix_pubkey_ban_source_domain_id',
+            'banned_domain_id',
+            'id',
+        ),
     )
 
     id = db.Column(db.Integer, primary_key=True)

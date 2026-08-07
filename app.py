@@ -1,3 +1,4 @@
+import csv
 import os
 import queue
 import threading
@@ -10,7 +11,7 @@ from wtforms import StringField, PasswordField, SelectField, TextAreaField, Inte
 from wtforms.validators import DataRequired, Length, EqualTo, Optional, Regexp, ValidationError
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.exc import OperationalError
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash
@@ -20,7 +21,7 @@ import tempfile
 from config import Config, Security
 from models import (
     db, User, AuditLog, ModerationReport, BannedPubkey, BannedDomain, MetadataRelay,
-    EventPurge, utcnow,
+    EventPurge, PubkeyBanSource, utcnow,
 )
 from utils.strfry import (
     scan_events, delete_events, export_events, import_events,
@@ -32,6 +33,7 @@ from utils.metrics import get_summary, MetricsError
 from utils.auth import admin_required, moderator_required, viewer_or_higher, permission_required
 from utils.moderation import ModerationDecisions, ModerationError
 from utils.nip05 import normalize_domain
+from utils.domain_view import domain_identity_page, unresolved_identity_page
 
 _compaction = {
     'running': False,
@@ -1290,6 +1292,7 @@ def admin():
     
     banned_pubkeys = BannedPubkey.query.order_by(BannedPubkey.banned_at.desc()).all()
     banned_domains = BannedDomain.query.order_by(BannedDomain.banned_at.desc()).all()
+    _attach_domain_source_counts(banned_domains)
     
     edit_forms = {}
     for user in users:
@@ -1396,6 +1399,7 @@ def moderation():
     purges = pending_purges + completed_purges
     projection = ModerationDecisions.initialize_projection()
     banned_domains = BannedDomain.query.order_by(BannedDomain.banned_at.desc()).all()
+    _attach_domain_source_counts(banned_domains)
     
     return render_template('moderation.html', reports=reports, 
                            report_type_filter=report_type_filter,
@@ -1558,6 +1562,115 @@ def moderation_reconcile_domain(domain_id):
             'warning',
         )
     return redirect(url_for('moderation'))
+
+
+@app.route('/moderation/domain/<int:domain_id>')
+@moderator_required
+def moderation_domain_details(domain_id):
+    banned_domain = db.session.get(BannedDomain, domain_id)
+    if banned_domain is None:
+        abort(404)
+    search = request.args.get('q', '').strip()
+    page = max(1, request.args.get('page', 1, type=int) or 1)
+    unresolved_page_number = max(
+        1,
+        request.args.get('unresolved_page', 1, type=int) or 1,
+    )
+    per_page = min(100, max(1, request.args.get('per_page', 50, type=int) or 50))
+    identities = domain_identity_page(
+        domain_id,
+        search,
+        offset=(page - 1) * per_page,
+        limit=per_page,
+    )
+    unresolved = unresolved_identity_page(
+        banned_domain,
+        search,
+        offset=(unresolved_page_number - 1) * per_page,
+        limit=per_page,
+    )
+    return render_template(
+        'moderation_domain_details.html',
+        domain_ban=banned_domain,
+        identities=identities,
+        unresolved=unresolved,
+        search=search,
+        page=page,
+        unresolved_page=unresolved_page_number,
+        per_page=per_page,
+    )
+
+
+@app.route('/moderation/domain/<int:domain_id>/export.csv')
+@moderator_required
+def moderation_domain_export(domain_id):
+    banned_domain = db.session.get(BannedDomain, domain_id)
+    if banned_domain is None:
+        abort(404)
+    search = request.args.get('q', '').strip()
+    identities = domain_identity_page(domain_id, search, limit=None)
+    output = StringIO(newline='')
+    writer = csv.writer(output)
+    writer.writerow([
+        'nip05',
+        'npub',
+        'hex_pubkey',
+        'discovered_at',
+        'last_seen_at',
+        'other_sources',
+        'purge_status',
+        'purge_attempts',
+        'purge_error',
+    ])
+    for row in identities.rows:
+        source = row.source
+        purge = row.purge
+        if purge is None:
+            purge_status = 'not recorded'
+        elif purge.was_cancelled:
+            purge_status = 'cancelled'
+        else:
+            purge_status = purge.status
+        writer.writerow([
+            _csv_safe(
+                f'{source.local_name}@{banned_domain.domain}'
+                if source.local_name
+                else ''
+            ),
+            row.npub,
+            source.banned_pubkey.pubkey,
+            source.banned_at.isoformat() if source.banned_at else '',
+            source.last_seen_at.isoformat() if source.last_seen_at else '',
+            _csv_safe(', '.join(row.other_sources)),
+            purge_status,
+            purge.attempts if purge else 0,
+            _csv_safe(purge.last_error if purge and purge.last_error else ''),
+        ])
+    filename = f'banned-{banned_domain.domain}.csv'
+    return app.response_class(
+        output.getvalue(),
+        mimetype='text/csv',
+        headers={'Content-Disposition': f'attachment; filename="{filename}"'},
+    )
+
+
+def _csv_safe(value):
+    value = str(value)
+    normalized = value.lstrip(' \t\r\n')
+    return "'" + value if normalized.startswith(('=', '+', '-', '@')) else value
+
+
+def _attach_domain_source_counts(domains):
+    domain_ids = [domain.id for domain in domains]
+    if not domain_ids:
+        return
+    counts = dict(
+        db.session.query(PubkeyBanSource.banned_domain_id, func.count(PubkeyBanSource.id))
+        .filter(PubkeyBanSource.banned_domain_id.in_(domain_ids))
+        .group_by(PubkeyBanSource.banned_domain_id)
+    )
+    for domain in domains:
+        domain.source_count = counts.get(domain.id, 0)
 
 
 def is_pubkey_banned(pubkey):
@@ -1742,6 +1855,11 @@ def init_db():
                 except OperationalError as exc:
                     if 'duplicate column name' not in str(exc).lower():
                         raise
+            conn.execute(text(
+                'CREATE INDEX IF NOT EXISTS ix_pubkey_ban_source_domain_id '
+                'ON pubkey_ban_sources (banned_domain_id, id)'
+            ))
+            conn.commit()
             
             try:
                 conn.execute(text("SELECT 1 FROM metadata_relays LIMIT 1"))

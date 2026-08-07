@@ -53,7 +53,7 @@
                 <tbody>
                     {% for domain_ban in banned_domains %}
                     <tr>
-                        <td><code>{{ domain_ban.domain }}</code><br><small class="text-muted">Exact host</small></td>
+                        <td><a href="{{ url_for('moderation_domain_details', domain_id=domain_ban.id) }}"><code>{{ domain_ban.domain }}</code></a><br><small class="text-muted">Exact host · {{ domain_ban.source_count }} banned pubkeys</small></td>
                         <td><small>{{ domain_ban.reason or '-' }}</small></td>
                         <td>
                             <small>{{ domain_ban.last_scanned_at|datetime if domain_ban.last_scanned_at else 'Never' }}</small>
@@ -69,14 +69,7 @@
                             </small>
                             {% if domain_ban.scan_details.get('invalid_entries', 0) %}<br><small class="text-warning">{{ domain_ban.scan_details.get('invalid_entries') }} invalid directory entries</small>{% endif %}
                             {% if domain_ban.scan_details.get('purge_completed', 0) or domain_ban.scan_details.get('purge_pending', 0) %}<br><small>Last scan: {{ domain_ban.scan_details.get('purge_completed', 0) }} purges completed, {{ domain_ban.scan_details.get('purge_pending', 0) }} pending</small>{% endif %}
-                            {% if domain_ban.scan_details.get('unresolved_entries') %}
-                            <details class="mt-1">
-                                <summary class="small text-warning">Unresolved identities</summary>
-                                {% for entry in domain_ban.scan_details.get('unresolved_entries', []) %}
-                                <div class="small"><code>{{ entry.name }}</code>: {{ entry.error }}</div>
-                                {% endfor %}
-                            </details>
-                            {% endif %}
+                            {% if domain_ban.scan_details.get('unresolved', 0) %}<br><a class="small" href="{{ url_for('moderation_domain_details', domain_id=domain_ban.id) }}">View unresolved identities</a>{% endif %}
                         </td>
                         <td class="text-end">
                             <form method="POST" action="{{ url_for('moderation_reconcile_domain', domain_id=domain_ban.id) }}">

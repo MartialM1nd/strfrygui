@@ -293,7 +293,7 @@
                 <tbody>
                     {% for domain_ban in banned_domains %}
                     <tr>
-                        <td><code>{{ domain_ban.domain }}</code><br><small class="text-muted">Exact host</small></td>
+                        <td><a href="{{ url_for('moderation_domain_details', domain_id=domain_ban.id) }}"><code>{{ domain_ban.domain }}</code></a><br><small class="text-muted">Exact host · {{ domain_ban.source_count }} banned pubkeys</small></td>
                         <td><small>{{ domain_ban.reason or '-' }}</small></td>
                         <td><small>User ID {{ domain_ban.banned_by }}</small></td>
                         <td><small>{{ domain_ban.banned_at|datetime if domain_ban.banned_at else '-' }}</small></td>

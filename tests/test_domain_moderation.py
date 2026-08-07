@@ -105,6 +105,37 @@ def test_domain_reconciliation_is_additive_when_name_disappears(app):
     assert PubkeyBanSource.query.filter_by(banned_domain_id=domain.id).count() == 1
 
 
+def test_reconciliation_refreshes_existing_source_name(app):
+    snapshots = [directory({"alice": PUBKEY_A}), directory({"alice-renamed": PUBKEY_A})]
+    decisions = ModerationDecisions(
+        actor_id=7,
+        directory_fetcher=lambda domain, deadline: snapshots.pop(0),
+        profile_lookup=verified_profile,
+    )
+    domain, _ = decisions.ban_domain("example.com", "Spam")
+
+    decisions.reconcile_domain(domain.id)
+
+    source = PubkeyBanSource.query.filter_by(banned_domain_id=domain.id).one()
+    assert source.local_name == "alice-renamed"
+
+
+def test_reconciliation_handles_multiple_verified_aliases_for_new_pubkey(app):
+    decisions = ModerationDecisions(
+        actor_id=7,
+        directory_fetcher=lambda domain, deadline: directory({
+            "alice": PUBKEY_A,
+            "alice-alias": PUBKEY_A,
+        }),
+        profile_lookup=verified_profile,
+    )
+
+    domain, outcome = decisions.ban_domain("example.com", "Spam")
+
+    assert outcome.new_bans == 1
+    assert PubkeyBanSource.query.filter_by(banned_domain_id=domain.id).count() == 1
+
+
 def test_domain_unban_removes_only_domain_sourced_active_bans(app):
     decisions = ModerationDecisions(
         actor_id=7,
