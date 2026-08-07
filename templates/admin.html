@@ -270,6 +270,49 @@
     </div>
 </div>
 
+<div class="card mt-4">
+    <div class="card-header bg-danger text-white">
+        <h5 class="mb-0"><i class="bi bi-globe2"></i> Banned NIP-05 Domains</h5>
+    </div>
+    <div class="card-body">
+        {% if banned_domains %}
+        <div class="table-responsive">
+            <table class="table table-sm">
+                <thead>
+                    <tr>
+                        <th>Domain</th>
+                        <th>Reason</th>
+                        <th>Banned By</th>
+                        <th>Date</th>
+                        <th style="width: 80px;">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for domain_ban in banned_domains %}
+                    <tr>
+                        <td><code>{{ domain_ban.domain }}</code><br><small class="text-muted">Includes subdomains</small></td>
+                        <td><small>{{ domain_ban.reason or '-' }}</small></td>
+                        <td><small>User ID {{ domain_ban.banned_by }}</small></td>
+                        <td><small>{{ domain_ban.banned_at|datetime if domain_ban.banned_at else '-' }}</small></td>
+                        <td>
+                            <form method="POST" action="{{ url_for('delete_banned_domain', domain_id=domain_ban.id) }}" style="display:inline;">
+                                <input type="hidden" name="csrf_token" value="{{ create_user_form.csrf_token.current_token }}">
+                                <button type="submit" class="btn btn-sm btn-outline-success" onclick="return confirm('Delete this domain rule? Existing pubkey bans will remain active.')" title="Delete domain rule">
+                                    <i class="bi bi-arrow-counterclockwise"></i>
+                                </button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}
+        <p class="text-muted mb-0">No banned domains.</p>
+        {% endif %}
+    </div>
+</div>
+
 {% endblock %}
 
 {% block scripts %}

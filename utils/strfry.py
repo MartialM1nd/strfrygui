@@ -80,11 +80,11 @@ def run_strfry_command(args, input_data=None, capture_output=True, timeout=300):
         raise StrfryError(f"Failed to execute strfry: {e}")
 
 
-def scan_events(filter_json, limit=100):
+def scan_events(filter_json, limit=100, timeout=300):
     filter_with_limit = {**filter_json, 'limit': limit}
     filter_str = json.dumps(filter_with_limit)
     cmd = ['scan', filter_str]
-    output = run_strfry_command(cmd)
+    output = run_strfry_command(cmd, timeout=timeout)
     
     events = []
     if not output:

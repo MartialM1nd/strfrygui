@@ -19,6 +19,66 @@
 </div>
 {% endif %}
 
+<div class="card border-danger mb-4">
+    <div class="card-header bg-danger text-white">
+        <h5 class="mb-0"><i class="bi bi-globe2"></i> NIP-05 Domain Bans</h5>
+    </div>
+    <div class="card-body">
+        <p class="small text-muted">
+            The domain and all subdomains are scanned against local kind-0 profiles. Only identities whose NIP-05 endpoint maps back to the same pubkey are banned. Reconcile manually to discover new identities.
+        </p>
+        <form method="POST" action="{{ url_for('moderation_ban_domain') }}" class="row g-3">
+            {{ domain_form.hidden_tag() }}
+            <div class="col-md-4">
+                {{ domain_form.domain.label(class="form-label") }}
+                {{ domain_form.domain(class="form-control", placeholder="example.com") }}
+            </div>
+            <div class="col-md-6">
+                {{ domain_form.reason.label(class="form-label") }}
+                {{ domain_form.reason(class="form-control", rows="1", placeholder="Reason for domain ban...") }}
+            </div>
+            <div class="col-md-2 d-flex align-items-end">
+                <button type="submit" class="btn btn-danger w-100" onclick="return confirm('Ban this NIP-05 domain and scan local profiles?')">
+                    Ban Domain
+                </button>
+            </div>
+        </form>
+
+        {% if banned_domains %}
+        <div class="table-responsive mt-4">
+            <table class="table table-sm align-middle mb-0">
+                <thead>
+                    <tr><th>Domain</th><th>Reason</th><th>Last Scan</th><th>Results</th><th></th></tr>
+                </thead>
+                <tbody>
+                    {% for domain_ban in banned_domains %}
+                    <tr>
+                        <td><code>{{ domain_ban.domain }}</code><br><small class="text-muted">Includes subdomains</small></td>
+                        <td><small>{{ domain_ban.reason or '-' }}</small></td>
+                        <td>
+                            <small>{{ domain_ban.last_scanned_at|datetime if domain_ban.last_scanned_at else 'Never' }}</small>
+                            {% if domain_ban.scan_status == 'queued' %}<br><span class="badge bg-secondary">Queued</span>{% elif domain_ban.scan_status == 'running' %}<br><span class="badge bg-info">Running</span>{% endif %}
+                            {% if domain_ban.last_scan_error %}<br><small class="text-danger">{{ domain_ban.last_scan_error }}</small>{% endif %}
+                        </td>
+                        <td>
+                            <small>{{ domain_ban.last_scan_events }} profiles, {{ domain_ban.last_scan_verified }} verified, {{ domain_ban.last_scan_new_bans }} new</small>
+                        </td>
+                        <td class="text-end">
+                            <form method="POST" action="{{ url_for('moderation_reconcile_domain', domain_id=domain_ban.id) }}">
+                                <input type="hidden" name="csrf_token" value="{{ form.csrf_token.current_token }}">
+                                <button type="submit" class="btn btn-sm btn-outline-danger"{% if domain_ban.scan_status in ['queued', 'running'] %} disabled{% endif %}>Reconcile</button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        <p class="small text-muted mt-3 mb-0">Admins can delete domain rules from the Admin page. Already discovered pubkeys remain banned.</p>
+        {% endif %}
+    </div>
+</div>
+
 {% if purges %}
 <div class="card border-warning mb-4">
     <div class="card-header bg-warning-subtle">

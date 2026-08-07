@@ -176,6 +176,14 @@ You can also configure the plugin path via the **Plugins** page in the admin UI 
 
 Unbanning triggers the same sync — the pubkey is removed from `blocklist.json` and the plugin reloads automatically.
 
+### NIP-05 Domain Bans
+
+Moderators can add a NIP-05 domain rule from the Moderation page. The rule includes all subdomains. StrfryGUI starts a background scan of a bounded set of local kind-0 profiles and verifies each identity against its HTTPS `/.well-known/nostr.json` mapping before adding the pubkey to the normal blocklist.
+
+Domain enforcement is discovery-based because ordinary Nostr events do not contain NIP-05 identifiers. Use **Reconcile** to scan again for newly observed profiles. Deleting a domain rule stops future reconciliation but intentionally keeps pubkeys already discovered through that rule banned.
+
+The scan and HTTP limits can be configured with `DOMAIN_SCAN_EVENT_LIMIT`, `DOMAIN_SCAN_TIMEOUT`, `DOMAIN_SCAN_CANDIDATE_LIMIT`, `DOMAIN_SCAN_TOTAL_TIMEOUT`, `NIP05_HTTP_TIMEOUT`, `NIP05_MAX_RESPONSE_BYTES`, and `NIP05_MAX_ADDRESSES`.
+
 ### Banned Pubkeys File
 
 The blocklist is stored at `/opt/strfrygui/blocklist.json`. This file is automatically created and managed by the app. The plugin monitors this file for changes and reloads on the fly.

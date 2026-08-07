@@ -102,6 +102,27 @@ class BannedPubkey(db.Model):
     banner = db.relationship('User', backref='banned_pubkeys')
 
 
+class BannedDomain(db.Model):
+    __tablename__ = 'banned_domains'
+
+    id = db.Column(db.Integer, primary_key=True)
+    domain = db.Column(db.String(253), unique=True, nullable=False, index=True)
+    reason = db.Column(db.Text)
+    banned_by = db.Column(db.Integer, db.ForeignKey('users.id'))
+    banned_at = db.Column(db.DateTime, default=utcnow)
+    scan_status = db.Column(db.String(20), nullable=False, default='idle', index=True)
+    scan_started_at = db.Column(db.DateTime)
+    last_scanned_at = db.Column(db.DateTime)
+    last_scan_events = db.Column(db.Integer, nullable=False, default=0)
+    last_scan_candidates = db.Column(db.Integer, nullable=False, default=0)
+    last_scan_verified = db.Column(db.Integer, nullable=False, default=0)
+    last_scan_new_bans = db.Column(db.Integer, nullable=False, default=0)
+    last_scan_cursor = db.Column(db.Integer, nullable=False, default=0)
+    last_scan_error = db.Column(db.Text)
+
+    banner = db.relationship('User', backref='banned_domains')
+
+
 class WritePolicyProjection(db.Model):
     __tablename__ = 'write_policy_projection'
     __table_args__ = (

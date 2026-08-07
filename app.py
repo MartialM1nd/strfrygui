@@ -1,4 +1,5 @@
 import os
+import queue
 import threading
 import time
 from datetime import datetime, timedelta
@@ -6,9 +7,10 @@ from flask import Flask, render_template, redirect, url_for, flash, request, sen
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from flask_wtf import FlaskForm
 from wtforms import StringField, PasswordField, SelectField, TextAreaField, IntegerField
-from wtforms.validators import DataRequired, Length, EqualTo, Optional, Regexp
+from wtforms.validators import DataRequired, Length, EqualTo, Optional, Regexp, ValidationError
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
+from sqlalchemy import or_
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash
 from io import StringIO, BytesIO
@@ -16,8 +18,8 @@ import tempfile
 
 from config import Config, Security
 from models import (
-    db, User, AuditLog, ModerationReport, BannedPubkey, MetadataRelay,
-    EventPurge,
+    db, User, AuditLog, ModerationReport, BannedPubkey, BannedDomain, MetadataRelay,
+    EventPurge, utcnow,
 )
 from utils.strfry import (
     scan_events, delete_events, export_events, import_events,
@@ -28,6 +30,7 @@ from utils.strfry import (
 from utils.metrics import get_summary, MetricsError
 from utils.auth import admin_required, moderator_required, viewer_or_higher, permission_required
 from utils.moderation import ModerationDecisions, ModerationError
+from utils.nip05 import normalize_domain
 
 _compaction = {
     'running': False,
@@ -36,6 +39,7 @@ _compaction = {
     'error': None,
     'thread': None,
 }
+_domain_scan_queue = queue.Queue(maxsize=1)
 
 
 def _run_compaction():
@@ -251,6 +255,21 @@ class DeleteForm(FlaskForm):
     confirm_delete = StringField('Type DELETE to confirm', validators=[DataRequired()])
 
 
+class EmptyForm(FlaskForm):
+    pass
+
+
+class BannedDomainForm(FlaskForm):
+    domain = StringField('NIP-05 Domain', validators=[DataRequired(), Length(max=253)])
+    reason = TextAreaField('Reason', validators=[Optional(), Length(max=1000)])
+
+    def validate_domain(self, field):
+        try:
+            field.data = normalize_domain(field.data)
+        except ValueError as exc:
+            raise ValidationError(str(exc)) from exc
+
+
 class EventSearchForm(FlaskForm):
     search_type = SelectField('Search Type', choices=[
         ('all', 'All Events'),
@@ -396,6 +415,74 @@ def get_client_ip():
 
 def moderation_decisions():
     return ModerationDecisions(current_user.id, get_client_ip())
+
+
+def _run_domain_reconciliation(domain_id, actor_id, ip_address):
+    with app.app_context():
+        try:
+            ModerationDecisions(actor_id, ip_address).reconcile_domain(domain_id)
+        except Exception as exc:
+            app.logger.exception('NIP-05 domain reconciliation failed')
+            db.session.rollback()
+            banned_domain = db.session.get(BannedDomain, domain_id)
+            if banned_domain is not None:
+                banned_domain.scan_status = 'idle'
+                banned_domain.scan_started_at = None
+                banned_domain.last_scanned_at = utcnow()
+                banned_domain.last_scan_error = str(exc)
+                db.session.commit()
+
+
+def _domain_reconciliation_worker():
+    while True:
+        domain_id, actor_id, ip_address = _domain_scan_queue.get()
+        try:
+            _run_domain_reconciliation(domain_id, actor_id, ip_address)
+        except Exception:
+            app.logger.exception('NIP-05 domain worker failed to recover cleanly')
+        finally:
+            _domain_scan_queue.task_done()
+
+
+threading.Thread(
+    target=_domain_reconciliation_worker,
+    daemon=True,
+    name='nip05-domain-worker',
+).start()
+
+
+def queue_domain_reconciliation(domain_id, actor_id, ip_address):
+    stale_before = utcnow() - timedelta(seconds=_domain_scan_lease_seconds())
+    claimed = BannedDomain.query.filter(
+        BannedDomain.id == domain_id,
+        or_(
+            BannedDomain.scan_status.notin_(['queued', 'running']),
+            BannedDomain.scan_started_at.is_(None),
+            BannedDomain.scan_started_at < stale_before,
+        ),
+    ).update({
+        'scan_status': 'queued',
+        'scan_started_at': utcnow(),
+    }, synchronize_session=False)
+    db.session.commit()
+    if not claimed:
+        return False
+    try:
+        _domain_scan_queue.put_nowait((domain_id, actor_id, ip_address))
+    except queue.Full:
+        BannedDomain.query.filter_by(id=domain_id, scan_status='queued').update({
+            'scan_status': 'idle',
+            'scan_started_at': None,
+        })
+        db.session.commit()
+        return False
+    return True
+
+
+def _domain_scan_lease_seconds():
+    scan_timeout = max(1, min(Config.DOMAIN_SCAN_TIMEOUT, 300))
+    verification_timeout = max(1, min(Config.DOMAIN_SCAN_TOTAL_TIMEOUT, 300))
+    return scan_timeout + verification_timeout + 60
 
 
 def flash_moderation_outcome(outcome, success_message):
@@ -1201,6 +1288,7 @@ def admin():
     audit_has_more = (audit_offset + len(audit_logs)) < total_logs
     
     banned_pubkeys = BannedPubkey.query.order_by(BannedPubkey.banned_at.desc()).all()
+    banned_domains = BannedDomain.query.order_by(BannedDomain.banned_at.desc()).all()
     
     edit_forms = {}
     for user in users:
@@ -1213,7 +1301,7 @@ def admin():
     create_user_form = AdminCreateUserForm()
     change_password_form = ChangePasswordForm()
     
-    return render_template('admin.html', users=users, audit_logs=audit_logs, edit_forms=edit_forms, create_user_form=create_user_form, change_password_form=change_password_form, banned_pubkeys=banned_pubkeys, audit_offset=audit_offset, audit_limit=audit_limit, audit_has_more=audit_has_more, audit_total=total_logs)
+    return render_template('admin.html', users=users, audit_logs=audit_logs, edit_forms=edit_forms, create_user_form=create_user_form, change_password_form=change_password_form, banned_pubkeys=banned_pubkeys, banned_domains=banned_domains, audit_offset=audit_offset, audit_limit=audit_limit, audit_has_more=audit_has_more, audit_total=total_logs)
 
 
 def sync_moderation_reports():
@@ -1293,10 +1381,8 @@ def moderation():
     if not show_reviewed:
         query = query.filter(ModerationReport.reviewed == False)
     
-    from flask_wtf import FlaskForm
-    class EmptyForm(FlaskForm):
-        pass
     form = EmptyForm()
+    domain_form = BannedDomainForm()
     
     sort_column = ModerationReport.created_at.desc() if sort_order == 'desc' else ModerationReport.created_at.asc()
     reports = query.order_by(sort_column).offset(offset).limit(limit).all()
@@ -1308,6 +1394,7 @@ def moderation():
     ).limit(25).all()
     purges = pending_purges + completed_purges
     projection = ModerationDecisions.initialize_projection()
+    banned_domains = BannedDomain.query.order_by(BannedDomain.banned_at.desc()).all()
     
     return render_template('moderation.html', reports=reports, 
                            report_type_filter=report_type_filter,
@@ -1322,6 +1409,8 @@ def moderation():
                            total_count=total_count,
                            purges=purges,
                            projection=projection,
+                           banned_domains=banned_domains,
+                           domain_form=domain_form,
                            form=form)
 
 
@@ -1421,6 +1510,53 @@ def ban_by_pubkey():
         return f'Failed to ban user: {e}', 500
 
 
+@app.route('/moderation/domain', methods=['POST'])
+@moderator_required
+def moderation_ban_domain():
+    form = BannedDomainForm()
+    if not form.validate_on_submit():
+        errors = [message for messages in form.errors.values() for message in messages]
+        flash(errors[0] if errors else 'Invalid domain ban.', 'danger')
+        return redirect(url_for('moderation'))
+    try:
+        actor_id = current_user.id
+        ip_address = get_client_ip()
+        banned_domain = ModerationDecisions(actor_id, ip_address).create_domain(
+            form.domain.data,
+            form.reason.data or '',
+        )
+        if queue_domain_reconciliation(banned_domain.id, actor_id, ip_address):
+            flash(f'Domain {banned_domain.domain} banned. Reconciliation started.', 'success')
+        else:
+            flash(
+                f'Domain {banned_domain.domain} banned, but the reconciliation queue is busy. '
+                'Use Reconcile to try again.',
+                'warning',
+            )
+    except ModerationError as e:
+        flash(str(e), 'danger')
+    return redirect(url_for('moderation'))
+
+
+@app.route('/moderation/domain/<int:domain_id>/reconcile', methods=['POST'])
+@moderator_required
+def moderation_reconcile_domain(domain_id):
+    if not EmptyForm().validate_on_submit():
+        abort(400)
+    banned_domain = db.session.get(BannedDomain, domain_id)
+    if banned_domain is None:
+        flash('Banned domain not found', 'danger')
+    elif queue_domain_reconciliation(domain_id, current_user.id, get_client_ip()):
+        flash(f'Reconciliation started for {banned_domain.domain}.', 'success')
+    else:
+        flash(
+            f'Could not queue reconciliation for {banned_domain.domain}; another scan may '
+            'already be queued or running.',
+            'warning',
+        )
+    return redirect(url_for('moderation'))
+
+
 def is_pubkey_banned(pubkey):
     if not pubkey:
         return False
@@ -1474,6 +1610,19 @@ def unban_pubkey(ban_id):
     except ModerationError as e:
         flash(str(e), 'danger')
     
+    return redirect(url_for('admin'))
+
+
+@app.route('/admin/banned-domain/<int:domain_id>/delete', methods=['POST'])
+@admin_required
+def delete_banned_domain(domain_id):
+    if not EmptyForm().validate_on_submit():
+        abort(400)
+    try:
+        moderation_decisions().delete_domain(domain_id)
+        flash('Domain rule deleted. Existing pubkey bans were preserved.', 'success')
+    except ModerationError as e:
+        flash(str(e), 'danger')
     return redirect(url_for('admin'))
 
 
@@ -1544,7 +1693,7 @@ def internal_error(error):
 
 def init_db():
     with app.app_context():
-        from models import ModerationReport, BannedPubkey, MetadataRelay
+        from models import ModerationReport, BannedPubkey, BannedDomain, MetadataRelay
         db.create_all()
         
         from sqlalchemy import text
@@ -1574,6 +1723,27 @@ def init_db():
                 relay = MetadataRelay(url=url, enabled=True, is_default=True)
                 db.session.add(relay)
             db.session.commit()
+
+        stale_before = utcnow() - timedelta(seconds=_domain_scan_lease_seconds())
+        interrupted_domains = BannedDomain.query.filter(
+            BannedDomain.scan_status.in_(['queued', 'running']),
+            or_(
+                BannedDomain.scan_started_at.is_(None),
+                BannedDomain.scan_started_at < stale_before,
+            ),
+        ).all()
+        for banned_domain in interrupted_domains:
+            banned_domain.scan_status = 'idle'
+            banned_domain.scan_started_at = None
+            banned_domain.last_scan_error = 'Reconciliation resumed after application restart'
+        db.session.commit()
+        for banned_domain in interrupted_domains:
+            if not queue_domain_reconciliation(banned_domain.id, banned_domain.banned_by, None):
+                banned_domain = db.session.get(BannedDomain, banned_domain.id)
+                banned_domain.last_scan_error = (
+                    'Reconciliation interrupted by application restart; use Reconcile to retry'
+                )
+                db.session.commit()
         
         ModerationDecisions.initialize_projection()
         ModerationDecisions.reconcile_write_policy(force=True)

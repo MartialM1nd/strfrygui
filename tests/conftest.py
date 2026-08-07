@@ -33,11 +33,19 @@ def app(tmp_path):
     old_blocklist = Config.BANNED_PUBKEYS_FILE
     old_plugin = Config.BLOCKLIST_PLUGIN_PATH
     old_timeout = Config.MODERATION_PURGE_TIMEOUT
+    old_scan_limit = Config.DOMAIN_SCAN_EVENT_LIMIT
+    old_scan_timeout = Config.DOMAIN_SCAN_TIMEOUT
+    old_candidate_limit = Config.DOMAIN_SCAN_CANDIDATE_LIMIT
+    old_total_timeout = Config.DOMAIN_SCAN_TOTAL_TIMEOUT
     Config.STRFRY_BINARY = "/bin/true"
     Config.STRFRY_CONFIG = ""
     Config.BANNED_PUBKEYS_FILE = str(blocklist_path)
     Config.BLOCKLIST_PLUGIN_PATH = str(plugin_path)
     Config.MODERATION_PURGE_TIMEOUT = 1
+    Config.DOMAIN_SCAN_EVENT_LIMIT = 500
+    Config.DOMAIN_SCAN_TIMEOUT = 30
+    Config.DOMAIN_SCAN_CANDIDATE_LIMIT = 50
+    Config.DOMAIN_SCAN_TOTAL_TIMEOUT = 30
 
     with app.app_context():
         db.create_all()
@@ -50,3 +58,7 @@ def app(tmp_path):
     Config.BANNED_PUBKEYS_FILE = old_blocklist
     Config.BLOCKLIST_PLUGIN_PATH = old_plugin
     Config.MODERATION_PURGE_TIMEOUT = old_timeout
+    Config.DOMAIN_SCAN_EVENT_LIMIT = old_scan_limit
+    Config.DOMAIN_SCAN_TIMEOUT = old_scan_timeout
+    Config.DOMAIN_SCAN_CANDIDATE_LIMIT = old_candidate_limit
+    Config.DOMAIN_SCAN_TOTAL_TIMEOUT = old_total_timeout
