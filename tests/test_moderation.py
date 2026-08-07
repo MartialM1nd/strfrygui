@@ -205,7 +205,9 @@ def test_direct_ban_and_unban_change_active_set_and_projection(app):
     decisions = ModerationDecisions(actor_id=7, ip_address="192.0.2.1")
 
     banned = decisions.ban_pubkey("direct-pubkey", "Manual moderation")
-    ban_id = BannedPubkey.query.filter_by(pubkey="direct-pubkey").one().id
+    ban = BannedPubkey.query.filter_by(pubkey="direct-pubkey").one()
+    ban_id = ban.id
+    assert ban.reason == "Manual moderation"
     unbanned = decisions.unban(ban_id)
 
     assert banned.committed and unbanned.committed

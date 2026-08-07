@@ -278,6 +278,10 @@
                     <li>Attempt to purge all existing events</li>
                     <li>Keep failed work visible for retry</li>
                 </ul>
+                <div class="mb-3">
+                    <label for="eventBanReason" class="form-label">Reason (optional note):</label>
+                    <textarea id="eventBanReason" class="form-control" rows="2" placeholder="Reason for ban..."></textarea>
+                </div>
                 <p>Type <strong>DELETE</strong> to confirm:</p>
                 <input type="hidden" id="eventBanPubkey">
                 <input type="text" id="eventBanConfirmInput" class="form-control" placeholder="Type DELETE here">
@@ -292,7 +296,6 @@
 
 <form method="POST" id="eventBanForm" style="display:none;">
     <input type="hidden" name="csrf_token" value="{{ form.csrf_token.current_token }}">
-    <input type="hidden" name="reason" value="Banned from events page">
 </form>
 
 {% endblock %}
@@ -415,6 +418,7 @@ eventBanConfirmInput.addEventListener('input', function() {
 
 function showEventBanModal(pubkey) {
     document.getElementById('eventBanPubkey').value = pubkey;
+    document.getElementById('eventBanReason').value = '';
     eventBanConfirmInput.value = '';
     eventConfirmBanBtn.disabled = true;
     eventBanModal.show();
@@ -422,6 +426,7 @@ function showEventBanModal(pubkey) {
 
 function confirmEventBan() {
     const pubkey = document.getElementById('eventBanPubkey').value;
+    const reason = document.getElementById('eventBanReason').value.trim() || 'Banned from events page';
     const form = document.getElementById('eventBanForm');
     const csrfToken = form.querySelector('input[name="csrf_token"]').value;
     
@@ -430,7 +435,7 @@ function confirmEventBan() {
         headers: {
             'Content-Type': 'application/x-www-form-urlencoded',
         },
-        body: 'csrf_token=' + encodeURIComponent(csrfToken) + '&pubkey=' + encodeURIComponent(pubkey) + '&reason=' + encodeURIComponent('Banned from events page')
+        body: 'csrf_token=' + encodeURIComponent(csrfToken) + '&pubkey=' + encodeURIComponent(pubkey) + '&reason=' + encodeURIComponent(reason)
     }).then(response => {
         if (response.ok) {
             location.reload();

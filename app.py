@@ -1405,7 +1405,7 @@ def moderation_retry_enforcement():
 @moderator_required
 def ban_by_pubkey():
     pubkey = request.form.get('pubkey')
-    reason = request.form.get('reason', 'Banned via events page')
+    reason = request.form.get('reason', '').strip() or 'Banned from events page'
     
     if not pubkey:
         return 'No pubkey provided', 400
