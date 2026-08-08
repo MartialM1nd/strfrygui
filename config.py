@@ -20,6 +20,9 @@ class Config:
     BANNED_PUBKEYS_FILE = os.path.join(APP_DIR, 'blocklist.json')
     TRUST_POLICY_FILE = os.path.join(APP_DIR, 'trust_policy.json')
     TRUST_POLICY_STATS_FILE = os.path.join(APP_DIR, 'trust_policy_stats.json')
+    WRITE_POLICY_EVENT_LOG = os.path.join(
+        APP_DIR, 'runtime', 'write_policy_events.jsonl'
+    )
     BLOCKLIST_PLUGIN_PATH = os.path.join(APP_DIR, 'utils', 'blocklist_plugin.py')
     MODERATION_PURGE_TIMEOUT = int(os.getenv('MODERATION_PURGE_TIMEOUT', '30'))
     DOMAIN_SCAN_EVENT_LIMIT = int(os.getenv('DOMAIN_SCAN_EVENT_LIMIT', '500'))

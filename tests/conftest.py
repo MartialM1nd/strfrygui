@@ -18,6 +18,7 @@ def app(tmp_path):
     blocklist_path = tmp_path / "blocklist.json"
     trust_policy_path = tmp_path / "trust_policy.json"
     trust_stats_path = tmp_path / "trust_policy_stats.json"
+    decision_log_path = tmp_path / "runtime" / "write_policy_events.jsonl"
     plugin_path = tmp_path / "blocklist_plugin.py"
     plugin_path.write_text("#!/bin/sh\nexit 0\n")
     plugin_path.chmod(0o755)
@@ -27,6 +28,7 @@ def app(tmp_path):
         BANNED_PUBKEYS_FILE=str(blocklist_path),
         TRUST_POLICY_FILE=str(trust_policy_path),
         TRUST_POLICY_STATS_FILE=str(trust_stats_path),
+        WRITE_POLICY_EVENT_LOG=str(decision_log_path),
         BLOCKLIST_PLUGIN_PATH=str(plugin_path),
         MODERATION_PURGE_TIMEOUT=1,
     )
@@ -38,6 +40,7 @@ def app(tmp_path):
     old_plugin = Config.BLOCKLIST_PLUGIN_PATH
     old_trust_policy = Config.TRUST_POLICY_FILE
     old_trust_stats = Config.TRUST_POLICY_STATS_FILE
+    old_decision_log = Config.WRITE_POLICY_EVENT_LOG
     old_timeout = Config.MODERATION_PURGE_TIMEOUT
     old_scan_limit = Config.DOMAIN_SCAN_EVENT_LIMIT
     old_scan_timeout = Config.DOMAIN_SCAN_TIMEOUT
@@ -51,6 +54,7 @@ def app(tmp_path):
     Config.BLOCKLIST_PLUGIN_PATH = str(plugin_path)
     Config.TRUST_POLICY_FILE = str(trust_policy_path)
     Config.TRUST_POLICY_STATS_FILE = str(trust_stats_path)
+    Config.WRITE_POLICY_EVENT_LOG = str(decision_log_path)
     Config.MODERATION_PURGE_TIMEOUT = 1
     Config.DOMAIN_SCAN_EVENT_LIMIT = 500
     Config.DOMAIN_SCAN_TIMEOUT = 30
@@ -71,6 +75,7 @@ def app(tmp_path):
     Config.BLOCKLIST_PLUGIN_PATH = old_plugin
     Config.TRUST_POLICY_FILE = old_trust_policy
     Config.TRUST_POLICY_STATS_FILE = old_trust_stats
+    Config.WRITE_POLICY_EVENT_LOG = old_decision_log
     Config.MODERATION_PURGE_TIMEOUT = old_timeout
     Config.DOMAIN_SCAN_EVENT_LIMIT = old_scan_limit
     Config.DOMAIN_SCAN_TIMEOUT = old_scan_timeout

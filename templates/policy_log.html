@@ -1,0 +1,274 @@
+{% extends "base.html" %}
+
+{% block title %}Policy Log{% if relay_name %} - {{ relay_name }}{% endif %} - StrfryGUI{% endblock %}
+
+{% block content %}
+<div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-4">
+    <div>
+        <div class="text-uppercase text-muted small fw-semibold mb-1">Write Policy</div>
+        <h2 class="mb-1"><i class="bi bi-activity"></i> Live Event Decisions</h2>
+        <p class="text-muted mb-0">Accepted and rejected events from the relay write-policy plugin.</p>
+    </div>
+    <div class="d-flex align-items-center gap-2">
+        <span id="feedStatus" class="badge bg-secondary">Connecting</span>
+        <button id="pauseButton" class="btn btn-sm btn-outline-secondary" type="button">Pause</button>
+        <button id="clearButton" class="btn btn-sm btn-outline-secondary" type="button">Clear View</button>
+    </div>
+</div>
+
+<div class="card mb-4">
+    <div class="card-header"><h5 class="mb-0">Filters</h5></div>
+    <div class="card-body">
+        <div class="row g-3">
+            <div class="col-sm-6 col-lg-2">
+                <label for="actionFilter" class="form-label">Actual action</label>
+                <select id="actionFilter" class="form-select">
+                    <option value="">All</option>
+                    <option value="accept">Accepted</option>
+                    <option value="reject">Rejected</option>
+                </select>
+            </div>
+            <div class="col-sm-6 col-lg-2">
+                <label for="simulatedFilter" class="form-label">Monitor outcome</label>
+                <select id="simulatedFilter" class="form-select">
+                    <option value="">All</option>
+                    <option value="accept">Would accept</option>
+                    <option value="reject">Would reject</option>
+                    <option value="none">Not simulated</option>
+                </select>
+            </div>
+            <div class="col-sm-6 col-lg-2">
+                <label for="reasonFilter" class="form-label">Reason</label>
+                <select id="reasonFilter" class="form-select">
+                    <option value="">All reasons</option>
+                    <option value="banned">Banned</option>
+                    <option value="trusted">Trusted</option>
+                    <option value="valid_pow">Valid PoW</option>
+                    <option value="insufficient_pow">Insufficient PoW</option>
+                    <option value="missing_pow_commitment">Missing commitment</option>
+                    <option value="rate_limited">Rate limited</option>
+                    <option value="monitor">Monitor</option>
+                    <option value="policy_off">Policy off</option>
+                    <option value="non_network_bypass">Non-network bypass</option>
+                    <option value="malformed">Malformed</option>
+                </select>
+            </div>
+            <div class="col-sm-6 col-lg-2">
+                <label for="kindFilter" class="form-label">Event kind</label>
+                <input id="kindFilter" class="form-control" type="number" min="0" placeholder="Any">
+            </div>
+            <div class="col-sm-6 col-lg-2">
+                <label for="sourceTypeFilter" class="form-label">Source type</label>
+                <input id="sourceTypeFilter" class="form-control" placeholder="IP4, Sync...">
+            </div>
+            <div class="col-sm-6 col-lg-2">
+                <label for="sourceIpFilter" class="form-label">Source IP</label>
+                <input id="sourceIpFilter" class="form-control font-monospace" placeholder="Address contains...">
+            </div>
+            <div class="col-md-6">
+                <label for="eventIdFilter" class="form-label">Event ID</label>
+                <input id="eventIdFilter" class="form-control font-monospace" placeholder="Event ID contains...">
+            </div>
+            <div class="col-md-6">
+                <label for="pubkeyFilter" class="form-label">Pubkey</label>
+                <input id="pubkeyFilter" class="form-control font-monospace" placeholder="Pubkey contains...">
+            </div>
+        </div>
+    </div>
+</div>
+
+<div id="feedWarning" class="alert alert-warning d-none"></div>
+
+<div class="card">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <h5 class="mb-0">Recent Decisions</h5>
+        <span id="visibleCount" class="text-muted small">0 visible</span>
+    </div>
+    <div class="table-responsive">
+        <table class="table table-hover align-middle mb-0">
+            <thead>
+                <tr>
+                    <th>Time</th>
+                    <th>Actual</th>
+                    <th>Monitor</th>
+                    <th>Actual reason</th>
+                    <th>Monitor reason</th>
+                    <th>Kind</th>
+                    <th>Event / Author</th>
+                    <th>Source</th>
+                </tr>
+            </thead>
+            <tbody id="decisionRows"></tbody>
+        </table>
+    </div>
+    <div id="emptyState" class="card-body text-center text-muted">Waiting for policy decisions...</div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const MAX_VISIBLE_RECORDS = 1000;
+let records = [];
+let cursor = null;
+let paused = false;
+let loading = false;
+let retryDelay = 2000;
+let timer = null;
+
+const rows = document.getElementById('decisionRows');
+const emptyState = document.getElementById('emptyState');
+const feedStatus = document.getElementById('feedStatus');
+const feedWarning = document.getElementById('feedWarning');
+const visibleCount = document.getElementById('visibleCount');
+const pauseButton = document.getElementById('pauseButton');
+const filterIds = ['actionFilter', 'simulatedFilter', 'reasonFilter', 'kindFilter', 'sourceTypeFilter', 'sourceIpFilter', 'eventIdFilter', 'pubkeyFilter'];
+
+function setStatus(label, style) {
+    feedStatus.textContent = label;
+    feedStatus.className = 'badge bg-' + style;
+}
+
+function schedule(delay) {
+    clearTimeout(timer);
+    if (!paused && !document.hidden) timer = setTimeout(loadDecisions, delay);
+}
+
+function badge(value, acceptedText, rejectedText) {
+    const span = document.createElement('span');
+    const accepted = value === 'accept';
+    span.className = 'badge bg-' + (accepted ? 'success' : 'danger');
+    span.textContent = accepted ? acceptedText : rejectedText;
+    return span;
+}
+
+function textCell(value, className) {
+    const cell = document.createElement('td');
+    if (className) cell.className = className;
+    cell.textContent = value ?? '-';
+    return cell;
+}
+
+function matchesFilters(record) {
+    const action = document.getElementById('actionFilter').value;
+    const simulated = document.getElementById('simulatedFilter').value;
+    const reason = document.getElementById('reasonFilter').value;
+    const kind = document.getElementById('kindFilter').value;
+    const sourceType = document.getElementById('sourceTypeFilter').value.trim().toLowerCase();
+    const sourceIp = document.getElementById('sourceIpFilter').value.trim().toLowerCase();
+    const eventId = document.getElementById('eventIdFilter').value.trim().toLowerCase();
+    const pubkey = document.getElementById('pubkeyFilter').value.trim().toLowerCase();
+    if (action && record.action !== action) return false;
+    if (simulated === 'none' && record.simulated_action) return false;
+    if (simulated && simulated !== 'none' && record.simulated_action !== simulated) return false;
+    if (reason && record.reason !== reason && record.simulated_reason !== reason) return false;
+    if (kind && String(record.kind) !== kind) return false;
+    if (sourceType && !String(record.source_type || '').toLowerCase().includes(sourceType)) return false;
+    if (sourceIp && !String(record.source_ip || '').toLowerCase().includes(sourceIp)) return false;
+    if (eventId && !String(record.event_id || '').toLowerCase().includes(eventId)) return false;
+    if (pubkey && !String(record.pubkey || '').toLowerCase().includes(pubkey)) return false;
+    return true;
+}
+
+function render() {
+    rows.replaceChildren();
+    const filtered = records.filter(matchesFilters).slice().reverse();
+    for (const record of filtered) {
+        const row = document.createElement('tr');
+        row.className = record.action === 'reject' ? 'table-danger' : '';
+        row.appendChild(textCell(new Date(record.timestamp_ms).toLocaleTimeString()));
+        const actual = document.createElement('td');
+        actual.appendChild(badge(record.action, 'Accepted', 'Rejected'));
+        row.appendChild(actual);
+        const simulated = document.createElement('td');
+        if (record.simulated_action) simulated.appendChild(badge(record.simulated_action, 'Would accept', 'Would reject'));
+        else simulated.textContent = '-';
+        row.appendChild(simulated);
+        row.appendChild(textCell((record.reason || '-').replaceAll('_', ' ')));
+        row.appendChild(textCell((record.simulated_reason || '-').replaceAll('_', ' ')));
+        row.appendChild(textCell(record.kind));
+        const identifiers = document.createElement('td');
+        identifiers.className = 'font-monospace small text-break';
+        const eventLine = document.createElement('div');
+        eventLine.textContent = 'e: ' + (record.event_id || '-');
+        const authorLine = document.createElement('div');
+        authorLine.textContent = 'p: ' + (record.pubkey || '-');
+        identifiers.append(eventLine, authorLine);
+        row.appendChild(identifiers);
+        const source = document.createElement('td');
+        source.className = 'font-monospace small';
+        source.textContent = [record.source_type, record.source_ip].filter(Boolean).join(' / ') || '-';
+        row.appendChild(source);
+        rows.appendChild(row);
+    }
+    emptyState.classList.toggle('d-none', filtered.length > 0);
+    visibleCount.textContent = filtered.length + ' visible / ' + records.length + ' retained in browser';
+}
+
+async function loadDecisions() {
+    if (loading || paused || document.hidden) return;
+    loading = true;
+    setStatus('Updating', 'info');
+    try {
+        const params = new URLSearchParams({ limit: '500' });
+        if (cursor) params.set('cursor', cursor);
+        const response = await fetch('/api/write-policy-events?' + params.toString(), {
+            headers: { 'Accept': 'application/json' },
+            cache: 'no-store'
+        });
+        const contentType = response.headers.get('content-type') || '';
+        if (!response.ok || response.redirected || !contentType.includes('application/json')) throw new Error('Policy log request was not authorized or returned invalid data');
+        const data = await response.json();
+        if (data.reset) records = [];
+        if (Array.isArray(data.events)) records.push(...data.events);
+        if (records.length > MAX_VISIBLE_RECORDS) records = records.slice(-MAX_VISIBLE_RECORDS);
+        cursor = data.cursor || null;
+        render();
+        retryDelay = 2000;
+        if (!data.available) {
+            setStatus('Log unavailable', 'warning');
+            feedWarning.textContent = 'The runtime log is unavailable. Verify the shared runtime directory and service group permissions.';
+            feedWarning.classList.remove('d-none');
+        } else {
+            setStatus('Live', 'success');
+            feedWarning.classList.add('d-none');
+        }
+        schedule(data.has_more ? 250 : 2000);
+    } catch (error) {
+        setStatus('Offline', 'danger');
+        feedWarning.textContent = error.message;
+        feedWarning.classList.remove('d-none');
+        retryDelay = Math.min(retryDelay * 2, 30000);
+        schedule(retryDelay);
+    } finally {
+        loading = false;
+    }
+}
+
+for (const id of filterIds) document.getElementById(id).addEventListener('input', render);
+pauseButton.addEventListener('click', function() {
+    paused = !paused;
+    pauseButton.textContent = paused ? 'Resume' : 'Pause';
+    if (paused) {
+        clearTimeout(timer);
+        setStatus('Paused', 'secondary');
+    } else {
+        loadDecisions();
+    }
+});
+document.getElementById('clearButton').addEventListener('click', function() {
+    records = [];
+    render();
+});
+document.addEventListener('visibilitychange', function() {
+    if (document.hidden) {
+        clearTimeout(timer);
+        setStatus('Paused', 'secondary');
+    } else if (!paused) {
+        loadDecisions();
+    }
+});
+
+render();
+loadDecisions();
+</script>
+{% endblock %}

@@ -63,6 +63,11 @@
                     {% endif %}
                     {% if current_user.role in ['admin', 'moderator'] %}
                     <li class="nav-item">
+                        <a class="nav-link" href="{{ url_for('policy_log') }}">
+                            <i class="bi bi-activity"></i> Policy Log
+                        </a>
+                    </li>
+                    <li class="nav-item">
                         <a class="nav-link" href="{{ url_for('moderation') }}">
                             <i class="bi bi-shield-exclamation"></i> Moderation
                         </a>

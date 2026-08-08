@@ -165,6 +165,18 @@ sudo chmod 755 /opt/strfrygui/utils/blocklist_plugin.py
 sudo systemctl restart strfry
 ```
 
+The live policy log contains source IP addresses and uses a private shared Unix group. Replace `strfry` below if your relay service uses a different account:
+
+```bash
+sudo groupadd --system strfry-observers
+sudo usermod -aG strfry-observers strfry
+sudo usermod -aG strfry-observers www-data
+sudo install -d -o strfry -g strfry-observers -m 2750 /opt/strfrygui/runtime
+sudo systemctl restart strfry strfrygui
+```
+
+The plugin creates log and lock files with mode `0640`. The setgid runtime directory keeps them in the shared group so strfry can write while StrfryGUI can read.
+
 You can also configure the plugin path via the **Plugins** page in the admin UI (`/plugins`).
 
 ### How It Works
@@ -189,6 +201,12 @@ The protection mode is managed without restarting strfry:
 The initial roots are `npub12ay99qrgh9vdk0eneu8t7ccfd7x8srt3ngvdajh5mufw5dpp590su28yuc` and `npub18ams6ewn5aj2n3wt2qawzglx9mr4nzksxhvrdc4gzrecw7n5tvjqctp424`. The initial trust threshold is 50 and untrusted proof-of-work difficulty is 20. The same page manages trusted root npubs, trust and proof-of-work thresholds, NIP-13 difficulty commitment, refresh frequency, low-trust rate limits, build status, and manual rebuilds. Settings are published atomically to `trust_policy.json`; runtime counters are periodically written to `trust_policy_stats.json`. Failed graph builds retain the last valid snapshot, and stale snapshots trust only configured roots until a successful rebuild.
 
 Graph construction is limited to two hops, 5,000 direct identities, 100,000 total identities, and 500,000 follow edges. Individual follow lists above 2,000 entries do not contribute trust. Local imports, streams, syncs, and stored-event replay bypass trust and proof-of-work checks, while explicit pubkey bans always take precedence.
+
+### Live Policy Log
+
+Admins and moderators can open **Policy Log** to watch actual accepted and rejected events with Monitor-mode simulated outcomes. The page refreshes every two seconds, pauses in hidden browser tabs, and provides filters for action, simulated result, reason, kind, event ID, pubkey, source type, and source IP.
+
+The plugin records only decision metadata after sending its response to strfry. It never logs event content, tags, signatures, or raw requests. Logging is best effort and cannot change an event decision. The current JSONL file rotates at 5 MiB with one 5 MiB backup, keeping disk usage near 10 MiB.
 
 ### NIP-05 Domain Bans
 

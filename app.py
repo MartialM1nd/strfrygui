@@ -35,6 +35,7 @@ from utils.auth import admin_required, moderator_required, viewer_or_higher, per
 from utils.moderation import ModerationDecisions, ModerationError
 from utils.nip05 import normalize_domain
 from utils.domain_view import domain_identity_page, unresolved_identity_page
+from utils.decision_log import read_decision_log
 from utils.wot import (
     WoTError,
     commit_policy_settings,
@@ -653,6 +654,39 @@ def api_metrics():
         return jsonify(metrics)
     except MetricsError as e:
         return jsonify({'error': str(e)}), 500
+
+
+@app.route('/policy-log')
+@moderator_required
+def policy_log():
+    return render_template('policy_log.html')
+
+
+@app.route('/api/write-policy-events')
+@limiter.limit("600 per minute")
+@moderator_required
+def api_write_policy_events():
+    cursor = request.args.get('cursor')
+    try:
+        limit = int(request.args.get('limit', 200))
+    except ValueError:
+        limit = 200
+    batch = read_decision_log(
+        app.config['WRITE_POLICY_EVENT_LOG'],
+        cursor=cursor,
+        limit=limit,
+    )
+    response = jsonify({
+        'events': batch.events,
+        'cursor': batch.cursor,
+        'reset': batch.reset,
+        'has_more': batch.has_more,
+        'available': batch.available,
+        'updated_at': batch.updated_at,
+    })
+    response.headers['Cache-Control'] = 'no-store, max-age=0'
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    return response
 
 
 @app.route('/api/pubkey-metadata/<pubkey>')

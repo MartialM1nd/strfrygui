@@ -32,6 +32,12 @@ def test_plugins_page_manages_and_publishes_wot_policy(monkeypatch, tmp_path):
         'TRUST_POLICY_STATS_FILE',
         str(tmp_path / 'trust_policy_stats.json'),
     )
+    decision_log_path = tmp_path / 'runtime' / 'write_policy_events.jsonl'
+    monkeypatch.setattr(
+        Config,
+        'WRITE_POLICY_EVENT_LOG',
+        str(decision_log_path),
+    )
 
     app_module = importlib.import_module('app')
     monkeypatch.setattr(app_module, 'queue_wot_rebuild', lambda: False)
@@ -41,9 +47,19 @@ def test_plugins_page_manages_and_publishes_wot_policy(monkeypatch, tmp_path):
     with flask_app.app_context():
         admin = User(username='wot-admin', role='admin', must_change_password=False)
         admin.set_password('not-used')
-        db.session.add(admin)
+        moderator = User(
+            username='wot-moderator',
+            role='moderator',
+            must_change_password=False,
+        )
+        moderator.set_password('not-used')
+        viewer = User(username='wot-viewer', role='viewer', must_change_password=False)
+        viewer.set_password('not-used')
+        db.session.add_all([admin, moderator, viewer])
         db.session.commit()
         admin_id = admin.id
+        moderator_id = moderator.id
+        viewer_id = viewer.id
 
     client = flask_app.test_client()
     with client.session_transaction() as session:
@@ -113,3 +129,42 @@ def test_plugins_page_manages_and_publishes_wot_policy(monkeypatch, tmp_path):
     })
     assert disable_response.status_code == 200
     assert 'plugin = ""' in strfry_config.read_text()
+
+    decision_log_path.parent.mkdir()
+    decision_log_path.write_text(json.dumps({
+        'timestamp_ms': 1_700_000_000_000,
+        'action': 'reject',
+        'reason': 'banned',
+        'event_id': 'event-id',
+        'pubkey': 'pubkey',
+        'kind': 1,
+        'source_ip': '192.0.2.1',
+        'source_type': 'IP4',
+        'policy_mode': 'enforce',
+    }) + '\n')
+
+    policy_log_page = client.get('/policy-log')
+    assert policy_log_page.status_code == 200
+    assert b'id="eventIdFilter"' in policy_log_page.data
+    assert b'id="pubkeyFilter"' in policy_log_page.data
+    assert b'Actual reason' in policy_log_page.data
+    assert b'Monitor reason' in policy_log_page.data
+    assert b"document.hidden" in policy_log_page.data
+    api_response = client.get('/api/write-policy-events?limit=99999')
+    assert api_response.status_code == 200
+    assert api_response.headers['Cache-Control'] == 'no-store, max-age=0'
+    assert api_response.get_json()['events'][0]['source_ip'] == '192.0.2.1'
+
+    moderator_client = flask_app.test_client()
+    with moderator_client.session_transaction() as session:
+        session['_user_id'] = str(moderator_id)
+        session['_fresh'] = True
+    assert moderator_client.get('/policy-log').status_code == 200
+    assert moderator_client.get('/api/write-policy-events').status_code == 200
+
+    viewer_client = flask_app.test_client()
+    with viewer_client.session_transaction() as session:
+        session['_user_id'] = str(viewer_id)
+        session['_fresh'] = True
+    assert viewer_client.get('/policy-log').status_code == 302
+    assert viewer_client.get('/api/write-policy-events').status_code == 302

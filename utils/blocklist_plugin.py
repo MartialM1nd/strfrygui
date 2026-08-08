@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
 """strfry write-policy plugin for bans, trust scores, PoW, and rate limits."""
 
+import fcntl
 import ipaddress
 import json
 import math
 import os
+import queue
 import sys
+import threading
 import time
 from collections import Counter, OrderedDict
 from dataclasses import dataclass, field
@@ -15,6 +18,10 @@ BASE_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file_
 BLOCKLIST_FILE = os.path.join(BASE_DIR, "blocklist.json")
 TRUST_POLICY_FILE = os.path.join(BASE_DIR, "trust_policy.json")
 TRUST_POLICY_STATS_FILE = os.path.join(BASE_DIR, "trust_policy_stats.json")
+DECISION_LOG_FILE = os.path.join(BASE_DIR, "runtime", "write_policy_events.jsonl")
+DECISION_LOG_MAX_BYTES = 5 * 1024 * 1024
+DECISION_LOG_MAX_RECORD_BYTES = 4096
+DECISION_LOG_QUEUE_SIZE = 4096
 NON_NETWORK_SOURCE_TYPES = frozenset({"import", "stream", "sync", "stored"})
 
 
@@ -290,6 +297,163 @@ class TokenBucket:
         return allowed
 
 
+@dataclass(frozen=True)
+class Decision:
+    """A protocol response and the safe metadata explaining it."""
+
+    response: dict
+    reason: str
+    policy_mode: str
+    event_id: str
+    pubkey: str | None
+    kind: int | None
+    source_ip: str | None
+    source_type: str | None
+    simulated_action: str | None = None
+    simulated_reason: str | None = None
+
+    def log_record(self, timestamp_ms=None):
+        record = {
+            "timestamp_ms": (
+                int(time.time() * 1000) if timestamp_ms is None else timestamp_ms
+            ),
+            "action": self.response["action"],
+            "reason": self.reason,
+            "event_id": _log_string(self.event_id, 128),
+            "pubkey": _log_string(self.pubkey, 128),
+            "kind": self.kind,
+            "source_ip": self.source_ip,
+            "source_type": _log_string(self.source_type, 32),
+            "policy_mode": self.policy_mode,
+        }
+        if self.simulated_action is not None:
+            record["simulated_action"] = self.simulated_action
+            record["simulated_reason"] = self.simulated_reason
+        return record
+
+
+def _log_string(value, maximum):
+    return value if isinstance(value, str) and len(value) <= maximum else None
+
+
+class DecisionLog:
+    """Best-effort bounded JSONL decision log using a nonblocking process lock."""
+
+    def __init__(
+        self,
+        path=DECISION_LOG_FILE,
+        max_bytes=DECISION_LOG_MAX_BYTES,
+        max_record_bytes=DECISION_LOG_MAX_RECORD_BYTES,
+    ):
+        self.path = path
+        self.max_bytes = max_bytes
+        self.max_record_bytes = max_record_bytes
+        self.backup_path = path + ".1"
+        self.lock_path = path + ".lock"
+
+    @staticmethod
+    def _open(path, flags):
+        try:
+            descriptor = os.open(path, flags | os.O_CREAT | os.O_EXCL, 0o640)
+        except FileExistsError:
+            descriptor = os.open(path, flags)
+        try:
+            os.fchmod(descriptor, 0o640)
+        except OSError:
+            os.close(descriptor)
+            raise
+        return descriptor
+
+    def write(self, record):
+        """Append one record, dropping it on contention or any filesystem error."""
+        try:
+            payload = (
+                json.dumps(record, separators=(",", ":"), sort_keys=True) + "\n"
+            ).encode("utf-8")
+        except (TypeError, ValueError, OverflowError):
+            return
+        if len(payload) > min(self.max_bytes, self.max_record_bytes):
+            return
+
+        lock_descriptor = None
+        try:
+            lock_descriptor = self._open(self.lock_path, os.O_WRONLY)
+            fcntl.flock(lock_descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self._write_locked(payload)
+        except (BlockingIOError, OSError):
+            return
+        finally:
+            if lock_descriptor is not None:
+                try:
+                    os.close(lock_descriptor)
+                except OSError:
+                    pass
+
+    def _write_locked(self, payload):
+        try:
+            current_size = os.path.getsize(self.path)
+        except FileNotFoundError:
+            current_size = 0
+        if current_size + len(payload) > self.max_bytes:
+            try:
+                os.replace(self.path, self.backup_path)
+            except FileNotFoundError:
+                pass
+
+        descriptor = self._open(self.path, os.O_WRONLY | os.O_APPEND)
+        try:
+            remaining = memoryview(payload)
+            while remaining:
+                written = os.write(descriptor, remaining)
+                if written == 0:
+                    raise OSError("decision log write made no progress")
+                remaining = remaining[written:]
+        finally:
+            os.close(descriptor)
+
+
+class AsyncDecisionLog:
+    """Move best-effort disk writes off the synchronous plugin protocol loop."""
+
+    def __init__(self, decision_log=None, max_pending=DECISION_LOG_QUEUE_SIZE):
+        self.decision_log = decision_log or DecisionLog()
+        self.pending = queue.Queue(maxsize=max_pending)
+        self._closed = False
+        self.worker = threading.Thread(
+            target=self._run,
+            daemon=True,
+            name="write-policy-decision-log",
+        )
+        self.worker.start()
+
+    def write(self, record):
+        if self._closed:
+            return False
+        try:
+            self.pending.put_nowait(record)
+        except queue.Full:
+            return False
+        return True
+
+    def _run(self):
+        while True:
+            record = self.pending.get()
+            try:
+                if record is None:
+                    return
+                self.decision_log.write(record)
+            finally:
+                self.pending.task_done()
+
+    def close(self, timeout=1):
+        self._closed = True
+        try:
+            self.pending.put_nowait(None)
+        except queue.Full:
+            return
+        self.worker.join(timeout)
+
+
 class WritePolicyRuntime:
     """Stateful, testable write-policy decision runtime."""
 
@@ -333,6 +497,11 @@ class WritePolicyRuntime:
 
     def process(self, request, now=None, monotonic_now=None):
         """Return a strfry response, or None for ignorable messages."""
+        decision = self.process_with_details(request, now, monotonic_now)
+        return None if decision is None else decision.response
+
+    def process_with_details(self, request, now=None, monotonic_now=None):
+        """Return the response together with safe, stable decision metadata."""
         if not isinstance(request, dict):
             return None
         if request.get("type") != "new":
@@ -342,24 +511,47 @@ class WritePolicyRuntime:
         event_id = event.get("id") if isinstance(event, dict) else None
         if not isinstance(event_id, str) or not event_id:
             return None
+        policy = self.policies.reload()
+        source_type = request.get("sourceType")
+        details = {
+            "policy_mode": policy.mode,
+            "event_id": event_id,
+            "pubkey": (
+                event.get("pubkey")
+                if isinstance(event, dict) and isinstance(event.get("pubkey"), str)
+                else None
+            ),
+            "kind": (
+                event.get("kind")
+                if isinstance(event, dict)
+                and _is_bounded_int(event.get("kind"), 0, 2147483647)
+                else None
+            ),
+            "source_ip": normalize_source_ip(request.get("sourceInfo")),
+            "source_type": source_type if isinstance(source_type, str) else None,
+        }
         if not isinstance(event, dict) or not isinstance(event.get("pubkey"), str):
             self.counters["malformed"] += 1
-            return _reject(event_id, "blocked: malformed write-policy request")
+            return Decision(
+                _reject(event_id, "blocked: malformed write-policy request"),
+                "malformed",
+                **details,
+            )
 
         blocklist = self.blocklists.reload()
-        policy = self.policies.reload()
         pubkey = event["pubkey"]
         if pubkey in blocklist:
             self.counters["blocked"] += 1
-            return _reject(event_id, "blocked: pubkey is banned")
+            return Decision(
+                _reject(event_id, "blocked: pubkey is banned"), "banned", **details
+            )
 
-        source_type = request.get("sourceType")
         if isinstance(source_type, str) and source_type.lower() in NON_NETWORK_SOURCE_TYPES:
             self.counters["bypassed"] += 1
-            return _accept(event_id)
+            return Decision(_accept(event_id), "non_network_bypass", **details)
         if policy.mode == "off":
             self.counters["accepted_off"] += 1
-            return _accept(event_id)
+            return Decision(_accept(event_id), "policy_off", **details)
 
         now = int(time.time()) if now is None else now
         stale = now > policy.expires_at
@@ -400,21 +592,54 @@ class WritePolicyRuntime:
                 else:
                     self.counters["monitor_pow_failed"] += 1
             self.counters["accepted_monitor"] += 1
-            return _accept(event_id)
+            simulated_action, simulated_reason = _enforced_result(
+                trusted, rate_allowed, pow_valid, commitment_valid
+            )
+            return Decision(
+                _accept(event_id),
+                "monitor",
+                simulated_action=simulated_action,
+                simulated_reason=simulated_reason,
+                **details,
+            )
         if trusted:
             self.counters["accepted_trusted"] += 1
-            return _accept(event_id)
+            return Decision(_accept(event_id), "trusted", **details)
         if not rate_allowed:
             self.counters["rate_limited"] += 1
-            return _reject(event_id, "rate-limited: too many events from source")
+            return Decision(
+                _reject(event_id, "rate-limited: too many events from source"),
+                "rate_limited",
+                **details,
+            )
         if not pow_valid:
             self.counters["pow_rejected"] += 1
-            return _reject(event_id, "pow: insufficient leading-zero bits")
+            return Decision(
+                _reject(event_id, "pow: insufficient leading-zero bits"),
+                "insufficient_pow",
+                **details,
+            )
         if not commitment_valid:
             self.counters["pow_rejected"] += 1
-            return _reject(event_id, "pow: missing nonce difficulty commitment")
+            return Decision(
+                _reject(event_id, "pow: missing nonce difficulty commitment"),
+                "missing_pow_commitment",
+                **details,
+            )
         self.counters["accepted_pow"] += 1
-        return _accept(event_id)
+        return Decision(_accept(event_id), "valid_pow", **details)
+
+
+def _enforced_result(trusted, rate_allowed, pow_valid, commitment_valid):
+    if trusted:
+        return "accept", "trusted"
+    if not rate_allowed:
+        return "reject", "rate_limited"
+    if not pow_valid:
+        return "reject", "insufficient_pow"
+    if not commitment_valid:
+        return "reject", "missing_pow_commitment"
+    return "accept", "valid_pow"
 
 
 def _accept(event_id):
@@ -425,20 +650,34 @@ def _reject(event_id, message):
     return {"id": event_id, "action": "reject", "msg": message}
 
 
-def main(stdin=None, stdout=None):
+def main(stdin=None, stdout=None, decision_log=None):
     """Run the strfry JSONL plugin protocol loop."""
     stdin = sys.stdin if stdin is None else stdin
     stdout = sys.stdout if stdout is None else stdout
     runtime = WritePolicyRuntime()
-    for line in stdin:
-        try:
-            request = json.loads(line)
-        except (json.JSONDecodeError, TypeError):
-            continue
-        response = runtime.process(request)
-        if response is not None:
-            print(json.dumps(response, separators=(",", ":")), file=stdout, flush=True)
-            runtime.flush_stats()
+    owns_log = decision_log is None
+    decision_log = AsyncDecisionLog() if owns_log else decision_log
+    try:
+        for line in stdin:
+            try:
+                request = json.loads(line)
+            except (json.JSONDecodeError, TypeError):
+                continue
+            decision = runtime.process_with_details(request)
+            if decision is not None:
+                print(
+                    json.dumps(decision.response, separators=(",", ":")),
+                    file=stdout,
+                    flush=True,
+                )
+                try:
+                    decision_log.write(decision.log_record())
+                except (OSError, OverflowError, TypeError, ValueError):
+                    pass
+                runtime.flush_stats()
+    finally:
+        if owns_log:
+            decision_log.close()
 
 
 if __name__ == "__main__":

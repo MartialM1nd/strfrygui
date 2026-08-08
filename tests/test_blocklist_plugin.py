@@ -1,6 +1,10 @@
+import fcntl
 import io
 import json
 import os
+import stat
+import threading
+import time
 
 from utils import blocklist_plugin as plugin
 
@@ -257,6 +261,220 @@ def test_main_is_jsonl_and_ignores_unknown_messages(monkeypatch, tmp_path):
     )
     stdout = io.StringIO()
 
-    plugin.main(stdin, stdout)
+    plugin.main(
+        stdin,
+        stdout,
+        plugin.DecisionLog(str(tmp_path / "write_policy_events.jsonl")),
+    )
 
     assert json.loads(stdout.getvalue()) == {"id": EVENT_ID, "action": "accept"}
+
+
+def run_main(subject, log_path, requests, monkeypatch, stdout=None):
+    monkeypatch.setattr(plugin, "WritePolicyRuntime", lambda: subject)
+    stdin = io.StringIO("".join(json.dumps(value) + "\n" for value in requests))
+    stdout = io.StringIO() if stdout is None else stdout
+    plugin.main(stdin, stdout, plugin.DecisionLog(str(log_path)))
+    records = [json.loads(line) for line in log_path.read_text().splitlines()]
+    return stdout, records
+
+
+def test_main_logs_accept_reject_and_monitor_decisions_without_sensitive_data(
+    monkeypatch, tmp_path
+):
+    enforce = runtime(
+        tmp_path / "enforce",
+        policy_data(pow_difficulty=20),
+        ["banned"],
+    )
+    sensitive_request = request(
+        "root",
+        sourceInfo={"ip": "[2001:0db8::1]:7777", "secret": "raw-source-secret"},
+    )
+    sensitive_request["event"].update(
+        content="content-secret",
+        sig="signature-secret",
+        tags=[["secret-tag"]],
+        kind=1,
+    )
+    monitor = runtime(
+        tmp_path / "monitor-log",
+        policy_data(mode="monitor", pow_difficulty=20),
+    )
+    _, accepted = run_main(
+        enforce,
+        tmp_path / "accepted.jsonl",
+        [sensitive_request],
+        monkeypatch,
+    )
+
+    rejected_request = request(event_id="f" * 64, kind="not-an-integer")
+    _, rejected = run_main(
+        enforce,
+        tmp_path / "rejected.jsonl",
+        [rejected_request],
+        monkeypatch,
+    )
+
+    _, monitored = run_main(
+        monitor,
+        tmp_path / "monitored.jsonl",
+        [request(event_id="f" * 64)],
+        monkeypatch,
+    )
+
+    timestamp_ms = accepted[0].pop("timestamp_ms")
+    assert isinstance(timestamp_ms, int)
+    assert timestamp_ms > 1_000_000_000_000
+    assert accepted[0] == {
+        "action": "accept",
+        "reason": "trusted",
+        "event_id": EVENT_ID,
+        "pubkey": "root",
+        "kind": 1,
+        "source_ip": "2001:db8::1",
+        "source_type": "IP4",
+        "policy_mode": "enforce",
+    }
+    serialized = json.dumps(accepted[0])
+    assert "content-secret" not in serialized
+    assert "signature-secret" not in serialized
+    assert "secret-tag" not in serialized
+    assert "raw-source-secret" not in serialized
+    assert rejected[0]["action"] == "reject"
+    assert rejected[0]["reason"] == "insufficient_pow"
+    assert rejected[0]["kind"] is None
+    assert monitored[0]["action"] == "accept"
+    assert monitored[0]["reason"] == "monitor"
+    assert monitored[0]["simulated_action"] == "reject"
+    assert monitored[0]["simulated_reason"] == "insufficient_pow"
+
+
+def test_main_flushes_response_before_logging(monkeypatch, tmp_path):
+    events = []
+
+    class TrackingOutput(io.StringIO):
+        def flush(self):
+            events.append("flush")
+            super().flush()
+
+    class TrackingLog:
+        def write(self, record):
+            events.append("log")
+
+    subject = runtime(tmp_path)
+    monkeypatch.setattr(plugin, "WritePolicyRuntime", lambda: subject)
+
+    plugin.main(
+        io.StringIO(json.dumps(request()) + "\n"), TrackingOutput(), TrackingLog()
+    )
+
+    assert events == ["flush", "log"]
+
+
+def test_decision_log_rotates_with_one_bounded_backup_and_mode_0640(tmp_path):
+    path = tmp_path / "events.jsonl"
+    subject = plugin.DecisionLog(str(path), max_bytes=180)
+
+    for sequence in range(30):
+        subject.write({"sequence": sequence, "value": "x" * 30})
+
+    backup = tmp_path / "events.jsonl.1"
+    assert 0 < path.stat().st_size <= 180
+    assert 0 < backup.stat().st_size <= 180
+    assert not (tmp_path / "events.jsonl.2").exists()
+    assert stat.S_IMODE(path.stat().st_mode) == 0o640
+    assert stat.S_IMODE(backup.stat().st_mode) == 0o640
+    assert stat.S_IMODE((tmp_path / "events.jsonl.lock").stat().st_mode) == 0o640
+
+
+def test_decision_log_contention_and_failure_do_not_change_response(
+    monkeypatch, tmp_path
+):
+    subject = runtime(tmp_path / "runtime")
+    monkeypatch.setattr(plugin, "WritePolicyRuntime", lambda: subject)
+    log_path = tmp_path / "events.jsonl"
+    decision_log = plugin.DecisionLog(str(log_path))
+    lock_descriptor = os.open(
+        decision_log.lock_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o640
+    )
+    fcntl.flock(lock_descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    stdout = io.StringIO()
+    try:
+        plugin.main(
+            io.StringIO(json.dumps(request()) + "\n"), stdout, decision_log
+        )
+    finally:
+        os.close(lock_descriptor)
+
+    assert json.loads(stdout.getvalue())["action"] == "accept"
+    assert not log_path.exists()
+
+    class FailingLog:
+        def write(self, record):
+            raise OSError("unwritable")
+
+    stdout = io.StringIO()
+    plugin.main(io.StringIO(json.dumps(request()) + "\n"), stdout, FailingLog())
+    assert json.loads(stdout.getvalue())["action"] == "accept"
+
+
+def test_decision_log_corrects_existing_file_permissions(tmp_path):
+    path = tmp_path / "events.jsonl"
+    lock_path = tmp_path / "events.jsonl.lock"
+    path.write_text("")
+    lock_path.write_text("")
+    path.chmod(0o666)
+    lock_path.chmod(0o666)
+
+    plugin.DecisionLog(str(path)).write({"action": "accept"})
+
+    assert stat.S_IMODE(path.stat().st_mode) == 0o640
+    assert stat.S_IMODE(lock_path.stat().st_mode) == 0o640
+
+
+def test_async_decision_log_drops_when_queue_is_full_without_blocking():
+    started = threading.Event()
+    release = threading.Event()
+
+    class SlowLog:
+        def write(self, record):
+            started.set()
+            release.wait(1)
+
+    subject = plugin.AsyncDecisionLog(SlowLog(), max_pending=1)
+    assert subject.write({"sequence": 1}) is True
+    assert started.wait(1)
+    assert subject.write({"sequence": 2}) is True
+
+    before = time.monotonic()
+    assert subject.write({"sequence": 3}) is False
+    assert time.monotonic() - before < 0.1
+    release.set()
+    subject.pending.join()
+    subject.close()
+
+
+def test_decision_log_bounds_untrusted_identifier_fields(tmp_path):
+    subject = runtime(tmp_path)
+    oversized = request(
+        pubkey="p" * 1000,
+        event_id="e" * 10000,
+        sourceType="source" * 100,
+    )
+
+    record = subject.process_with_details(oversized).log_record(timestamp_ms=1)
+    serialized = json.dumps(record)
+
+    assert record["event_id"] is None
+    assert record["pubkey"] is None
+    assert record["source_type"] is None
+    assert len(serialized) < plugin.DECISION_LOG_MAX_RECORD_BYTES
+
+
+def test_decision_log_drops_record_when_runtime_directory_is_missing(tmp_path):
+    path = tmp_path / "missing" / "events.jsonl"
+
+    plugin.DecisionLog(str(path)).write({"action": "accept"})
+
+    assert not path.exists()
