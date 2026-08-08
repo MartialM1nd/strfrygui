@@ -16,6 +16,8 @@ from models import db
 def app(tmp_path):
     app = Flask(__name__)
     blocklist_path = tmp_path / "blocklist.json"
+    trust_policy_path = tmp_path / "trust_policy.json"
+    trust_stats_path = tmp_path / "trust_policy_stats.json"
     plugin_path = tmp_path / "blocklist_plugin.py"
     plugin_path.write_text("#!/bin/sh\nexit 0\n")
     plugin_path.chmod(0o755)
@@ -23,6 +25,8 @@ def app(tmp_path):
         SQLALCHEMY_DATABASE_URI="sqlite://",
         SQLALCHEMY_TRACK_MODIFICATIONS=False,
         BANNED_PUBKEYS_FILE=str(blocklist_path),
+        TRUST_POLICY_FILE=str(trust_policy_path),
+        TRUST_POLICY_STATS_FILE=str(trust_stats_path),
         BLOCKLIST_PLUGIN_PATH=str(plugin_path),
         MODERATION_PURGE_TIMEOUT=1,
     )
@@ -32,6 +36,8 @@ def app(tmp_path):
     old_config = Config.STRFRY_CONFIG
     old_blocklist = Config.BANNED_PUBKEYS_FILE
     old_plugin = Config.BLOCKLIST_PLUGIN_PATH
+    old_trust_policy = Config.TRUST_POLICY_FILE
+    old_trust_stats = Config.TRUST_POLICY_STATS_FILE
     old_timeout = Config.MODERATION_PURGE_TIMEOUT
     old_scan_limit = Config.DOMAIN_SCAN_EVENT_LIMIT
     old_scan_timeout = Config.DOMAIN_SCAN_TIMEOUT
@@ -43,6 +49,8 @@ def app(tmp_path):
     Config.STRFRY_CONFIG = ""
     Config.BANNED_PUBKEYS_FILE = str(blocklist_path)
     Config.BLOCKLIST_PLUGIN_PATH = str(plugin_path)
+    Config.TRUST_POLICY_FILE = str(trust_policy_path)
+    Config.TRUST_POLICY_STATS_FILE = str(trust_stats_path)
     Config.MODERATION_PURGE_TIMEOUT = 1
     Config.DOMAIN_SCAN_EVENT_LIMIT = 500
     Config.DOMAIN_SCAN_TIMEOUT = 30
@@ -61,6 +69,8 @@ def app(tmp_path):
     Config.STRFRY_CONFIG = old_config
     Config.BANNED_PUBKEYS_FILE = old_blocklist
     Config.BLOCKLIST_PLUGIN_PATH = old_plugin
+    Config.TRUST_POLICY_FILE = old_trust_policy
+    Config.TRUST_POLICY_STATS_FILE = old_trust_stats
     Config.MODERATION_PURGE_TIMEOUT = old_timeout
     Config.DOMAIN_SCAN_EVENT_LIMIT = old_scan_limit
     Config.DOMAIN_SCAN_TIMEOUT = old_scan_timeout

@@ -176,6 +176,20 @@ You can also configure the plugin path via the **Plugins** page in the admin UI 
 
 Unbanning triggers the same sync — the pubkey is removed from `blocklist.json` and the plugin reloads automatically.
 
+### Web of Trust and Proof of Work
+
+The Plugins page can build a bounded, personalized web of trust from signed kind-3 follow lists already stored on this relay. It never fetches follow lists from external relays. Trusted roots score 100, direct follows score 80, and two-hop identities score 40 plus 5 for each distinct direct-follow endorsement. Identities below the configured score can be required to provide NIP-13 proof of work.
+
+The protection mode is managed without restarting strfry:
+
+- **Off** keeps pubkey bans active but does not enforce trust or proof of work.
+- **Monitor** computes decisions and counters without rejecting low-trust events.
+- **Enforce** requires the configured proof-of-work difficulty from authors below the trust threshold.
+
+The initial roots are `npub12ay99qrgh9vdk0eneu8t7ccfd7x8srt3ngvdajh5mufw5dpp590su28yuc` and `npub18ams6ewn5aj2n3wt2qawzglx9mr4nzksxhvrdc4gzrecw7n5tvjqctp424`. The initial trust threshold is 50 and untrusted proof-of-work difficulty is 20. The same page manages trusted root npubs, trust and proof-of-work thresholds, NIP-13 difficulty commitment, refresh frequency, low-trust rate limits, build status, and manual rebuilds. Settings are published atomically to `trust_policy.json`; runtime counters are periodically written to `trust_policy_stats.json`. Failed graph builds retain the last valid snapshot, and stale snapshots trust only configured roots until a successful rebuild.
+
+Graph construction is limited to two hops, 5,000 direct identities, 100,000 total identities, and 500,000 follow edges. Individual follow lists above 2,000 entries do not contribute trust. Local imports, streams, syncs, and stored-event replay bypass trust and proof-of-work checks, while explicit pubkey bans always take precedence.
+
 ### NIP-05 Domain Bans
 
 Moderators can add an exact NIP-05 domain rule from the Moderation page. StrfryGUI enumerates the domain's HTTPS `/.well-known/nostr.json` names map, then requires each listed pubkey's latest signed kind-0 profile to claim the matching identifier. Profiles are searched locally, on configured metadata relays, and on valid `wss://` relay hints from the directory.

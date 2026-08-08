@@ -18,6 +18,8 @@ class Config:
     STRFRY_DB_PATH = os.getenv('STRFRY_DB_PATH', '/var/lib/strfry')
     STRFRY_METRICS_URL = os.getenv('STRFRY_METRICS_URL', 'http://localhost:7777/metrics')
     BANNED_PUBKEYS_FILE = os.path.join(APP_DIR, 'blocklist.json')
+    TRUST_POLICY_FILE = os.path.join(APP_DIR, 'trust_policy.json')
+    TRUST_POLICY_STATS_FILE = os.path.join(APP_DIR, 'trust_policy_stats.json')
     BLOCKLIST_PLUGIN_PATH = os.path.join(APP_DIR, 'utils', 'blocklist_plugin.py')
     MODERATION_PURGE_TIMEOUT = int(os.getenv('MODERATION_PURGE_TIMEOUT', '30'))
     DOMAIN_SCAN_EVENT_LIMIT = int(os.getenv('DOMAIN_SCAN_EVENT_LIMIT', '500'))

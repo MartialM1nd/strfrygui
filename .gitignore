@@ -6,3 +6,7 @@ instance/
 .pytest_cache/
 .env
 migrations/
+blocklist.json
+trust_policy.json
+trust_policy_stats.json
+trust_policy.json.lock

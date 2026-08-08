@@ -93,6 +93,98 @@
 </div>
 
 <div class="card mb-4">
+    <div class="card-header d-flex justify-content-between align-items-center">
+        <h5 class="mb-0"><i class="bi bi-diagram-3"></i> Web of Trust and Proof of Work</h5>
+        {% if wot_policy.mode == 'enforce' %}
+        <span class="badge bg-danger">Enforce</span>
+        {% elif wot_policy.mode == 'monitor' %}
+        <span class="badge bg-warning text-dark">Monitor</span>
+        {% else %}
+        <span class="badge bg-secondary">Off</span>
+        {% endif %}
+    </div>
+    <div class="card-body">
+        <div class="alert alert-info">
+            Pubkey bans remain active in every mode. Off accepts other authors, Monitor records policy decisions without rejecting, and Enforce requires PoW from authors below the trust threshold.
+        </div>
+        <form method="POST" action="{{ url_for('update_wot_policy') }}">
+            {{ wot_form.hidden_tag() }}
+            <div class="row g-3">
+                <div class="col-lg-4">
+                    {{ wot_form.mode.label(class="form-label") }}
+                    {{ wot_form.mode(class="form-select") }}
+                </div>
+                <div class="col-lg-4">
+                    {{ wot_form.trust_threshold.label(class="form-label") }}
+                    {{ wot_form.trust_threshold(class="form-control", min="0", max="100") }}
+                    <div class="form-text">Authors at or above this score bypass PoW.</div>
+                </div>
+                <div class="col-lg-4">
+                    {{ wot_form.pow_difficulty.label(class="form-label") }}
+                    {{ wot_form.pow_difficulty(class="form-control", min="0", max="64") }}
+                    <div class="form-text">20 is normal, 22 elevated, and 24 emergency.</div>
+                </div>
+                <div class="col-12">
+                    {{ wot_form.root_npubs.label(class="form-label") }}
+                    {{ wot_form.root_npubs(class="form-control font-monospace", rows="3") }}
+                    <div class="form-text">One npub per line. The graph uses only locally stored, signed kind-3 follow lists.</div>
+                </div>
+                <div class="col-md-4">
+                    {{ wot_form.refresh_interval_minutes.label(class="form-label") }}
+                    {{ wot_form.refresh_interval_minutes(class="form-control", min="5", max="1440") }}
+                </div>
+                <div class="col-md-4">
+                    {{ wot_form.rate_limit_per_minute.label(class="form-label") }}
+                    {{ wot_form.rate_limit_per_minute(class="form-control", min="0", max="100000") }}
+                </div>
+                <div class="col-md-4">
+                    {{ wot_form.rate_limit_burst.label(class="form-label") }}
+                    {{ wot_form.rate_limit_burst(class="form-control", min="0", max="10000") }}
+                </div>
+                <div class="col-12">
+                    <div class="form-check">
+                        {{ wot_form.require_pow_commitment(class="form-check-input") }}
+                        {{ wot_form.require_pow_commitment.label(class="form-check-label") }}
+                    </div>
+                    <div class="form-text">Reject lucky low-target events that did not commit to the relay's required difficulty.</div>
+                </div>
+            </div>
+            <button type="submit" class="btn btn-primary mt-3"><i class="bi bi-save"></i> Save and Publish Policy</button>
+        </form>
+
+        <hr>
+        <div class="row g-3 align-items-end">
+            <div class="col-md-9">
+                <table class="table table-sm mb-0">
+                    <tr><td>Build status</td><td><span class="badge bg-{% if wot_state.status == 'idle' %}success{% elif wot_state.status == 'failed' %}danger{% else %}warning text-dark{% endif %}">{{ wot_state.status }}</span></td></tr>
+                    <tr><td>Policy revision</td><td>{{ wot_state.revision }}</td></tr>
+                    <tr><td>Last generated</td><td>{{ wot_state.generated_at|datetime if wot_state.generated_at else 'Never' }}</td></tr>
+                    <tr><td>Graph</td><td>{{ wot_state.root_count }} roots, {{ wot_state.direct_count }} direct follows, {{ wot_state.identity_count }} identities, {{ wot_state.edge_count }} edges{% if wot_state.truncated %} <span class="badge bg-warning text-dark">bounded/truncated</span>{% endif %}</td></tr>
+                </table>
+                {% if wot_state.last_error %}<div class="text-danger small mt-2">{{ wot_state.last_error }}</div>{% endif %}
+            </div>
+            <div class="col-md-3 text-md-end">
+                <form method="POST" action="{{ url_for('rebuild_wot_policy') }}">
+                    {% if wot_form.csrf_token is defined %}{{ wot_form.csrf_token }}{% endif %}
+                    <button class="btn btn-outline-primary" type="submit" {% if wot_state.status in ['queued', 'running'] %}disabled{% endif %}>
+                        <i class="bi bi-arrow-repeat"></i> Rebuild Now
+                    </button>
+                </form>
+            </div>
+        </div>
+        {% if wot_stats.counters %}
+        <h6 class="mt-4">Runtime Decisions</h6>
+        <div class="d-flex flex-wrap gap-2">
+            {% for name, count in wot_stats.counters|dictsort %}
+            <span class="badge bg-body-secondary text-body border">{{ name|replace('_', ' ') }}: {{ count }}</span>
+            {% endfor %}
+        </div>
+        <div class="small text-muted mt-2">Updated {{ wot_stats.updated_at|datetime }}</div>
+        {% endif %}
+    </div>
+</div>
+
+<div class="card mb-4">
     <div class="card-header">
         <h5 class="mb-0"><i class="bi bi-gear"></i> strfry Write Policy Configuration</h5>
     </div>

@@ -231,6 +231,58 @@ class WritePolicyProjection(db.Model):
     published_at = db.Column(db.DateTime)
 
 
+class WoTPolicy(db.Model):
+    __tablename__ = 'wot_policy'
+    __table_args__ = (
+        db.CheckConstraint(
+            "mode IN ('off', 'monitor', 'enforce')",
+            name='ck_wot_policy_mode',
+        ),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    mode = db.Column(db.String(20), nullable=False, default='off')
+    root_npubs = db.Column(db.Text, nullable=False, default='[]')
+    trust_threshold = db.Column(db.Integer, nullable=False, default=50)
+    pow_difficulty = db.Column(db.Integer, nullable=False, default=20)
+    require_pow_commitment = db.Column(db.Boolean, nullable=False, default=True)
+    refresh_interval_minutes = db.Column(db.Integer, nullable=False, default=30)
+    rate_limit_per_minute = db.Column(db.Integer, nullable=False, default=30)
+    rate_limit_burst = db.Column(db.Integer, nullable=False, default=10)
+    updated_at = db.Column(db.DateTime, default=utcnow, onupdate=utcnow)
+
+    @property
+    def roots(self):
+        try:
+            roots = json.loads(self.root_npubs)
+        except (TypeError, json.JSONDecodeError):
+            return []
+        return roots if isinstance(roots, list) else []
+
+
+class WoTBuildState(db.Model):
+    __tablename__ = 'wot_build_state'
+    __table_args__ = (
+        db.CheckConstraint(
+            "status IN ('idle', 'queued', 'running', 'failed')",
+            name='ck_wot_build_status',
+        ),
+    )
+
+    id = db.Column(db.Integer, primary_key=True)
+    status = db.Column(db.String(20), nullable=False, default='idle', index=True)
+    revision = db.Column(db.Integer, nullable=False, default=0)
+    started_at = db.Column(db.DateTime)
+    finished_at = db.Column(db.DateTime)
+    generated_at = db.Column(db.DateTime)
+    root_count = db.Column(db.Integer, nullable=False, default=0)
+    direct_count = db.Column(db.Integer, nullable=False, default=0)
+    identity_count = db.Column(db.Integer, nullable=False, default=0)
+    edge_count = db.Column(db.Integer, nullable=False, default=0)
+    truncated = db.Column(db.Boolean, nullable=False, default=False)
+    last_error = db.Column(db.Text)
+
+
 class EventPurge(db.Model):
     __tablename__ = 'event_purges'
     __table_args__ = (

@@ -1,6 +1,8 @@
 import subprocess
 import json
 import os
+import selectors
+import tempfile
 import time
 from config import Config
 
@@ -110,6 +112,63 @@ def scan_events(filter_json, limit=100, timeout=300):
             except json.JSONDecodeError:
                 continue
     return events
+
+
+def iter_scan_events(filter_json, limit=100, timeout=300):
+    """Stream events from a bounded local strfry scan."""
+    filter_with_limit = {**filter_json, 'limit': limit}
+    cmd = [Config.STRFRY_BINARY]
+    if Config.STRFRY_CONFIG:
+        cmd.extend(['--config', Config.STRFRY_CONFIG])
+    cmd.extend(['scan', json.dumps(filter_with_limit)])
+
+    stderr_file = tempfile.TemporaryFile(mode='w+t')
+    try:
+        process = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=stderr_file,
+            text=True,
+        )
+    except (FileNotFoundError, OSError) as exc:
+        stderr_file.close()
+        raise StrfryError(f"Failed to execute strfry: {exc}") from exc
+
+    selector = selectors.DefaultSelector()
+    selector.register(process.stdout, selectors.EVENT_READ)
+    deadline = time.monotonic() + timeout
+    yielded = 0
+    try:
+        while yielded < limit:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or not selector.select(remaining):
+                process.kill()
+                raise StrfryError("Command timed out")
+            line = process.stdout.readline()
+            if not line:
+                break
+            try:
+                event = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            yielded += 1
+            yield event
+
+        remaining = max(0.1, deadline - time.monotonic())
+        return_code = process.wait(timeout=remaining)
+        if return_code != 0:
+            stderr_file.seek(0)
+            error = stderr_file.read().strip()
+            raise StrfryError(error or f"Command failed with code {return_code}")
+    except subprocess.TimeoutExpired as exc:
+        process.kill()
+        raise StrfryError("Command timed out") from exc
+    finally:
+        selector.close()
+        if process.poll() is None:
+            process.kill()
+            process.wait()
+        stderr_file.close()
 
 
 def count_events(filter_json):

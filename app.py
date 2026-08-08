@@ -1,4 +1,5 @@
 import csv
+import json
 import os
 import queue
 import threading
@@ -7,12 +8,12 @@ from datetime import datetime, timedelta
 from flask import Flask, render_template, redirect, url_for, flash, request, send_file, jsonify, abort
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from flask_wtf import FlaskForm
-from wtforms import StringField, PasswordField, SelectField, TextAreaField, IntegerField
-from wtforms.validators import DataRequired, Length, EqualTo, Optional, Regexp, ValidationError
+from wtforms import BooleanField, StringField, PasswordField, SelectField, TextAreaField, IntegerField
+from wtforms.validators import DataRequired, InputRequired, Length, EqualTo, NumberRange, Optional, Regexp, ValidationError
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from sqlalchemy import func, or_
-from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash
 from io import StringIO, BytesIO
@@ -21,7 +22,7 @@ import tempfile
 from config import Config, Security
 from models import (
     db, User, AuditLog, ModerationReport, BannedPubkey, BannedDomain, MetadataRelay,
-    EventPurge, PubkeyBanSource, utcnow,
+    EventPurge, PubkeyBanSource, WoTBuildState, utcnow,
 )
 from utils.strfry import (
     scan_events, delete_events, export_events, import_events,
@@ -34,6 +35,14 @@ from utils.auth import admin_required, moderator_required, viewer_or_higher, per
 from utils.moderation import ModerationDecisions, ModerationError
 from utils.nip05 import normalize_domain
 from utils.domain_view import domain_identity_page, unresolved_identity_page
+from utils.wot import (
+    WoTError,
+    commit_policy_settings,
+    initialize_wot,
+    normalize_roots,
+    rebuild_policy,
+    republish_policy_settings,
+)
 
 _compaction = {
     'running': False,
@@ -43,6 +52,7 @@ _compaction = {
     'thread': None,
 }
 _domain_scan_queue = queue.Queue(maxsize=1)
+_wot_build_queue = queue.Queue(maxsize=1)
 
 
 def _run_compaction():
@@ -325,6 +335,31 @@ class PluginForm(FlaskForm):
     lookback = IntegerField('Lookback (seconds)', default=0, validators=[Optional()])
 
 
+class WoTPolicyForm(FlaskForm):
+    mode = SelectField('Protection Mode', choices=[
+        ('off', 'Off - blocklist only'),
+        ('monitor', 'Monitor - score without rejecting'),
+        ('enforce', 'Enforce - require PoW below threshold'),
+    ], validators=[DataRequired()])
+    root_npubs = TextAreaField('Trusted Root npubs', validators=[DataRequired()])
+    trust_threshold = IntegerField('Trust Score to Bypass PoW', validators=[
+        InputRequired(), NumberRange(min=0, max=100),
+    ])
+    pow_difficulty = IntegerField('Required PoW Difficulty', validators=[
+        InputRequired(), NumberRange(min=0, max=64),
+    ])
+    require_pow_commitment = BooleanField('Require NIP-13 difficulty commitment')
+    refresh_interval_minutes = IntegerField('Refresh Interval (minutes)', validators=[
+        DataRequired(), NumberRange(min=5, max=1440),
+    ])
+    rate_limit_per_minute = IntegerField('Low-Trust Events per Minute', validators=[
+        InputRequired(), NumberRange(min=0, max=100000),
+    ])
+    rate_limit_burst = IntegerField('Low-Trust Burst', validators=[
+        InputRequired(), NumberRange(min=0, max=10000),
+    ])
+
+
 @app.context_processor
 def inject_user():
     return dict(User=User)
@@ -486,6 +521,96 @@ def _domain_scan_lease_seconds():
     scan_timeout = max(1, min(Config.DOMAIN_SCAN_TIMEOUT, 300))
     verification_timeout = max(1, min(Config.DOMAIN_SCAN_TOTAL_TIMEOUT, 300))
     return scan_timeout + verification_timeout + 60
+
+
+def _run_wot_rebuild():
+    with app.app_context():
+        state = rebuild_policy()
+        if state.last_error == 'Trusted roots changed during build; rebuilding with new roots':
+            queue_wot_rebuild()
+
+
+def _wot_build_worker():
+    while True:
+        _wot_build_queue.get()
+        try:
+            _run_wot_rebuild()
+        except Exception as exc:
+            app.logger.exception('Web-of-trust build failed unexpectedly')
+            try:
+                with app.app_context():
+                    db.session.rollback()
+                    state = db.session.get(WoTBuildState, 1)
+                    if state is not None:
+                        state.status = 'failed'
+                        state.finished_at = utcnow()
+                        state.last_error = str(exc)
+                        db.session.commit()
+            except SQLAlchemyError:
+                app.logger.exception('Could not record web-of-trust worker failure')
+        finally:
+            _wot_build_queue.task_done()
+
+
+threading.Thread(
+    target=_wot_build_worker,
+    daemon=True,
+    name='wot-build-worker',
+).start()
+
+
+def queue_wot_rebuild():
+    initialize_wot()
+    stale_before = utcnow() - timedelta(seconds=360)
+    claimed = WoTBuildState.query.filter(
+        WoTBuildState.id == 1,
+        or_(
+            WoTBuildState.status.notin_(['queued', 'running']),
+            WoTBuildState.started_at.is_(None),
+            WoTBuildState.started_at < stale_before,
+        ),
+    ).update({
+        'status': 'queued',
+        'started_at': utcnow(),
+        'last_error': None,
+    }, synchronize_session=False)
+    db.session.commit()
+    if not claimed:
+        return False
+    try:
+        _wot_build_queue.put_nowait(True)
+    except queue.Full:
+        state = db.session.get(WoTBuildState, 1)
+        state.status = 'idle'
+        state.started_at = None
+        db.session.commit()
+        return False
+    return True
+
+
+def _wot_refresh_due(policy, state):
+    if policy.mode == 'off':
+        return False
+    if state.status in ('queued', 'running'):
+        stale_before = utcnow() - timedelta(seconds=360)
+        return state.started_at is None or state.started_at < stale_before
+    if state.generated_at is None:
+        return True
+    return utcnow() - state.generated_at >= timedelta(
+        minutes=policy.refresh_interval_minutes
+    )
+
+
+def _wot_refresh_scheduler():
+    while True:
+        time.sleep(60)
+        with app.app_context():
+            try:
+                policy, state = initialize_wot()
+                if _wot_refresh_due(policy, state):
+                    queue_wot_rebuild()
+            except Exception:
+                app.logger.exception('Could not schedule web-of-trust refresh')
 
 
 def flash_moderation_outcome(outcome, success_message):
@@ -1221,6 +1346,7 @@ def config_view():
 @admin_required
 def plugins():
     form = PluginForm()
+    wot_form = WoTPolicyForm()
     error = None
     success = None
 
@@ -1231,12 +1357,19 @@ def plugins():
     plugin_installed = os.path.exists(plugin_path) and os.access(plugin_path, os.X_OK)
     blocklist_count = BannedPubkey.query.count()
     projection = ModerationDecisions.initialize_projection()
+    wot_policy, wot_state = initialize_wot()
+    try:
+        with open(app.config['TRUST_POLICY_STATS_FILE']) as stats_file:
+            wot_stats = json.load(stats_file)
+        if not isinstance(wot_stats, dict):
+            wot_stats = {}
+    except (OSError, json.JSONDecodeError):
+        wot_stats = {}
 
     if request.method == 'POST':
         if form.validate():
             updates = {}
-            if form.plugin_path.data:
-                updates['relay.writePolicy.plugin'] = form.plugin_path.data
+            updates['relay.writePolicy.plugin'] = form.plugin_path.data or ''
             if form.timeout.data is not None:
                 updates['relay.writePolicy.timeoutSeconds'] = str(form.timeout.data)
             if form.lookback.data is not None:
@@ -1262,9 +1395,78 @@ def plugins():
         form.timeout.data = 10
         form.lookback.data = 0
 
+    wot_form.mode.data = wot_policy.mode
+    wot_form.root_npubs.data = '\n'.join(wot_policy.roots)
+    wot_form.trust_threshold.data = wot_policy.trust_threshold
+    wot_form.pow_difficulty.data = wot_policy.pow_difficulty
+    wot_form.require_pow_commitment.data = wot_policy.require_pow_commitment
+    wot_form.refresh_interval_minutes.data = wot_policy.refresh_interval_minutes
+    wot_form.rate_limit_per_minute.data = wot_policy.rate_limit_per_minute
+    wot_form.rate_limit_burst.data = wot_policy.rate_limit_burst
+
     return render_template('plugins.html', form=form, error=error, success=success,
                            plugin_installed=plugin_installed, blocklist_count=blocklist_count,
-                           plugin_path=plugin_path, projection=projection)
+                           plugin_path=plugin_path, projection=projection,
+                           wot_form=wot_form, wot_policy=wot_policy, wot_state=wot_state,
+                           wot_stats=wot_stats)
+
+
+@app.route('/plugins/wot', methods=['POST'])
+@admin_required
+def update_wot_policy():
+    form = WoTPolicyForm()
+    if not form.validate_on_submit():
+        for errors in form.errors.values():
+            for message in errors:
+                flash(message, 'danger')
+        return redirect(url_for('plugins'))
+
+    try:
+        raw_roots = form.root_npubs.data.replace(',', '\n').splitlines()
+        roots = normalize_roots(raw_roots)
+        policy, _ = initialize_wot()
+        roots_changed = policy.roots != roots
+        policy.mode = form.mode.data
+        policy.root_npubs = json.dumps(roots)
+        policy.trust_threshold = form.trust_threshold.data
+        policy.pow_difficulty = form.pow_difficulty.data
+        policy.require_pow_commitment = form.require_pow_commitment.data
+        policy.refresh_interval_minutes = form.refresh_interval_minutes.data
+        policy.rate_limit_per_minute = form.rate_limit_per_minute.data
+        policy.rate_limit_burst = form.rate_limit_burst.data
+        commit_policy_settings(policy)
+        queued = queue_wot_rebuild() if policy.mode != 'off' else False
+        log_audit(
+            'wot_policy_updated',
+            f'Updated WoT policy mode={policy.mode}, threshold={policy.trust_threshold}, '
+            f'pow={policy.pow_difficulty}, roots={len(roots)}',
+        )
+    except (OSError, SQLAlchemyError, WoTError, ValueError) as exc:
+        db.session.rollback()
+        flash(str(exc), 'danger')
+        return redirect(url_for('plugins'))
+
+    message = 'Web-of-trust policy published.'
+    if queued:
+        message += ' Local graph rebuild queued.'
+    elif roots_changed:
+        message += ' Roots changed; use Rebuild now after the active build finishes.'
+    flash(message, 'success')
+    return redirect(url_for('plugins'))
+
+
+@app.route('/plugins/wot/rebuild', methods=['POST'])
+@admin_required
+def rebuild_wot_policy():
+    form = EmptyForm()
+    if not form.validate_on_submit():
+        abort(400)
+    if queue_wot_rebuild():
+        log_audit('wot_rebuild_queued', 'Queued local web-of-trust rebuild')
+        flash('Local web-of-trust rebuild queued.', 'success')
+    else:
+        flash('A web-of-trust rebuild is already queued or running.', 'warning')
+    return redirect(url_for('plugins'))
 
 
 @app.route('/connections')
@@ -1903,9 +2105,31 @@ def init_db():
         
         ModerationDecisions.initialize_projection()
         ModerationDecisions.reconcile_write_policy(force=True)
+        wot_policy, wot_state = initialize_wot()
+        stale_wot_before = utcnow() - timedelta(seconds=360)
+        if (
+            wot_state.status in ('queued', 'running')
+            and (
+                wot_state.started_at is None
+                or wot_state.started_at < stale_wot_before
+            )
+        ):
+            wot_state.status = 'failed'
+            wot_state.last_error = 'Build interrupted by application restart'
+            wot_state.started_at = None
+            db.session.commit()
+        republish_policy_settings(wot_policy)
+        if _wot_refresh_due(wot_policy, wot_state):
+            queue_wot_rebuild()
 
 
 init_db()
+
+threading.Thread(
+    target=_wot_refresh_scheduler,
+    daemon=True,
+    name='wot-refresh-scheduler',
+).start()
 
 
 if __name__ == '__main__':
