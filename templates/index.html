@@ -39,12 +39,12 @@
             <div class="dashboard-metric-detail" id="processCount">Process visibility unavailable</div>
         </article>
 
-        <article class="dashboard-metric">
+        <a class="dashboard-metric dashboard-metric-link" href="{{ url_for('connections') }}">
             <div class="dashboard-metric-icon"><i class="bi bi-broadcast-pin"></i></div>
             <div class="dashboard-metric-label">WebSocket connections</div>
             <div class="dashboard-metric-value" id="activeConnections">Unavailable</div>
-            <div class="dashboard-metric-detail" id="peakConnections">24h peak unavailable</div>
-        </article>
+            <div class="dashboard-metric-detail"><span id="peakConnections">24h peak unavailable</span> · Inspect <i class="bi bi-arrow-right"></i></div>
+        </a>
 
         <article class="dashboard-metric dashboard-metric-accent">
             <div class="dashboard-metric-icon"><i class="bi bi-shield-check"></i></div>

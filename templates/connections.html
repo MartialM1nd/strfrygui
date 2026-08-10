@@ -3,112 +3,252 @@
 {% block title %}Connections{% if relay_name %} - {{ relay_name }}{% endif %} - StrfryGUI{% endblock %}
 
 {% block content %}
-<h2 class="mb-4"><i class="bi bi-hdd-network"></i>{% if relay_name %} Connections for {{ relay_name }}{% else %} Connections & Status{% endif %}</h2>
+<div class="dashboard-shell">
+    <header class="dashboard-header mb-4">
+        <div>
+            <div class="dashboard-kicker">NETWORK CONTROL</div>
+            <h1 class="dashboard-title mb-1">Connection Operations</h1>
+            <div class="text-body-secondary small" id="connectionFreshness">Waiting for telemetry</div>
+        </div>
+        <div class="dashboard-status" id="connectionStatus" data-status="offline">
+            <span class="dashboard-status-dot"></span>
+            <span id="connectionStatusText">Unavailable</span>
+        </div>
+    </header>
 
-{% if metrics.error %}
-<div class="alert alert-danger">
-    <h5><i class="bi bi-exclamation-triangle"></i> Error</h5>
-    <p>{{ metrics.error }}</p>
-</div>
-{% else %}
-<div class="row mb-4">
-    <div class="col-md-12">
-        <div class="card">
-            <div class="card-header">
-                <h5 class="mb-0">Real-time Metrics</h5>
-            </div>
-            <div class="card-body">
-                <p class="text-muted">
-                    <i class="bi bi-info-circle"></i> 
-                    Metrics are fetched from <code>{{ config.STRFRY_METRICS_URL }}</code>.
-                    These values are cumulative since the last strfry restart.
-                </p>
-                <div class="row text-center">
-                    <div class="col-md-4">
-                        <div class="p-3">
-                            <h3 class="text-primary">{{ "{:,}".format(metrics.total_events) }}</h3>
-                            <p class="text-muted mb-0">Total Events</p>
-                        </div>
+    <section class="dashboard-metric-grid mb-4">
+        <article class="dashboard-metric dashboard-metric-accent">
+            <div class="dashboard-metric-icon"><i class="bi bi-broadcast-pin"></i></div>
+            <div class="dashboard-metric-label">Live connections</div>
+            <div class="dashboard-metric-value" id="connectionTotal">Unavailable</div>
+            <div class="dashboard-metric-detail">Current WebSocket gauge</div>
+        </article>
+        <article class="dashboard-metric">
+            <div class="dashboard-metric-icon"><i class="bi bi-person-check"></i></div>
+            <div class="dashboard-metric-label">Authenticated</div>
+            <div class="dashboard-metric-value" id="connectionAuthenticated">Unavailable</div>
+            <div class="dashboard-metric-detail">Current NIP-42 sessions</div>
+        </article>
+        <article class="dashboard-metric">
+            <div class="dashboard-metric-icon"><i class="bi bi-person-dash"></i></div>
+            <div class="dashboard-metric-label">Anonymous</div>
+            <div class="dashboard-metric-value" id="connectionAnonymous">Unavailable</div>
+            <div class="dashboard-metric-detail">Total minus authenticated</div>
+        </article>
+        <article class="dashboard-metric">
+            <div class="dashboard-metric-icon"><i class="bi bi-activity"></i></div>
+            <div class="dashboard-metric-label">Average · <span id="connectionWindow">24 hours</span></div>
+            <div class="dashboard-metric-value" id="connectionAverage">Unavailable</div>
+            <div class="dashboard-metric-detail">Sampled connection load</div>
+        </article>
+        <article class="dashboard-metric">
+            <div class="dashboard-metric-icon"><i class="bi bi-graph-up-arrow"></i></div>
+            <div class="dashboard-metric-label">Peak · observed window</div>
+            <div class="dashboard-metric-value" id="connectionPeak">Unavailable</div>
+            <div class="dashboard-metric-detail">Highest one-minute sample</div>
+        </article>
+        <article class="dashboard-metric">
+            <div class="dashboard-metric-icon"><i class="bi bi-hourglass-split"></i></div>
+            <div class="dashboard-metric-label">Slow clients terminated</div>
+            <div class="dashboard-metric-value" id="slowClients">Unavailable</div>
+            <div class="dashboard-metric-detail">Outbound backlog protection</div>
+        </article>
+    </section>
+
+    <div class="row g-4 mb-4">
+        <div class="col-xl-8">
+            <section class="dashboard-panel h-100">
+                <div class="dashboard-panel-header">
+                    <div>
+                        <div class="dashboard-section-label">Connection load</div>
+                        <div class="text-body-secondary small" id="connectionChartStatus">Hourly average and sampled peak</div>
                     </div>
-                    <div class="col-md-4">
-                        <div class="p-3">
-                            <h3 class="text-success">{{ "{:,}".format(metrics.total_client_messages) }}</h3>
-                            <p class="text-muted mb-0">Client Messages</p>
-                        </div>
-                    </div>
-                    <div class="col-md-4">
-                        <div class="p-3">
-                            <h3 class="text-info">{{ "{:,}".format(metrics.total_relay_messages) }}</h3>
-                            <p class="text-muted mb-0">Relay Messages</p>
-                        </div>
+                    <a href="{{ url_for('index') }}" class="btn btn-sm btn-outline-secondary">Dashboard</a>
+                </div>
+                <div class="dashboard-chart"><canvas id="connectionDetailChart"></canvas></div>
+            </section>
+        </div>
+        <div class="col-xl-4">
+            <section class="dashboard-panel h-100">
+                <div class="dashboard-section-label mb-3">Authentication · observed window</div>
+                <div class="dashboard-activity-row"><span>Challenges sent</span><strong id="authChallenges">Unavailable</strong></div>
+                <div class="dashboard-activity-row"><span>Successful AUTH</span><strong id="authSuccesses">Unavailable</strong></div>
+                <div class="dashboard-activity-row"><span>Failed AUTH</span><strong id="authFailures">Unavailable</strong></div>
+                <p class="small text-body-secondary mt-3 mb-0" id="authCapabilityNote">Authentication telemetry requires a current strfry metrics build.</p>
+            </section>
+        </div>
+    </div>
+
+    <div class="row g-4 mb-4">
+        <div class="col-lg-6">
+            <section class="dashboard-panel h-100">
+                <div class="dashboard-panel-header">
+                    <div>
+                        <div class="dashboard-section-label">Incoming protocol activity</div>
+                        <div class="text-body-secondary small">Messages received from clients</div>
                     </div>
                 </div>
-            </div>
+                <div class="table-responsive connection-table-wrap">
+                    <table class="table table-sm align-middle mb-0">
+                        <thead><tr><th>Verb</th><th class="text-end">Observed count</th></tr></thead>
+                        <tbody id="incomingBreakdown"></tbody>
+                    </table>
+                </div>
+            </section>
+        </div>
+        <div class="col-lg-6">
+            <section class="dashboard-panel h-100">
+                <div class="dashboard-panel-header">
+                    <div>
+                        <div class="dashboard-section-label">Outgoing protocol activity</div>
+                        <div class="text-body-secondary small">Messages sent to clients</div>
+                    </div>
+                </div>
+                <div class="table-responsive connection-table-wrap">
+                    <table class="table table-sm align-middle mb-0">
+                        <thead><tr><th>Verb</th><th class="text-end">Observed count</th></tr></thead>
+                        <tbody id="outgoingBreakdown"></tbody>
+                    </table>
+                </div>
+            </section>
         </div>
     </div>
-</div>
 
-<div class="row">
-    <div class="col-md-6">
-        <div class="card h-100">
-            <div class="card-header">
-                <h5 class="mb-0">Incoming Messages (Clients)</h5>
-            </div>
-            <div class="card-body">
-                <table class="table table-sm">
-                    <thead>
-                        <tr>
-                            <th>Message Type</th>
-                            <th class="text-end">Count</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for verb, count in metrics.client_messages_breakdown.items() %}
-                        <tr>
-                            <td><span class="badge bg-primary">{{ verb }}</span></td>
-                            <td class="text-end">{{ "{:,}".format(count) }}</td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
+    <section class="dashboard-panel connection-session-boundary">
+        <div class="d-flex gap-3 align-items-start">
+            <div class="dashboard-metric-icon mb-0"><i class="bi bi-lock"></i></div>
+            <div>
+                <div class="dashboard-section-label mb-2">Individual session inventory</div>
+                <h5>Per-connection details are not exposed by strfry yet</h5>
+                <p class="text-body-secondary mb-0">Client IP, connection age, authenticated pubkey, subscriptions, bytes, compression, and outbound backlog require a bounded strfry session snapshot interface. This page does not infer identities from reverse-proxy sockets or write-policy events.</p>
             </div>
         </div>
-    </div>
-    <div class="col-md-6">
-        <div class="card h-100">
-            <div class="card-header">
-                <h5 class="mb-0">Outgoing Messages (To Clients)</h5>
-            </div>
-            <div class="card-body">
-                <table class="table table-sm">
-                    <thead>
-                        <tr>
-                            <th>Message Type</th>
-                            <th class="text-end">Count</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for verb, count in metrics.relay_messages_breakdown.items() %}
-                        <tr>
-                            <td><span class="badge bg-success">{{ verb }}</span></td>
-                            <td class="text-end">{{ "{:,}".format(count) }}</td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-        </div>
-    </div>
+    </section>
 </div>
+{% endblock %}
 
-<div class="card mt-4">
-    <div class="card-header">
-        <h5 class="mb-0">NIP-11 Relay Info</h5>
-    </div>
-    <div class="card-body">
-        <p>For detailed relay information, clients can request NIP-11 from the relay directly:</p>
-        <code>wss://relay.nostr.place/.well-known/nostr.json</code>
-    </div>
-</div>
-{% endif %}
+{% block scripts %}
+<script>
+const initialConnections = {{ connections|tojson }};
+let connectionDetailChart;
+
+function connectionNumber(value) {
+    return value === null || value === undefined ? 'Unavailable' : Number(value).toLocaleString();
+}
+
+function observedWindow(hours) {
+    if (hours >= 23.9) return '24 hours';
+    if (hours < 1) return 'less than 1 hour observed';
+    return Math.floor(hours) + 'h observed';
+}
+
+function connectionTime(timestamp) {
+    return new Date(timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function connectionText(id, value) {
+    const element = document.getElementById(id);
+    if (element) element.textContent = value;
+}
+
+function renderBreakdown(id, values) {
+    const body = document.getElementById(id);
+    body.replaceChildren();
+    const entries = Object.entries(values).sort((a, b) => b[1] - a[1]);
+    if (!entries.length) {
+        const row = document.createElement('tr');
+        const cell = document.createElement('td');
+        cell.colSpan = 2;
+        cell.className = 'text-body-secondary text-center py-4';
+        cell.textContent = 'No activity delta is available for the observed window.';
+        row.appendChild(cell);
+        body.appendChild(row);
+        return;
+    }
+    entries.forEach(([verb, count]) => {
+        const row = document.createElement('tr');
+        const nameCell = document.createElement('td');
+        const badge = document.createElement('span');
+        badge.className = 'connection-verb';
+        badge.textContent = verb;
+        nameCell.appendChild(badge);
+        const countCell = document.createElement('td');
+        countCell.className = 'text-end font-monospace';
+        countCell.textContent = Number(count).toLocaleString();
+        row.append(nameCell, countCell);
+        body.appendChild(row);
+    });
+}
+
+function connectionChartOptions() {
+    return {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: { legend: { position: 'bottom', labels: { usePointStyle: true, boxWidth: 8 } } },
+        scales: {
+            x: { grid: { display: false }, ticks: { maxTicksLimit: 8 } },
+            y: { beginAtZero: true, ticks: { precision: 0 } }
+        }
+    };
+}
+
+function renderConnectionChart(history) {
+    const data = {
+        labels: history.map(point => connectionTime(point.timestamp)),
+        datasets: [
+            { label: 'Average', data: history.map(point => point.average), borderColor: '#65a9ff', backgroundColor: '#65a9ff22', fill: true, tension: 0.25, pointRadius: 0 },
+            { label: 'Peak', data: history.map(point => point.peak), borderColor: '#b68cff', borderDash: [5, 4], tension: 0.25, pointRadius: 0 }
+        ]
+    };
+    if (!connectionDetailChart) {
+        connectionDetailChart = new Chart(document.getElementById('connectionDetailChart'), { type: 'line', data, options: connectionChartOptions() });
+    } else {
+        connectionDetailChart.data = data;
+        connectionDetailChart.update('none');
+    }
+}
+
+function renderConnections(data) {
+    const status = document.getElementById('connectionStatus');
+    const gaugeSupported = data.current.total !== null;
+    const statusLabels = { live: 'Live', limited: 'Limited telemetry', stale: 'Stale', unavailable: 'Unavailable' };
+    status.dataset.status = data.status === 'live' ? 'healthy' : data.status === 'unavailable' ? 'offline' : 'stale';
+    connectionText('connectionStatusText', statusLabels[data.status] || 'Unavailable');
+    connectionText('connectionFreshness', data.collected_at ? 'Telemetry updated ' + new Date(data.collected_at).toLocaleString() : data.error || 'No telemetry collected yet');
+    connectionText('connectionTotal', connectionNumber(data.current.total));
+    connectionText('connectionAuthenticated', connectionNumber(data.current.authenticated));
+    connectionText('connectionAnonymous', connectionNumber(data.current.anonymous));
+    connectionText('connectionAverage', connectionNumber(data.average_24h));
+    connectionText('connectionPeak', connectionNumber(data.peak_24h));
+    connectionText('connectionWindow', observedWindow(data.coverage_hours));
+    connectionText('slowClients', connectionNumber(data.slow_client_terminations_24h));
+    connectionText('authChallenges', connectionNumber(data.authentication_24h.challenges));
+    connectionText('authSuccesses', connectionNumber(data.authentication_24h.successes));
+    connectionText('authFailures', connectionNumber(data.authentication_24h.failures));
+    connectionText('connectionChartStatus', gaugeSupported ? 'Hourly average and sampled peak' : 'Connection gauge unavailable in this strfry build');
+    const authOutcomesSupported = Object.values(data.authentication_24h).some(value => value !== null);
+    let authNote = 'Current authenticated sessions and outcomes cover the observed window.';
+    if (data.current.authenticated === null && !authOutcomesSupported) authNote = 'Authentication gauges and outcome counters are unavailable in this strfry build.';
+    else if (data.current.authenticated === null) authNote = 'The current authenticated-session gauge is unavailable; outcome counters are shown.';
+    else if (!authOutcomesSupported) authNote = 'Current authenticated sessions are shown; authentication outcome counters are unavailable.';
+    connectionText('authCapabilityNote', authNote);
+    renderBreakdown('incomingBreakdown', data.incoming_24h);
+    renderBreakdown('outgoingBreakdown', data.outgoing_24h);
+    renderConnectionChart(data.history);
+}
+
+renderConnections(initialConnections);
+setInterval(async function() {
+    try {
+        const response = await fetch('{{ url_for("api_connections") }}', { headers: { Accept: 'application/json' } });
+        if (!response.ok) throw new Error('Connection telemetry request failed');
+        renderConnections(await response.json());
+    } catch (error) {
+        document.getElementById('connectionStatus').dataset.status = 'stale';
+        connectionText('connectionStatusText', 'Stale');
+    }
+}, 15000);
+</script>
 {% endblock %}

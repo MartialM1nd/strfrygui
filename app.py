@@ -36,7 +36,7 @@ from utils.moderation import ModerationDecisions, ModerationError
 from utils.nip05 import normalize_domain
 from utils.domain_view import domain_identity_page, unresolved_identity_page
 from utils.decision_log import read_decision_log
-from utils.dashboard import collect_sample, dashboard_summary
+from utils.dashboard import collect_sample, connection_summary, dashboard_summary
 from utils.wot import (
     WoTError,
     commit_policy_settings,
@@ -1542,12 +1542,24 @@ def rebuild_wot_policy():
 @app.route('/connections')
 @viewer_or_higher
 def connections():
-    try:
-        metrics = get_summary()
-    except MetricsError as e:
-        metrics = {'error': str(e)}
-    
-    return render_template('connections.html', metrics=metrics)
+    config = get_config()
+    relay_name = (
+        config.get('relay', {}).get('info', {}).get('name', '')
+        if config else ''
+    )
+    return render_template(
+        'connections.html',
+        connections=connection_summary(),
+        relay_name=relay_name,
+    )
+
+
+@app.route('/api/connections')
+@viewer_or_higher
+def api_connections():
+    response = jsonify(connection_summary())
+    response.headers['Cache-Control'] = 'no-store, max-age=0'
+    return response
 
 
 @app.route('/admin', methods=['GET', 'POST'])

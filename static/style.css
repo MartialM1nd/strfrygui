@@ -189,6 +189,10 @@ footer {
 .dashboard-activity-row { display: flex; justify-content: space-between; gap: 1rem; padding: 0.85rem 0; border-bottom: 1px solid var(--bs-border-color); }
 .dashboard-activity-row:last-of-type { border-bottom: 0; }
 
+.connection-table-wrap { max-height: 360px; }
+.connection-verb { display: inline-flex; align-items: center; min-width: 4.5rem; border: 1px solid var(--bs-border-color); border-radius: 999px; padding: 0.2rem 0.55rem; color: var(--dashboard-blue); font-family: var(--bs-font-monospace); font-size: 0.75rem; font-weight: 650; }
+.connection-session-boundary { border-style: dashed; background: color-mix(in srgb, var(--dashboard-blue) 3%, var(--bs-body-bg)); }
+
 @media (max-width: 1399px) {
     .dashboard-metric-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }

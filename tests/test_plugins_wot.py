@@ -169,6 +169,14 @@ def test_plugins_page_manages_and_publishes_wot_policy(monkeypatch, tmp_path):
     assert b'Admission outcomes' in dashboard_page.data
     assert dashboard_api.status_code == 200
     assert 'moderation' in dashboard_api.get_json()
+    connections_page = client.get('/connections')
+    connections_api = client.get('/api/connections')
+    assert connections_page.status_code == 200
+    assert b'Connection Operations' in connections_page.data
+    assert connections_api.status_code == 200
+    assert connections_api.headers['Cache-Control'] == 'no-store, max-age=0'
+    assert 'current' in connections_api.get_json()
+    assert 'sessions' not in connections_api.get_json()
 
     moderator_client = flask_app.test_client()
     with moderator_client.session_transaction() as session:
@@ -186,3 +194,5 @@ def test_plugins_page_manages_and_publishes_wot_policy(monkeypatch, tmp_path):
     viewer_dashboard = viewer_client.get('/api/dashboard')
     assert viewer_dashboard.status_code == 200
     assert 'moderation' not in viewer_dashboard.get_json()
+    assert viewer_client.get('/connections').status_code == 200
+    assert viewer_client.get('/api/connections').status_code == 200

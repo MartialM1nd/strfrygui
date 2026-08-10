@@ -2,7 +2,7 @@ import json
 from datetime import timedelta
 
 from models import BannedPubkey, DashboardSample, ModerationReport, db, utcnow
-from utils.dashboard import dashboard_summary, database_storage
+from utils.dashboard import connection_summary, dashboard_summary, database_storage
 from utils.metrics import parse_metrics
 
 
@@ -159,3 +159,116 @@ def test_dashboard_admission_excludes_non_network_bypasses(app):
 
     assert summary['admission']['accepted_24h'] == 3
     assert summary['admission']['coverage_hours'] == 2
+
+
+def test_connection_summary_reports_gauges_and_restart_aware_activity(app):
+    now = utcnow().replace(second=0, microsecond=0)
+    with app.app_context():
+        add_sample(
+            now - timedelta(hours=24),
+            counters={
+                'client:EVENT': 100,
+                'client:REQ': 40,
+                'relay:EVENT': 400,
+                'strfry_auth_challenges_sent_total': 10,
+                'strfry_auth_success_total': 8,
+                'strfry_auth_failure_total': 2,
+                'strfry_slow_client_terminations_total': 1,
+            },
+            gauges={
+                'strfry_connections_current': 4,
+                'strfry_authenticated_connections_current': 1,
+            },
+        )
+        add_sample(
+            now,
+            counters={
+                'client:EVENT': 130,
+                'client:REQ': 52,
+                'relay:EVENT': 490,
+                'strfry_auth_challenges_sent_total': 16,
+                'strfry_auth_success_total': 13,
+                'strfry_auth_failure_total': 3,
+                'strfry_slow_client_terminations_total': 3,
+            },
+            gauges={
+                'strfry_connections_current': 7,
+                'strfry_authenticated_connections_current': 2,
+            },
+        )
+        db.session.commit()
+
+        summary = connection_summary(now)
+
+    assert summary['current'] == {
+        'total': 7,
+        'authenticated': 2,
+        'anonymous': 5,
+    }
+    assert summary['status'] == 'live'
+    assert summary['average_24h'] == 5.5
+    assert summary['peak_24h'] == 7
+    assert summary['authentication_24h'] == {
+        'challenges': 6,
+        'successes': 5,
+        'failures': 1,
+    }
+    assert summary['slow_client_terminations_24h'] == 2
+    assert summary['incoming_24h'] == {'EVENT': 30, 'REQ': 12}
+    assert summary['outgoing_24h'] == {'EVENT': 90}
+
+
+def test_connection_summary_marks_unsupported_gauges_unavailable(app):
+    now = utcnow().replace(second=0, microsecond=0)
+    with app.app_context():
+        add_sample(now, counters={'client:EVENT': 1})
+        db.session.commit()
+
+        summary = connection_summary(now)
+
+    assert summary['available'] is True
+    assert summary['status'] == 'limited'
+    assert summary['current'] == {
+        'total': None,
+        'authenticated': None,
+        'anonymous': None,
+    }
+
+
+def test_connection_summary_marks_old_samples_stale(app):
+    now = utcnow().replace(second=0, microsecond=0)
+    with app.app_context():
+        add_sample(
+            now - timedelta(minutes=3),
+            gauges={'strfry_connections_current': 4},
+        )
+        db.session.commit()
+
+        summary = connection_summary(now)
+
+    assert summary['status'] == 'stale'
+    assert summary['current']['total'] == 4
+
+
+def test_connection_summary_skips_missing_and_new_counter_baselines(app):
+    now = utcnow().replace(second=0, microsecond=0)
+    with app.app_context():
+        add_sample(
+            now - timedelta(minutes=2),
+            counters={'client:EVENT': 100, 'strfry_auth_success_total': 20},
+        )
+        add_sample(now - timedelta(minutes=1), counters={})
+        add_sample(
+            now,
+            counters={
+                'client:EVENT': 105,
+                'client:REQ': 50,
+                'strfry_auth_success_total': 3,
+            },
+        )
+        db.session.commit()
+
+        summary = connection_summary(now)
+
+    assert summary['incoming_24h'] == {'EVENT': 5, 'REQ': 0}
+    assert summary['authentication_24h']['successes'] == 3

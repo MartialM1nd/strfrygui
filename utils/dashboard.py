@@ -157,9 +157,29 @@ def _counter_delta(samples, getter, names):
 
 
 def _optional_counter_delta(samples, getter, names):
-    if not any(any(name in getter(sample) for name in names) for sample in samples):
+    relevant_samples = [
+        sample
+        for sample in samples
+        if any(name in getter(sample) for name in names)
+    ]
+    if not relevant_samples:
         return None
-    return _counter_delta(samples, getter, names)
+    return _counter_delta(relevant_samples, getter, names)
+
+
+def _counter_breakdown(samples, prefix):
+    names = sorted({
+        name
+        for sample in samples
+        for name in sample.counters
+        if name.startswith(prefix)
+    })
+    return {
+        name.removeprefix(prefix): _optional_counter_delta(
+            samples, lambda item: item.counters, {name}
+        )
+        for name in names
+    }
 
 
 def _hourly_series(samples, now):
@@ -274,8 +294,7 @@ def _attention_items(latest, now, role):
     return items
 
 
-def dashboard_summary(now=None, role='viewer'):
-    now = now or utcnow()
+def _recent_samples(now):
     cutoff = now - timedelta(hours=24)
     baseline = DashboardSample.query.filter(
         DashboardSample.sampled_at < cutoff,
@@ -286,6 +305,91 @@ def dashboard_summary(now=None, role='viewer'):
     ).order_by(DashboardSample.sampled_at).all()
     if baseline is not None:
         samples.insert(0, baseline)
+    return cutoff, samples
+
+
+def connection_summary(now=None):
+    now = now or utcnow()
+    cutoff, samples = _recent_samples(now)
+    latest = samples[-1] if samples else None
+    metric_samples = [sample for sample in samples if sample.metrics_available]
+    stale = bool(latest and now - latest.collected_at > timedelta(minutes=2))
+    current_total = (
+        latest.gauges.get('strfry_connections_current')
+        if latest and latest.metrics_available
+        else None
+    )
+    current_authenticated = (
+        latest.gauges.get('strfry_authenticated_connections_current')
+        if latest and latest.metrics_available
+        else None
+    )
+    current_anonymous = (
+        max(0, current_total - current_authenticated)
+        if current_total is not None and current_authenticated is not None
+        else None
+    )
+    connection_values = [
+        sample.gauges['strfry_connections_current']
+        for sample in metric_samples
+        if sample.sampled_at >= cutoff
+        and isinstance(sample.gauges.get('strfry_connections_current'), (int, float))
+    ]
+    coverage_hours = (
+        min(24, round((now - metric_samples[0].sampled_at).total_seconds() / 3600, 1))
+        if metric_samples else 0
+    )
+    def counter(name):
+        return _optional_counter_delta(
+            metric_samples, lambda item: item.counters, {name}
+        )
+    hourly = _hourly_series(samples, now)
+    status = (
+        'unavailable' if latest is None or not latest.metrics_available
+        else 'stale' if stale
+        else 'limited' if current_total is None
+        else 'live'
+    )
+    return {
+        'collected_at': latest.collected_at.isoformat() + 'Z' if latest else None,
+        'available': bool(latest and latest.metrics_available),
+        'status': status,
+        'error': latest.metrics_error if latest else 'No telemetry samples available',
+        'coverage_hours': coverage_hours,
+        'current': {
+            'total': current_total,
+            'authenticated': current_authenticated,
+            'anonymous': current_anonymous,
+        },
+        'average_24h': (
+            round(sum(connection_values) / len(connection_values), 1)
+            if connection_values else None
+        ),
+        'peak_24h': max(connection_values) if connection_values else None,
+        'authentication_24h': {
+            'challenges': counter('strfry_auth_challenges_sent_total'),
+            'successes': counter('strfry_auth_success_total'),
+            'failures': counter('strfry_auth_failure_total'),
+        },
+        'slow_client_terminations_24h': counter(
+            'strfry_slow_client_terminations_total'
+        ),
+        'incoming_24h': _counter_breakdown(metric_samples, 'client:'),
+        'outgoing_24h': _counter_breakdown(metric_samples, 'relay:'),
+        'history': [
+            {
+                'timestamp': point['timestamp'],
+                'average': point['connections_average'],
+                'peak': point['connections_peak'],
+            }
+            for point in hourly
+        ],
+    }
+
+
+def dashboard_summary(now=None, role='viewer'):
+    now = now or utcnow()
+    cutoff, samples = _recent_samples(now)
     latest = samples[-1] if samples else None
 
     policy_samples = [sample for sample in samples if sample.policy_available]
