@@ -148,6 +148,23 @@ function textCell(value, className) {
     return cell;
 }
 
+function eventSearchLine(prefix, value, searchType, parameter) {
+    const line = document.createElement('div');
+    line.appendChild(document.createTextNode(prefix + ': '));
+    if (!value) {
+        line.appendChild(document.createTextNode('-'));
+        return line;
+    }
+    const params = new URLSearchParams({ search_type: searchType });
+    params.set(parameter, value);
+    const link = document.createElement('a');
+    link.href = '/events?' + params.toString();
+    link.title = searchType === 'event_id' ? 'Search for this event' : 'Search events from this pubkey';
+    link.textContent = value;
+    line.appendChild(link);
+    return line;
+}
+
 function matchesFilters(record) {
     const action = document.getElementById('actionFilter').value;
     const simulated = document.getElementById('simulatedFilter').value;
@@ -188,10 +205,8 @@ function render() {
         row.appendChild(textCell(record.kind));
         const identifiers = document.createElement('td');
         identifiers.className = 'font-monospace small text-break';
-        const eventLine = document.createElement('div');
-        eventLine.textContent = 'e: ' + (record.event_id || '-');
-        const authorLine = document.createElement('div');
-        authorLine.textContent = 'p: ' + (record.pubkey || '-');
+        const eventLine = eventSearchLine('e', record.event_id, 'event_id', 'event_id');
+        const authorLine = eventSearchLine('p', record.pubkey, 'pubkey', 'pubkey');
         identifiers.append(eventLine, authorLine);
         row.appendChild(identifiers);
         const source = document.createElement('td');

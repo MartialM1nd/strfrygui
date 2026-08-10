@@ -152,6 +152,9 @@ def test_plugins_page_manages_and_publishes_wot_policy(monkeypatch, tmp_path):
     assert b'Actual reason' in policy_log_page.data
     assert b'Monitor reason' in policy_log_page.data
     assert b"document.hidden" in policy_log_page.data
+    assert b"eventSearchLine('e', record.event_id, 'event_id', 'event_id')" in policy_log_page.data
+    assert b"eventSearchLine('p', record.pubkey, 'pubkey', 'pubkey')" in policy_log_page.data
+    assert b"link.textContent = value" in policy_log_page.data
     api_response = client.get('/api/write-policy-events?limit=99999')
     assert api_response.status_code == 200
     assert api_response.headers['Cache-Control'] == 'no-store, max-age=0'
