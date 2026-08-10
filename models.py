@@ -283,6 +283,45 @@ class WoTBuildState(db.Model):
     last_error = db.Column(db.Text)
 
 
+class DashboardSample(db.Model):
+    __tablename__ = 'dashboard_samples'
+
+    id = db.Column(db.Integer, primary_key=True)
+    sampled_at = db.Column(db.DateTime, unique=True, nullable=False, index=True)
+    collected_at = db.Column(db.DateTime, nullable=False, default=utcnow)
+    metrics_available = db.Column(db.Boolean, nullable=False, default=False)
+    policy_available = db.Column(db.Boolean, nullable=False, default=False)
+    metrics_error = db.Column(db.Text)
+    uptime_seconds = db.Column(db.Integer)
+    process_count = db.Column(db.Integer)
+    database_size_bytes = db.Column(db.Integer)
+    disk_total_bytes = db.Column(db.Integer)
+    disk_free_bytes = db.Column(db.Integer)
+    counters_json = db.Column(db.Text, nullable=False, default='{}')
+    gauges_json = db.Column(db.Text, nullable=False, default='{}')
+    policy_counters_json = db.Column(db.Text, nullable=False, default='{}')
+
+    @staticmethod
+    def _values(raw):
+        try:
+            values = json.loads(raw or '{}')
+        except (TypeError, json.JSONDecodeError):
+            return {}
+        return values if isinstance(values, dict) else {}
+
+    @property
+    def counters(self):
+        return self._values(self.counters_json)
+
+    @property
+    def gauges(self):
+        return self._values(self.gauges_json)
+
+    @property
+    def policy_counters(self):
+        return self._values(self.policy_counters_json)
+
+
 class EventPurge(db.Model):
     __tablename__ = 'event_purges'
     __table_args__ = (

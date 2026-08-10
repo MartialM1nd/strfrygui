@@ -44,6 +44,8 @@ def test_plugins_page_manages_and_publishes_wot_policy(monkeypatch, tmp_path):
 
     app_module = importlib.import_module('app')
     monkeypatch.setattr(app_module, 'queue_wot_rebuild', lambda: False)
+    monkeypatch.setattr(app_module, '_collect_dashboard_sample', lambda: None)
+    monkeypatch.setattr(app_module, '_sync_reports_if_due', lambda: None)
     flask_app = app_module.app
     flask_app.config['TESTING'] = True
     flask_app.config['WTF_CSRF_ENABLED'] = False
@@ -160,6 +162,14 @@ def test_plugins_page_manages_and_publishes_wot_policy(monkeypatch, tmp_path):
     assert api_response.headers['Cache-Control'] == 'no-store, max-age=0'
     assert api_response.get_json()['events'][0]['source_ip'] == '192.0.2.1'
 
+    dashboard_page = client.get('/')
+    dashboard_api = client.get('/api/dashboard')
+    assert dashboard_page.status_code == 200
+    assert b'RELAY CONTROL' in dashboard_page.data
+    assert b'Admission outcomes' in dashboard_page.data
+    assert dashboard_api.status_code == 200
+    assert 'moderation' in dashboard_api.get_json()
+
     moderator_client = flask_app.test_client()
     with moderator_client.session_transaction() as session:
         session['_user_id'] = str(moderator_id)
@@ -173,3 +183,6 @@ def test_plugins_page_manages_and_publishes_wot_policy(monkeypatch, tmp_path):
         session['_fresh'] = True
     assert viewer_client.get('/policy-log').status_code == 302
     assert viewer_client.get('/api/write-policy-events').status_code == 302
+    viewer_dashboard = viewer_client.get('/api/dashboard')
+    assert viewer_dashboard.status_code == 200
+    assert 'moderation' not in viewer_dashboard.get_json()

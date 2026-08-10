@@ -4,7 +4,7 @@ import os
 import queue
 import threading
 import time
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from flask import Flask, render_template, redirect, url_for, flash, request, send_file, jsonify, abort
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from flask_wtf import FlaskForm
@@ -36,6 +36,7 @@ from utils.moderation import ModerationDecisions, ModerationError
 from utils.nip05 import normalize_domain
 from utils.domain_view import domain_identity_page, unresolved_identity_page
 from utils.decision_log import read_decision_log
+from utils.dashboard import collect_sample, dashboard_summary
 from utils.wot import (
     WoTError,
     commit_policy_settings,
@@ -54,6 +55,9 @@ _compaction = {
 }
 _domain_scan_queue = queue.Queue(maxsize=1)
 _wot_build_queue = queue.Queue(maxsize=1)
+_dashboard_sample_lock = threading.Lock()
+_report_sync_lock = threading.Lock()
+_report_sync_last = 0.0
 
 
 def _run_compaction():
@@ -614,6 +618,22 @@ def _wot_refresh_scheduler():
                 app.logger.exception('Could not schedule web-of-trust refresh')
 
 
+def _dashboard_sampler():
+    while True:
+        started_at = time.monotonic()
+        with app.app_context():
+            _collect_dashboard_sample()
+        elapsed = time.monotonic() - started_at
+        time.sleep(max(1, Config.DASHBOARD_SAMPLE_INTERVAL - elapsed))
+
+
+def _report_sync_scheduler():
+    while True:
+        with app.app_context():
+            _sync_reports_if_due()
+        time.sleep(300)
+
+
 def flash_moderation_outcome(outcome, success_message):
     flash(success_message, 'success')
     for warning in outcome.warnings:
@@ -632,18 +652,34 @@ def log_audit(action, details=None, user_id=None):
     db.session.commit()
 
 
+def _collect_dashboard_sample():
+    if not _dashboard_sample_lock.acquire(blocking=False):
+        return
+    try:
+        collect_sample()
+    except (OSError, SQLAlchemyError, ValueError):
+        db.session.rollback()
+        app.logger.exception('Could not collect dashboard telemetry')
+    finally:
+        _dashboard_sample_lock.release()
+
+
 @app.route('/')
 @viewer_or_higher
 def index():
-    try:
-        metrics = get_summary()
-    except MetricsError as e:
-        metrics = {'error': str(e)}
-    
+    dashboard = dashboard_summary(role=current_user.role)
     config = get_config()
     relay_name = config.get('info', {}).get('name', '') if config else ''
-    
-    return render_template('index.html', metrics=metrics, relay_name=relay_name)
+
+    return render_template('index.html', dashboard=dashboard, relay_name=relay_name)
+
+
+@app.route('/api/dashboard')
+@viewer_or_higher
+def api_dashboard():
+    response = jsonify(dashboard_summary(role=current_user.role))
+    response.headers['Cache-Control'] = 'no-store, max-age=0'
+    return response
 
 
 @app.route('/api/metrics')
@@ -1548,7 +1584,7 @@ def sync_moderation_reports():
     """Fetch reports from strfry and sync to database."""
     try:
         reports = scan_events({'kinds': [1984], 'limit': 200}, limit=200)
-        
+        added = 0
         for report in reports:
             event_id = report.get('id')
             existing = ModerationReport.query.filter_by(event_id=event_id).first()
@@ -1562,6 +1598,8 @@ def sync_moderation_reports():
             reported_event_id = None
             
             for tag in tags:
+                if not isinstance(tag, list) or not tag:
+                    continue
                 if tag[0] == 'p' and len(tag) >= 3:
                     reported_pubkey = tag[1]
                     report_type = tag[2] if len(tag) > 2 else 'other'
@@ -1585,19 +1623,37 @@ def sync_moderation_reports():
                 reported_event_id=reported_event_id,
                 report_type=report_type,
                 content=report.get('content', ''),
-                created_at=datetime.fromtimestamp(report.get('created_at', 0))
+                created_at=datetime.fromtimestamp(
+                    report.get('created_at', 0), UTC
+                ).replace(tzinfo=None)
             )
             db.session.add(new_report)
-        
+            added += 1
+
         db.session.commit()
-    except Exception as e:
-        pass
+        return added
+    except (IndexError, TypeError, ValueError, StrfryError, SQLAlchemyError):
+        db.session.rollback()
+        app.logger.exception('Could not synchronize moderation reports')
+        return None
+
+
+def _sync_reports_if_due(force=False):
+    global _report_sync_last
+    now = time.monotonic()
+    if (not force and now - _report_sync_last < 300) or not _report_sync_lock.acquire(blocking=False):
+        return
+    try:
+        _report_sync_last = now
+        sync_moderation_reports()
+    finally:
+        _report_sync_lock.release()
 
 
 @app.route('/moderation', methods=['GET', 'POST'])
 @moderator_required
 def moderation():
-    sync_moderation_reports()
+    _sync_reports_if_due(force=True)
     
     report_type_filter = request.args.get('report_type', '')
     reporter_filter = request.args.get('reporter', '')
@@ -2163,6 +2219,18 @@ threading.Thread(
     target=_wot_refresh_scheduler,
     daemon=True,
     name='wot-refresh-scheduler',
+).start()
+
+threading.Thread(
+    target=_dashboard_sampler,
+    daemon=True,
+    name='dashboard-telemetry-sampler',
+).start()
+
+threading.Thread(
+    target=_report_sync_scheduler,
+    daemon=True,
+    name='moderation-report-sync',
 ).start()
 
 

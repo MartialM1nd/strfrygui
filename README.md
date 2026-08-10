@@ -10,7 +10,7 @@ A web-based management portal for [strfry](https://github.com/hoytech/strfry), a
 
 ## Features
 
-- **Real-time Metrics Dashboard** - Live line charts showing events, client messages, and relay message rates with 5-second auto-refresh
+- **Operational Dashboard** - Persistent 24-hour relay health, database storage, WebSocket connections, write-policy outcomes, moderation workload, and role-aware alerts
 - **Event Management** - Combined search and delete UI with dropdown selectors for pubkey (supports npub), kind, time range, tag, event ID search, or advanced filters
 - **Moderation** - Handle NIP-56 reports (kind 1984) with lazy-loaded event content, clickable reporter/reported columns to search, reviewed checkbox, ban user with reason, delete reported event, auto-mark as reviewed when action taken
 - **Metadata Relay Management** - Add/remove metadata relays (for fetching user profile data)
@@ -130,6 +130,7 @@ STRFRY_BINARY=/usr/local/bin/strfry
 STRFRY_CONFIG=/etc/strfry.conf
 STRFRY_DB_PATH=/var/lib/strfry
 STRFRY_METRICS_URL=http://localhost:7777/metrics
+DASHBOARD_SAMPLE_INTERVAL=60
 ```
 
 Generate secure tokens:

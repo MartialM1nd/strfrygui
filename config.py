@@ -24,6 +24,7 @@ class Config:
     TRUST_POLICY_STATS_FILE = os.path.join(RUNTIME_DIR, 'trust_policy_stats.json')
     WRITE_POLICY_EVENT_LOG = os.path.join(RUNTIME_DIR, 'write_policy_events.jsonl')
     BLOCKLIST_PLUGIN_PATH = os.path.join(APP_DIR, 'utils', 'blocklist_plugin.py')
+    DASHBOARD_SAMPLE_INTERVAL = max(60, int(os.getenv('DASHBOARD_SAMPLE_INTERVAL', '60')))
     MODERATION_PURGE_TIMEOUT = int(os.getenv('MODERATION_PURGE_TIMEOUT', '30'))
     DOMAIN_SCAN_EVENT_LIMIT = int(os.getenv('DOMAIN_SCAN_EVENT_LIMIT', '500'))
     DOMAIN_SCAN_TIMEOUT = int(os.getenv('DOMAIN_SCAN_TIMEOUT', '30'))

@@ -40,10 +40,25 @@ def parse_metrics(raw_metrics):
         'client_messages': {},
         'relay_messages': {},
         'events_by_kind': {},
-        'connection_info': {}
+        'counters': {},
+        'gauges': {},
     }
-    
-    current_metric = None
+
+    scalar_counters = {
+        'strfry_write_events_total',
+        'strfry_write_rejected_total',
+        'strfry_write_dups_total',
+        'strfry_write_time_microseconds_total',
+        'strfry_slow_client_terminations_total',
+        'strfry_auth_challenges_sent_total',
+        'strfry_auth_success_total',
+        'strfry_auth_failure_total',
+    }
+    scalar_gauges = {
+        'strfry_write_batch_size',
+        'strfry_connections_current',
+        'strfry_authenticated_connections_current',
+    }
     
     for line in raw_metrics.split('\n'):
         line = line.strip()
@@ -60,36 +75,43 @@ def parse_metrics(raw_metrics):
                     key, value = label.split('=', 1)
                     labels[key.strip()] = value.strip().strip('"')
             
-            value = line.split('}')[1].strip()
+            value = line.split('}')[1].strip().split()[0]
             
             if 'nostr_client_messages_total' in metric_name:
                 verb = labels.get('verb', 'unknown')
-                metrics['client_messages'][verb] = int(value)
+                metrics['client_messages'][verb] = int(float(value))
             elif 'nostr_relay_messages_total' in metric_name:
                 verb = labels.get('verb', 'unknown')
-                metrics['relay_messages'][verb] = int(value)
+                metrics['relay_messages'][verb] = int(float(value))
             elif 'nostr_events_total' in metric_name:
                 kind = labels.get('kind', 'unknown')
-                metrics['events_by_kind'][kind] = int(value)
-        elif line.startswith('nostr_'):
+                metrics['events_by_kind'][kind] = int(float(value))
+        else:
             parts = line.split()
             if len(parts) >= 2:
                 metric_name = parts[0]
                 value = parts[1]
-                
+
                 if 'nostr_client_messages_total' in metric_name:
-                    metrics['client_messages']['total'] = int(value)
+                    metrics['client_messages']['total'] = int(float(value))
                 elif 'nostr_relay_messages_total' in metric_name:
-                    metrics['relay_messages']['total'] = int(value)
+                    metrics['relay_messages']['total'] = int(float(value))
                 elif 'nostr_events_total' in metric_name:
-                    metrics['events_by_kind']['total'] = int(value)
+                    metrics['events_by_kind']['total'] = int(float(value))
+                elif metric_name in scalar_counters:
+                    metrics['counters'][metric_name] = int(float(value))
+                elif metric_name in scalar_gauges:
+                    metrics['gauges'][metric_name] = float(value)
     
     return metrics
 
 
 def get_metrics():
     raw = fetch_metrics()
-    return parse_metrics(raw)
+    try:
+        return parse_metrics(raw)
+    except (IndexError, TypeError, ValueError) as exc:
+        raise MetricsError(f"Failed to parse metrics: {exc}") from exc
 
 
 def get_summary():

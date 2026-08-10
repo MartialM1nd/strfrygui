@@ -235,6 +235,11 @@ def compact_database():
 
 def get_strfry_uptime():
     """Return strfry process uptime in seconds, or None if not found."""
+    return get_strfry_process_info()['uptime_seconds']
+
+
+def get_strfry_process_info():
+    """Return the oldest visible strfry process uptime and process count."""
     try:
         import subprocess
         result = subprocess.run(
@@ -242,19 +247,29 @@ def get_strfry_uptime():
             capture_output=True, text=True, timeout=5
         )
         if result.returncode != 0 or not result.stdout.strip():
-            return None
-        pid = result.stdout.strip().split()[0]
-
-        with open(f'/proc/{pid}/stat') as f:
-            stat = f.read().split()
-        starttime = int(stat[21])
+            return {
+                'uptime_seconds': None,
+                'process_count': 0 if result.returncode == 1 else None,
+            }
+        pids = result.stdout.strip().split()
         clk_tck = os.sysconf(os.sysconf_names['SC_CLK_TCK'])
         with open('/proc/uptime') as f:
             system_uptime = float(f.read().split()[0])
-        uptime = system_uptime - (starttime / clk_tck)
-        return max(0, int(uptime))
-    except (FileNotFoundError, IndexError, ValueError, subprocess.TimeoutExpired):
-        return None
+        uptimes = []
+        for pid in pids:
+            try:
+                with open(f'/proc/{pid}/stat') as process_stat:
+                    stat = process_stat.read().split()
+                starttime = int(stat[21])
+                uptimes.append(max(0, int(system_uptime - (starttime / clk_tck))))
+            except (OSError, IndexError, ValueError):
+                continue
+        return {
+            'uptime_seconds': max(uptimes) if uptimes else None,
+            'process_count': len(uptimes) if uptimes else None,
+        }
+    except (OSError, IndexError, ValueError, subprocess.TimeoutExpired):
+        return {'uptime_seconds': None, 'process_count': None}
 
 
 def negentropy_list():

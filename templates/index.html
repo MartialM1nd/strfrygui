@@ -3,260 +3,327 @@
 {% block title %}Dashboard{% if relay_name %} - {{ relay_name }}{% endif %} - StrfryGUI{% endblock %}
 
 {% block content %}
-<h2 class="mb-4"><i class="bi bi-speedometer2"></i>{% if relay_name %} Relay Dashboard for {{ relay_name }}{% else %} Relay Dashboard{% endif %}</h2>
+<div class="dashboard-shell">
+    <header class="dashboard-header mb-4">
+        <div>
+            <div class="dashboard-kicker">RELAY CONTROL</div>
+            <h1 class="dashboard-title mb-1">{{ relay_name or 'Strfry relay' }}</h1>
+            <div class="text-body-secondary small" id="dashboardFreshness">Waiting for telemetry</div>
+        </div>
+        <div class="dashboard-status" id="relayStatus" data-status="{{ dashboard.relay.status }}">
+            <span class="dashboard-status-dot"></span>
+            <span id="relayStatusText">{{ dashboard.relay.status|title }}</span>
+        </div>
+    </header>
 
-{% if metrics.error %}
-<div class="alert alert-danger">
-    <h5><i class="bi bi-exclamation-triangle"></i> Error fetching metrics</h5>
-    <p>{{ metrics.error }}</p>
-    <p class="mb-0">Make sure strfry is running and the metrics endpoint is accessible at <code>{{ config.STRFRY_METRICS_URL }}</code></p>
-</div>
-{% else %}
-<div class="row mb-3">
-    <div class="col-md-3">
-        <div class="card text-center border-primary">
-            <div class="card-body py-2">
-                <span class="badge bg-primary mb-1"><i class="bi bi-lightning-event"></i></span>
-                <h6 class="card-title text-muted mb-1">Total Events</h6>
-                <h4 class="text-primary mb-0" id="stat-events">{{ "{:,}".format(metrics.total_events) }}</h4>
-            </div>
-        </div>
-    </div>
-    <div class="col-md-3">
-        <div class="card text-center border-success">
-            <div class="card-body py-2">
-                <span class="badge bg-success mb-1"><i class="bi bi-arrow-down-circle"></i></span>
-                <h6 class="card-title text-muted mb-1">Client Messages</h6>
-                <h4 class="text-success mb-0" id="stat-client">{{ "{:,}".format(metrics.total_client_messages) }}</h4>
-            </div>
-        </div>
-    </div>
-    <div class="col-md-3">
-        <div class="card text-center border-warning">
-            <div class="card-body py-2">
-                <span class="badge bg-warning text-dark mb-1"><i class="bi bi-arrow-up-circle"></i></span>
-                <h6 class="card-title text-muted mb-1">Relay Messages</h6>
-                <h4 class="text-warning mb-0" id="stat-relay">{{ "{:,}".format(metrics.total_relay_messages) }}</h4>
-            </div>
-        </div>
-    </div>
-    <div class="col-md-3">
-        <div class="card text-center border-info">
-            <div class="card-body py-2">
-                <span class="badge bg-info text-dark mb-1"><i class="bi bi-clock-history"></i></span>
-                <h6 class="card-title text-muted mb-1">Relay Uptime</h6>
-                <h4 class="text-info mb-0" id="stat-uptime">{{ metrics.strfry_uptime_seconds | format_uptime }}</h4>
-            </div>
-        </div>
-    </div>
-</div>
+    <section id="attentionSection" class="dashboard-attention mb-4{% if not dashboard.attention %} d-none{% endif %}">
+        <div class="dashboard-section-label"><i class="bi bi-exclamation-diamond"></i> Needs attention</div>
+        <div id="attentionItems" class="dashboard-attention-items"></div>
+    </section>
 
-<div class="row mb-4">
-    <div class="col-md-6">
-        <div class="card h-100">
-            <div class="card-header bg-success text-white">
-                <h5 class="mb-0"><i class="bi bi-graph-up"></i> Client Messages</h5>
+    <section class="dashboard-metric-grid mb-4">
+        <article class="dashboard-metric">
+            <div class="dashboard-metric-icon"><i class="bi bi-database"></i></div>
+            <div class="dashboard-metric-label">Database on disk</div>
+            <div class="dashboard-metric-value" id="databaseSize">Unavailable</div>
+            <div class="dashboard-metric-detail"><span id="databaseGrowth">No 24h baseline</span> · <span id="diskFree">free unknown</span></div>
+            <div class="progress dashboard-progress" role="progressbar" aria-label="Disk used">
+                <div class="progress-bar" id="diskProgress" style="width: 0%"></div>
             </div>
-            <div class="card-body">
-                <canvas id="clientChart" style="max-height: 250px;"></canvas>
-            </div>
-        </div>
-    </div>
-    <div class="col-md-6">
-        <div class="card h-100">
-            <div class="card-header bg-warning text-dark">
-                <h5 class="mb-0"><i class="bi bi-graph-up"></i> Relay Messages</h5>
-            </div>
-            <div class="card-body">
-                <canvas id="relayChart" style="max-height: 250px;"></canvas>
-            </div>
-        </div>
-    </div>
-</div>
+        </article>
 
-<div class="row mb-4">
-    <div class="col-12">
-        <div class="card">
-            <div class="card-header bg-info text-white">
-                <h5 class="mb-0"><i class="bi bi-graph-up"></i> All Events</h5>
-            </div>
-            <div class="card-body">
-                <canvas id="eventsChart" style="max-height: 250px;"></canvas>
-            </div>
+        <article class="dashboard-metric">
+            <div class="dashboard-metric-icon"><i class="bi bi-clock-history"></i></div>
+            <div class="dashboard-metric-label">strfry uptime</div>
+            <div class="dashboard-metric-value" id="relayUptime">Unavailable</div>
+            <div class="dashboard-metric-detail" id="processCount">Process visibility unavailable</div>
+        </article>
+
+        <article class="dashboard-metric">
+            <div class="dashboard-metric-icon"><i class="bi bi-broadcast-pin"></i></div>
+            <div class="dashboard-metric-label">WebSocket connections</div>
+            <div class="dashboard-metric-value" id="activeConnections">Unavailable</div>
+            <div class="dashboard-metric-detail" id="peakConnections">24h peak unavailable</div>
+        </article>
+
+        <article class="dashboard-metric dashboard-metric-accent">
+            <div class="dashboard-metric-icon"><i class="bi bi-shield-check"></i></div>
+            <div class="dashboard-metric-label">Admission · <span id="admissionWindow">24 hours</span></div>
+            <div class="dashboard-metric-value" id="acceptanceRatio">No decisions</div>
+            <div class="dashboard-metric-detail"><span id="acceptedCount">0 accepted</span> · <span id="rejectedCount">0 rejected</span></div>
+        </article>
+
+        {% if dashboard.moderation is defined %}
+        <a class="dashboard-metric dashboard-metric-link" href="{{ url_for('moderation') }}">
+            <div class="dashboard-metric-icon"><i class="bi bi-flag"></i></div>
+            <div class="dashboard-metric-label">Moderation reports</div>
+            <div class="dashboard-metric-value" id="unreviewedReports">0</div>
+            <div class="dashboard-metric-detail" id="newReports">0 new in 24h · Open moderation</div>
+        </a>
+
+        <article class="dashboard-metric">
+            <div class="dashboard-metric-icon"><i class="bi bi-slash-octagon"></i></div>
+            <div class="dashboard-metric-label">Active bans</div>
+            <div class="dashboard-metric-value" id="bannedPubkeys">0</div>
+            <div class="dashboard-metric-detail"><span id="bannedDomains">0 domains</span> · <span id="newBans">0 new in 24h</span></div>
+        </article>
+        {% else %}
+        <article class="dashboard-metric">
+            <div class="dashboard-metric-icon"><i class="bi bi-send"></i></div>
+            <div class="dashboard-metric-label">Publish attempts · 24h</div>
+            <div class="dashboard-metric-value" id="publishAttempts">0</div>
+            <div class="dashboard-metric-detail">Incoming EVENT messages</div>
+        </article>
+
+        <article class="dashboard-metric">
+            <div class="dashboard-metric-icon"><i class="bi bi-inboxes"></i></div>
+            <div class="dashboard-metric-label">Subscriptions · 24h</div>
+            <div class="dashboard-metric-value" id="subscriptionCount">0</div>
+            <div class="dashboard-metric-detail">Incoming REQ messages</div>
+        </article>
+        {% endif %}
+    </section>
+
+    <div class="row g-4 mb-4">
+        <div class="col-xl-8">
+            <section class="dashboard-panel h-100">
+                <div class="dashboard-panel-header">
+                    <div>
+                        <div class="dashboard-section-label">Admission outcomes</div>
+                        <div class="text-body-secondary small" id="admissionChartStatus">Actual write-policy decisions, hourly</div>
+                    </div>
+                    <a href="{{ url_for('policy_log') if current_user.role in ['admin', 'moderator'] else url_for('connections') }}" class="btn btn-sm btn-outline-secondary">Inspect</a>
+                </div>
+                <div class="dashboard-chart"><canvas id="admissionChart"></canvas></div>
+            </section>
+        </div>
+        <div class="col-xl-4">
+            <section class="dashboard-panel h-100">
+                <div class="dashboard-panel-header">
+                    <div>
+                        <div class="dashboard-section-label">Rejection reasons</div>
+                        <div class="text-body-secondary small">Actual rejects in the last 24 hours</div>
+                    </div>
+                </div>
+                <div id="rejectionReasons" class="dashboard-reasons"></div>
+            </section>
+        </div>
+    </div>
+
+    <div class="row g-4">
+        <div class="col-xl-8">
+            <section class="dashboard-panel h-100">
+                <div class="dashboard-panel-header">
+                    <div>
+                        <div class="dashboard-section-label">Connection load</div>
+                        <div class="text-body-secondary small" id="connectionChartStatus">Hourly average and peak</div>
+                    </div>
+                    <a href="{{ url_for('connections') }}" class="btn btn-sm btn-outline-secondary">Connections</a>
+                </div>
+                <div class="dashboard-chart dashboard-chart-short"><canvas id="connectionsChart"></canvas></div>
+            </section>
+        </div>
+        <div class="col-xl-4">
+            <section class="dashboard-panel h-100">
+                <div class="dashboard-section-label mb-3">Relay activity · <span id="activityWindow">24 hours</span></div>
+                <div class="dashboard-activity-row"><span>Publish attempts</span><strong id="activityPublishes">0</strong></div>
+                <div class="dashboard-activity-row"><span>Subscriptions</span><strong id="activitySubscriptions">0</strong></div>
+                <div class="dashboard-activity-row"><span>Persisted events</span><strong id="activityPersisted">Unavailable</strong></div>
+                <p class="small text-body-secondary mt-3 mb-0">Persisted-event telemetry requires a current strfry metrics build. Unsupported values remain unavailable.</p>
+            </section>
         </div>
     </div>
 </div>
-{% endif %}
 {% endblock %}
 
 {% block scripts %}
-{% if not metrics.error %}
 <script>
-const clientHistory = {{ metrics.client_rate_history|tojson }};
-const relayHistory = {{ metrics.relay_rate_history|tojson }};
-const eventsHistory = {{ metrics.events_rate_history|tojson }};
+const initialDashboard = {{ dashboard|tojson }};
+let admissionChart;
+let connectionsChart;
 
-const chartColors = [
-    '#0d6efd', '#6610f2', '#6f42c1', '#d63384', '#dc3545',
-    '#fd7e14', '#ffc107', '#198754', '#20c997', '#0dcaf0',
-    '#ff6b6b', '#4ecdc4', '#45b7d1', '#96ceb4', '#ffeaa7',
-    '#dfe6e9', '#636e72', '#2d3436', '#00b894', '#e17055',
-    '#74b9ff', '#a29bfe', '#fd79a8', '#55efc4', '#fdcb6e',
-    '#ffeaa7', '#fab1a0', '#81ecec', '#74b9ff', '#d63031'
-];
-
-function formatTime(ts) {
-    const d = new Date(ts * 1000);
-    return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+function numberOrUnavailable(value) {
+    return value === null || value === undefined ? 'Unavailable' : Number(value).toLocaleString();
 }
 
-function buildMultiLineData(history) {
-    const keys = Object.keys(history);
-    if (keys.length === 0) return { labels: [], datasets: [] };
-    
-    const labels = history[keys[0]].map(x => formatTime(x[0]));
-    
-    const sortedKeys = keys.slice().sort((a, b) => {
-        const sumA = history[a].reduce((acc, x) => acc + x[1], 0);
-        const sumB = history[b].reduce((acc, x) => acc + x[1], 0);
-        return sumB - sumA;
-    });
-    
-    const datasets = sortedKeys.map((key, i) => ({
-        label: key,
-        data: history[key].map(x => x[1]),
-        borderColor: chartColors[i % chartColors.length],
-        backgroundColor: chartColors[i % chartColors.length] + '33',
-        fill: true,
-        tension: 0.3,
-        pointRadius: 2,
-        borderWidth: 2
-    }));
-    
-    return { labels, datasets };
-}
-
-const clientData = buildMultiLineData(clientHistory);
-const relayData = buildMultiLineData(relayHistory);
-const eventsData = buildMultiLineData(eventsHistory);
-
-const clientChart = new Chart(document.getElementById('clientChart'), {
-    type: 'line',
-    data: clientData,
-    options: {
-        responsive: true,
-        plugins: {
-            legend: { position: 'bottom', labels: { boxWidth: 12 } },
-            tooltip: { mode: 'index', intersect: false }
-        },
-        scales: {
-            x: { display: true, ticks: { maxTicksLimit: 10 } },
-            y: { beginAtZero: true, ticks: { callback: v => v.toLocaleString() } }
-        },
-        interaction: { mode: 'nearest', axis: 'x', intersect: false }
+function formatBytes(value) {
+    if (value === null || value === undefined) return 'Unavailable';
+    const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+    let amount = Math.abs(Number(value));
+    let unit = 0;
+    while (amount >= 1024 && unit < units.length - 1) {
+        amount /= 1024;
+        unit += 1;
     }
-});
-
-const relayChart = new Chart(document.getElementById('relayChart'), {
-    type: 'line',
-    data: relayData,
-    options: {
-        responsive: true,
-        plugins: {
-            legend: { position: 'bottom', labels: { boxWidth: 12 } },
-            tooltip: { mode: 'index', intersect: false }
-        },
-        scales: {
-            x: { display: true, ticks: { maxTicksLimit: 10 } },
-            y: { beginAtZero: true, ticks: { callback: v => v.toLocaleString() } }
-        },
-        interaction: { mode: 'nearest', axis: 'x', intersect: false }
-    }
-});
-
-const eventsChart = new Chart(document.getElementById('eventsChart'), {
-    type: 'line',
-    data: eventsData,
-    options: {
-        responsive: true,
-        plugins: {
-            legend: { position: 'bottom', labels: { boxWidth: 12 } },
-            tooltip: { mode: 'index', intersect: false }
-        },
-        scales: {
-            x: { display: true, ticks: { maxTicksLimit: 10 } },
-            y: { beginAtZero: true, ticks: { callback: v => v.toLocaleString() } }
-        },
-        interaction: { mode: 'nearest', axis: 'x', intersect: false }
-    }
-});
-
-function updateMultiLineChart(chart, history) {
-    const keys = Object.keys(history);
-    if (keys.length === 0) return;
-    
-    const sortedKeys = keys.slice().sort((a, b) => {
-        const sumA = history[a].reduce((acc, x) => acc + x[1], 0);
-        const sumB = history[b].reduce((acc, x) => acc + x[1], 0);
-        return sumB - sumA;
-    });
-    
-    const labels = history[sortedKeys[0]].map(x => formatTime(x[0]));
-    chart.data.labels = labels;
-    
-    sortedKeys.forEach((key, i) => {
-        const data = history[key].map(x => x[1]);
-        if (chart.data.datasets[i]) {
-            chart.data.datasets[i].label = key;
-            chart.data.datasets[i].data = data;
-            chart.data.datasets[i].borderColor = chartColors[i % chartColors.length];
-            chart.data.datasets[i].backgroundColor = chartColors[i % chartColors.length] + '33';
-        } else {
-            chart.data.datasets[i] = {
-                label: key,
-                data: data,
-                borderColor: chartColors[i % chartColors.length],
-                backgroundColor: chartColors[i % chartColors.length] + '33',
-                fill: true,
-                tension: 0.3,
-                pointRadius: 2,
-                borderWidth: 2
-            };
-        }
-    });
-    
-    chart.update('none');
+    const sign = Number(value) < 0 ? '-' : '';
+    return sign + amount.toFixed(unit < 2 ? 0 : 1) + ' ' + units[unit];
 }
 
 function formatUptime(seconds) {
-    if (seconds === null || seconds === undefined) return 'N/A';
-    const parts = [];
+    if (seconds === null || seconds === undefined) return 'Unavailable';
     const days = Math.floor(seconds / 86400);
     const hours = Math.floor((seconds % 86400) / 3600);
-    const mins = Math.floor((seconds % 3600) / 60);
-    if (days) parts.push(days + 'd');
-    if (hours) parts.push(hours + 'h');
-    if (mins || !parts.length) parts.push(mins + 'm');
-    return parts.join(' ');
+    const minutes = Math.floor((seconds % 3600) / 60);
+    return [days ? days + 'd' : '', hours ? hours + 'h' : '', (!days || minutes) ? minutes + 'm' : ''].filter(Boolean).join(' ');
 }
 
+function formatHour(timestamp) {
+    return new Date(timestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+}
+
+function formatWindow(hours) {
+    if (hours >= 23.9) return '24 hours';
+    if (hours < 1) return 'less than 1 hour observed';
+    return Math.floor(hours) + 'h observed';
+}
+
+function setText(id, value) {
+    const element = document.getElementById(id);
+    if (element) element.textContent = value;
+}
+
+function renderAttention(items) {
+    const section = document.getElementById('attentionSection');
+    const container = document.getElementById('attentionItems');
+    container.replaceChildren();
+    section.classList.toggle('d-none', !items.length);
+    items.forEach(item => {
+        const link = document.createElement('a');
+        link.className = 'dashboard-attention-item dashboard-attention-' + item.severity;
+        link.href = item.url;
+        const label = document.createElement('span');
+        label.textContent = item.label;
+        const arrow = document.createElement('i');
+        arrow.className = 'bi bi-arrow-right';
+        link.append(label, arrow);
+        container.appendChild(link);
+    });
+}
+
+function renderReasons(reasons, available) {
+    const container = document.getElementById('rejectionReasons');
+    container.replaceChildren();
+    if (!available || Object.keys(reasons).length === 0) {
+        const empty = document.createElement('p');
+        empty.className = 'text-body-secondary small mb-0';
+        empty.textContent = available ? 'No rejections recorded.' : 'Policy telemetry is unavailable.';
+        container.appendChild(empty);
+        return;
+    }
+    const entries = Object.entries(reasons).sort((a, b) => b[1] - a[1]);
+    const maximum = Math.max(...entries.map(entry => entry[1]), 1);
+    entries.forEach(([label, count]) => {
+        const row = document.createElement('div');
+        row.className = 'dashboard-reason';
+        const heading = document.createElement('div');
+        heading.className = 'd-flex justify-content-between small';
+        const name = document.createElement('span');
+        name.textContent = label;
+        const value = document.createElement('strong');
+        value.textContent = Number(count).toLocaleString();
+        heading.append(name, value);
+        const track = document.createElement('div');
+        track.className = 'dashboard-reason-track';
+        const bar = document.createElement('div');
+        bar.className = 'dashboard-reason-bar';
+        bar.style.width = (count * 100 / maximum) + '%';
+        track.appendChild(bar);
+        row.append(heading, track);
+        container.appendChild(row);
+    });
+}
+
+function chartOptions(stacked) {
+    return {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: { legend: { position: 'bottom', labels: { usePointStyle: true, boxWidth: 8 } } },
+        scales: {
+            x: { stacked, grid: { display: false }, ticks: { maxTicksLimit: 8 } },
+            y: { stacked, beginAtZero: true, ticks: { precision: 0 } }
+        }
+    };
+}
+
+function renderCharts(history) {
+    const labels = history.map(point => formatHour(point.timestamp));
+    const admissionData = {
+        labels,
+        datasets: [
+            { label: 'Accepted', data: history.map(point => point.accepted), backgroundColor: '#39d98a', borderRadius: 3 },
+            { label: 'Rejected', data: history.map(point => point.rejected), backgroundColor: '#ff5c67', borderRadius: 3 }
+        ]
+    };
+    const connectionData = {
+        labels,
+        datasets: [
+            { label: 'Average', data: history.map(point => point.connections_average), borderColor: '#65a9ff', backgroundColor: '#65a9ff22', fill: true, tension: 0.25, pointRadius: 0 },
+            { label: 'Peak', data: history.map(point => point.connections_peak), borderColor: '#b68cff', borderDash: [5, 4], tension: 0.25, pointRadius: 0 }
+        ]
+    };
+    if (!admissionChart) {
+        admissionChart = new Chart(document.getElementById('admissionChart'), { type: 'bar', data: admissionData, options: chartOptions(true) });
+        connectionsChart = new Chart(document.getElementById('connectionsChart'), { type: 'line', data: connectionData, options: chartOptions(false) });
+    } else {
+        admissionChart.data = admissionData;
+        connectionsChart.data = connectionData;
+        admissionChart.update('none');
+        connectionsChart.update('none');
+    }
+}
+
+function renderDashboard(data) {
+    const status = document.getElementById('relayStatus');
+    status.dataset.status = data.relay.status;
+    setText('relayStatusText', data.relay.status.charAt(0).toUpperCase() + data.relay.status.slice(1));
+    setText('dashboardFreshness', data.collected_at ? 'Telemetry updated ' + new Date(data.collected_at).toLocaleString() : 'No telemetry collected yet');
+    setText('databaseSize', formatBytes(data.storage.database_size_bytes));
+    setText('databaseGrowth', data.storage.growth_bytes_24h === null ? 'No 24h baseline' : (data.storage.growth_bytes_24h >= 0 ? '+' : '') + formatBytes(data.storage.growth_bytes_24h) + ' / 24h');
+    setText('diskFree', data.storage.disk_free_bytes === null ? 'free unknown' : formatBytes(data.storage.disk_free_bytes) + ' free');
+    const diskProgress = document.getElementById('diskProgress');
+    diskProgress.style.width = (data.storage.disk_used_percent || 0) + '%';
+    diskProgress.className = 'progress-bar' + (data.storage.disk_used_percent >= 95 ? ' bg-danger' : data.storage.disk_used_percent >= 85 ? ' bg-warning' : '');
+    setText('relayUptime', formatUptime(data.relay.uptime_seconds));
+    setText('processCount', data.relay.process_count === null || data.relay.process_count === undefined ? 'Process visibility unavailable' : data.relay.process_count + (data.relay.process_count === 1 ? ' process visible' : ' processes visible'));
+    setText('activeConnections', numberOrUnavailable(data.connections.current));
+    setText('peakConnections', data.connections.peak_24h === null ? '24h peak unavailable' : '24h peak ' + Number(data.connections.peak_24h).toLocaleString());
+    setText('acceptanceRatio', !data.admission.available ? 'Unavailable' : data.admission.accepted_percent === null ? 'No decisions' : data.admission.accepted_percent.toFixed(1) + '% accepted');
+    setText('admissionWindow', formatWindow(data.admission.coverage_hours));
+    setText('activityWindow', formatWindow(data.activity.coverage_hours));
+    setText('admissionChartStatus', data.admission.available ? 'Actual write-policy decisions, hourly' : 'Policy telemetry unavailable');
+    setText('connectionChartStatus', data.connections.current === null ? 'Connection gauge unavailable in this strfry build' : 'Hourly average and peak');
+    setText('acceptedCount', data.admission.available ? Number(data.admission.accepted_24h).toLocaleString() + ' accepted' : 'accepted unavailable');
+    setText('rejectedCount', data.admission.available ? Number(data.admission.rejected_24h).toLocaleString() + ' rejected' : 'rejected unavailable');
+    if (data.moderation) {
+        setText('unreviewedReports', Number(data.moderation.unreviewed_reports).toLocaleString());
+        setText('newReports', Number(data.moderation.new_reports_24h).toLocaleString() + ' new in 24h · Open moderation');
+        setText('bannedPubkeys', Number(data.moderation.banned_pubkeys).toLocaleString() + ' pubkeys');
+        setText('bannedDomains', Number(data.moderation.banned_domains).toLocaleString() + ' domains');
+        setText('newBans', Number(data.moderation.new_pubkey_bans_24h).toLocaleString() + ' new in 24h');
+    } else {
+        setText('publishAttempts', numberOrUnavailable(data.activity.publish_attempts_24h));
+        setText('subscriptionCount', numberOrUnavailable(data.activity.subscriptions_24h));
+    }
+    setText('activityPublishes', numberOrUnavailable(data.activity.publish_attempts_24h));
+    setText('activitySubscriptions', numberOrUnavailable(data.activity.subscriptions_24h));
+    setText('activityPersisted', numberOrUnavailable(data.activity.persisted_24h));
+    renderAttention(data.attention);
+    renderReasons(data.admission.reasons, data.admission.available);
+    renderCharts(data.history);
+}
+
+renderDashboard(initialDashboard);
 setInterval(async function() {
     try {
-        const resp = await fetch('/api/metrics');
-        const data = await resp.json();
-        
-        if (data.error) return;
-        
-        document.getElementById('stat-events').textContent = data.total_events.toLocaleString();
-        document.getElementById('stat-client').textContent = data.total_client_messages.toLocaleString();
-        document.getElementById('stat-relay').textContent = data.total_relay_messages.toLocaleString();
-        document.getElementById('stat-uptime').textContent = formatUptime(data.strfry_uptime_seconds);
-        
-        updateMultiLineChart(clientChart, data.client_rate_history);
-        updateMultiLineChart(relayChart, data.relay_rate_history);
-        updateMultiLineChart(eventsChart, data.events_rate_history);
-    } catch (e) {}
-}, 5000);
+        const response = await fetch('{{ url_for("api_dashboard") }}', { headers: { Accept: 'application/json' } });
+        if (!response.ok) return;
+        renderDashboard(await response.json());
+    } catch (error) {
+        document.getElementById('relayStatus').dataset.status = 'stale';
+        setText('relayStatusText', 'Stale');
+    }
+}, 15000);
 </script>
-{% endif %}
 {% endblock %}
