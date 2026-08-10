@@ -8,6 +8,8 @@ from utils.wot import DEFAULT_ROOT_NPUBS
 
 
 def test_plugins_page_manages_and_publishes_wot_policy(monkeypatch, tmp_path):
+    runtime_dir = tmp_path / 'runtime'
+    runtime_dir.mkdir()
     strfry_config = tmp_path / 'strfry.conf'
     strfry_config.write_text(
         'relay {\n'
@@ -25,14 +27,15 @@ def test_plugins_page_manages_and_publishes_wot_policy(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(Config, 'STRFRY_BINARY', '/bin/true')
     monkeypatch.setattr(Config, 'STRFRY_CONFIG', str(strfry_config))
-    monkeypatch.setattr(Config, 'BANNED_PUBKEYS_FILE', str(tmp_path / 'blocklist.json'))
-    monkeypatch.setattr(Config, 'TRUST_POLICY_FILE', str(tmp_path / 'trust_policy.json'))
+    monkeypatch.setattr(Config, 'BANNED_PUBKEYS_FILE', str(runtime_dir / 'blocklist.json'))
+    monkeypatch.setattr(Config, 'TRUST_POLICY_FILE', str(runtime_dir / 'trust_policy.json'))
+    monkeypatch.setattr(Config, 'LEGACY_TRUST_POLICY_FILE', str(tmp_path / 'trust_policy.json'))
     monkeypatch.setattr(
         Config,
         'TRUST_POLICY_STATS_FILE',
-        str(tmp_path / 'trust_policy_stats.json'),
+        str(runtime_dir / 'trust_policy_stats.json'),
     )
-    decision_log_path = tmp_path / 'runtime' / 'write_policy_events.jsonl'
+    decision_log_path = runtime_dir / 'write_policy_events.jsonl'
     monkeypatch.setattr(
         Config,
         'WRITE_POLICY_EVENT_LOG',
@@ -130,7 +133,6 @@ def test_plugins_page_manages_and_publishes_wot_policy(monkeypatch, tmp_path):
     assert disable_response.status_code == 200
     assert 'plugin = ""' in strfry_config.read_text()
 
-    decision_log_path.parent.mkdir()
     decision_log_path.write_text(json.dumps({
         'timestamp_ms': 1_700_000_000_000,
         'action': 'reject',

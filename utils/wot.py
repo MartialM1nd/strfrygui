@@ -37,6 +37,7 @@ class WoTError(Exception):
 def _publication_lock():
     with _publication_thread_lock:
         with open(Config.TRUST_POLICY_FILE + '.lock', 'a+') as lock_file:
+            os.fchmod(lock_file.fileno(), 0o640)
             fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
             try:
                 yield
@@ -237,7 +238,7 @@ def _atomic_json_write(path, data):
             json.dump(data, output, separators=(',', ':'), sort_keys=True)
             output.flush()
             os.fsync(output.fileno())
-        os.chmod(temporary_path, 0o644)
+        os.chmod(temporary_path, 0o640)
         os.replace(temporary_path, path)
     except OSError:
         if os.path.exists(temporary_path):
@@ -278,17 +279,20 @@ def publish_policy(policy, snapshot=None, generated_at=None):
 def republish_policy_settings(policy):
     """Apply operator settings immediately while retaining a compatible graph."""
     roots = root_pubkeys(policy)
-    try:
-        with open(Config.TRUST_POLICY_FILE) as policy_file:
-            current = json.load(policy_file)
-    except (OSError, json.JSONDecodeError, TypeError):
-        current = None
-    if (
-        not isinstance(current, dict)
-        or current.get('version') != 1
-        or current.get('roots') != roots
-        or not isinstance(current.get('scores'), dict)
+    current = None
+    for source_path in (
+        Config.TRUST_POLICY_FILE,
+        Config.LEGACY_TRUST_POLICY_FILE,
     ):
+        try:
+            with open(source_path) as policy_file:
+                candidate = json.load(policy_file)
+        except (OSError, json.JSONDecodeError, TypeError):
+            continue
+        if _compatible_policy_snapshot(candidate, roots):
+            current = candidate
+            break
+    if current is None:
         return publish_policy(policy)
 
     current.update({
@@ -305,6 +309,40 @@ def republish_policy_settings(policy):
     except OSError as exc:
         raise WoTError(f'Could not publish trust policy: {exc}') from exc
     return current
+
+
+def _compatible_policy_snapshot(candidate, roots):
+    if (
+        not isinstance(candidate, dict)
+        or candidate.get('version') != 1
+        or candidate.get('roots') != roots
+        or candidate.get('mode') not in ('off', 'monitor', 'enforce')
+        or not isinstance(candidate.get('scores'), dict)
+        or not isinstance(candidate.get('require_pow_commitment'), bool)
+    ):
+        return False
+    integer_fields = (
+        ('trust_threshold', 0, 100),
+        ('pow_difficulty', 0, 64),
+        ('generated_at', 0, None),
+        ('expires_at', 0, None),
+    )
+    for name, minimum, maximum in integer_fields:
+        value = candidate.get(name)
+        if (
+            not isinstance(value, int)
+            or isinstance(value, bool)
+            or value < minimum
+            or (maximum is not None and value > maximum)
+        ):
+            return False
+    return all(
+        isinstance(pubkey, str)
+        and isinstance(score, int)
+        and not isinstance(score, bool)
+        and 0 <= score <= 100
+        for pubkey, score in candidate['scores'].items()
+    )
 
 
 def commit_policy_settings(policy):

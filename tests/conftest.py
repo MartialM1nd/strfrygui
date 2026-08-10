@@ -15,10 +15,13 @@ from models import db
 @pytest.fixture
 def app(tmp_path):
     app = Flask(__name__)
-    blocklist_path = tmp_path / "blocklist.json"
-    trust_policy_path = tmp_path / "trust_policy.json"
-    trust_stats_path = tmp_path / "trust_policy_stats.json"
-    decision_log_path = tmp_path / "runtime" / "write_policy_events.jsonl"
+    runtime_dir = tmp_path / "runtime"
+    runtime_dir.mkdir()
+    blocklist_path = runtime_dir / "blocklist.json"
+    trust_policy_path = runtime_dir / "trust_policy.json"
+    legacy_trust_policy_path = tmp_path / "trust_policy.json"
+    trust_stats_path = runtime_dir / "trust_policy_stats.json"
+    decision_log_path = runtime_dir / "write_policy_events.jsonl"
     plugin_path = tmp_path / "blocklist_plugin.py"
     plugin_path.write_text("#!/bin/sh\nexit 0\n")
     plugin_path.chmod(0o755)
@@ -39,6 +42,7 @@ def app(tmp_path):
     old_blocklist = Config.BANNED_PUBKEYS_FILE
     old_plugin = Config.BLOCKLIST_PLUGIN_PATH
     old_trust_policy = Config.TRUST_POLICY_FILE
+    old_legacy_trust_policy = Config.LEGACY_TRUST_POLICY_FILE
     old_trust_stats = Config.TRUST_POLICY_STATS_FILE
     old_decision_log = Config.WRITE_POLICY_EVENT_LOG
     old_timeout = Config.MODERATION_PURGE_TIMEOUT
@@ -53,6 +57,7 @@ def app(tmp_path):
     Config.BANNED_PUBKEYS_FILE = str(blocklist_path)
     Config.BLOCKLIST_PLUGIN_PATH = str(plugin_path)
     Config.TRUST_POLICY_FILE = str(trust_policy_path)
+    Config.LEGACY_TRUST_POLICY_FILE = str(legacy_trust_policy_path)
     Config.TRUST_POLICY_STATS_FILE = str(trust_stats_path)
     Config.WRITE_POLICY_EVENT_LOG = str(decision_log_path)
     Config.MODERATION_PURGE_TIMEOUT = 1
@@ -74,6 +79,7 @@ def app(tmp_path):
     Config.BANNED_PUBKEYS_FILE = old_blocklist
     Config.BLOCKLIST_PLUGIN_PATH = old_plugin
     Config.TRUST_POLICY_FILE = old_trust_policy
+    Config.LEGACY_TRUST_POLICY_FILE = old_legacy_trust_policy
     Config.TRUST_POLICY_STATS_FILE = old_trust_stats
     Config.WRITE_POLICY_EVENT_LOG = old_decision_log
     Config.MODERATION_PURGE_TIMEOUT = old_timeout

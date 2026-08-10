@@ -15,10 +15,13 @@ from dataclasses import dataclass, field
 
 
 BASE_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
-BLOCKLIST_FILE = os.path.join(BASE_DIR, "blocklist.json")
-TRUST_POLICY_FILE = os.path.join(BASE_DIR, "trust_policy.json")
-TRUST_POLICY_STATS_FILE = os.path.join(BASE_DIR, "trust_policy_stats.json")
-DECISION_LOG_FILE = os.path.join(BASE_DIR, "runtime", "write_policy_events.jsonl")
+RUNTIME_DIR = os.path.join(BASE_DIR, "runtime")
+LEGACY_BLOCKLIST_FILE = os.path.join(BASE_DIR, "blocklist.json")
+LEGACY_TRUST_POLICY_FILE = os.path.join(BASE_DIR, "trust_policy.json")
+BLOCKLIST_FILE = os.path.join(RUNTIME_DIR, "blocklist.json")
+TRUST_POLICY_FILE = os.path.join(RUNTIME_DIR, "trust_policy.json")
+TRUST_POLICY_STATS_FILE = os.path.join(RUNTIME_DIR, "trust_policy_stats.json")
+DECISION_LOG_FILE = os.path.join(RUNTIME_DIR, "write_policy_events.jsonl")
 DECISION_LOG_MAX_BYTES = 5 * 1024 * 1024
 DECISION_LOG_MAX_RECORD_BYTES = 4096
 DECISION_LOG_QUEUE_SIZE = 4096
@@ -156,42 +159,89 @@ def _is_bounded_int(value, minimum, maximum):
 class PolicyReloader:
     """Reload a policy by mtime while retaining the last valid value."""
 
-    def __init__(self, path):
+    def __init__(self, path, fallback_path=None):
         self.path = path
+        self.fallback_path = fallback_path
         self.policy = TrustPolicy()
+        self._has_valid_policy = False
+        self._runtime_activated = False
         self._mtime = object()
         self.reload()
 
     def reload(self):
-        current_mtime = _file_mtime(self.path)
+        active_path = self.path
+        if (
+            not self._runtime_activated
+            and not os.path.exists(self.path)
+            and self.fallback_path
+        ):
+            active_path = self.fallback_path
+        current_mtime = (active_path, _file_mtime(active_path))
         if current_mtime == self._mtime:
             return self.policy
         self._mtime = current_mtime
-        if current_mtime is None:
+        if current_mtime[1] is None:
             return self.policy
-        try:
-            with open(self.path, encoding="utf-8") as policy_file:
-                candidate = TrustPolicy.from_dict(json.load(policy_file))
-        except (json.JSONDecodeError, OSError, ValueError, TypeError):
+        candidate = self._load(active_path)
+        if (
+            candidate is None
+            and not self._has_valid_policy
+            and self.fallback_path
+            and active_path != self.fallback_path
+        ):
+            candidate = self._load(self.fallback_path)
+        if candidate is None:
             return self.policy
         self.policy = candidate
+        self._has_valid_policy = True
+        if active_path == self.path:
+            self._runtime_activated = True
         return self.policy
+
+    @staticmethod
+    def _load(path):
+        try:
+            with open(path, encoding="utf-8") as policy_file:
+                return TrustPolicy.from_dict(json.load(policy_file))
+        except (json.JSONDecodeError, OSError, ValueError, TypeError):
+            return None
 
 
 class BlocklistReloader:
     """Preserve the legacy blocklist reload-by-mtime behavior."""
 
-    def __init__(self, path):
+    def __init__(self, path, fallback_path=None):
         self.path = path
-        self.blocklist = load_blocklist(path)
-        self._mtime = _file_mtime(path)
+        self.fallback_path = fallback_path
+        self.blocklist = set()
+        self._has_valid_blocklist = False
+        self._runtime_activated = False
+        self._mtime = object()
+        self.reload()
 
     def reload(self):
-        current_mtime = _file_mtime(self.path)
+        active_path = self.path
+        if (
+            not self._runtime_activated
+            and not os.path.exists(self.path)
+            and self.fallback_path
+        ):
+            active_path = self.fallback_path
+        current_mtime = (active_path, _file_mtime(active_path))
         if current_mtime != self._mtime:
-            candidate = _load_valid_blocklist(self.path)
+            candidate = _load_valid_blocklist(active_path)
+            if (
+                candidate is None
+                and not self._has_valid_blocklist
+                and self.fallback_path
+                and active_path != self.fallback_path
+            ):
+                candidate = _load_valid_blocklist(self.fallback_path)
             if candidate is not None:
                 self.blocklist = candidate
+                self._has_valid_blocklist = True
+                if active_path == self.path:
+                    self._runtime_activated = True
             self._mtime = current_mtime
         return self.blocklist
 
@@ -463,8 +513,14 @@ class WritePolicyRuntime:
         policy_path=TRUST_POLICY_FILE,
         stats_path=TRUST_POLICY_STATS_FILE,
     ):
-        self.blocklists = BlocklistReloader(blocklist_path)
-        self.policies = PolicyReloader(policy_path)
+        blocklist_fallback = (
+            LEGACY_BLOCKLIST_FILE if blocklist_path == BLOCKLIST_FILE else None
+        )
+        policy_fallback = (
+            LEGACY_TRUST_POLICY_FILE if policy_path == TRUST_POLICY_FILE else None
+        )
+        self.blocklists = BlocklistReloader(blocklist_path, blocklist_fallback)
+        self.policies = PolicyReloader(policy_path, policy_fallback)
         self.stats_path = stats_path
         self.rate_limiter = TokenBucket()
         self.counters = Counter()
@@ -486,7 +542,7 @@ class WritePolicyRuntime:
                 )
                 stats_file.flush()
                 os.fsync(stats_file.fileno())
-            os.chmod(temporary_path, 0o644)
+            os.chmod(temporary_path, 0o640)
             os.replace(temporary_path, self.stats_path)
             self._stats_flushed_at = now
         except OSError:

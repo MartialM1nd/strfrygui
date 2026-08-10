@@ -95,6 +95,10 @@ The app installs to `/opt/strfrygui` and runs as the `www-data` user.
 7. **Set permissions:**
    ```bash
    sudo chown -R www-data:www-data /opt/strfrygui
+   sudo groupadd -f -r strfry-observers
+   sudo usermod -aG strfry-observers nostr
+   sudo usermod -aG strfry-observers www-data
+   sudo install -d -o root -g strfry-observers -m 2770 /opt/strfrygui/runtime
    ```
 
 8. **Install systemd service:**
@@ -165,17 +169,18 @@ sudo chmod 755 /opt/strfrygui/utils/blocklist_plugin.py
 sudo systemctl restart strfry
 ```
 
-The live policy log contains source IP addresses and uses a private shared Unix group. Replace `strfry` below if your relay service uses a different account:
+Generated policy state and the live log use a private shared Unix group. Existing installations upgrading to this version must run these commands before restarting either service. They assume the relay runs as `nostr`; replace that username if yours differs:
 
 ```bash
-sudo groupadd --system strfry-observers
-sudo usermod -aG strfry-observers strfry
+sudo groupadd -f -r strfry-observers
+sudo usermod -aG strfry-observers nostr
 sudo usermod -aG strfry-observers www-data
-sudo install -d -o strfry -g strfry-observers -m 2750 /opt/strfrygui/runtime
-sudo systemctl restart strfry strfrygui
+sudo install -d -o root -g strfry-observers -m 2770 /opt/strfrygui/runtime
+sudo systemctl restart strfrygui
+sudo systemctl restart strfry
 ```
 
-The plugin creates log and lock files with mode `0640`. The setgid runtime directory keeps them in the shared group so strfry can write while StrfryGUI can read.
+StrfryGUI and the plugin create policy, log, and lock files with mode `0640`. The setgid runtime directory keeps them in the shared group while allowing both services to publish their own atomic files.
 
 You can also configure the plugin path via the **Plugins** page in the admin UI (`/plugins`).
 
@@ -222,7 +227,7 @@ The network limits can be configured with `DOMAIN_SCAN_TOTAL_TIMEOUT`, `NIP05_HT
 
 ### Banned Pubkeys File
 
-The blocklist is stored at `/opt/strfrygui/blocklist.json`. This file is automatically created and managed by the app. The plugin monitors this file for changes and reloads on the fly.
+The blocklist is stored at `/opt/strfrygui/runtime/blocklist.json`. This file is automatically created and managed by the app. The plugin monitors this file for changes and reloads on the fly.
 
 ## Files You Must Edit After Cloning
 

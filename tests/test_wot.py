@@ -1,4 +1,6 @@
 import json
+import os
+import stat
 from datetime import datetime
 
 from config import Config
@@ -12,6 +14,7 @@ from utils.wot import (
     initialize_wot,
     normalize_roots,
     publish_policy,
+    republish_policy_settings,
     rebuild_policy,
 )
 
@@ -110,6 +113,37 @@ def test_publish_policy_writes_operator_controls_and_scores_atomically(app):
     assert data['require_pow_commitment'] is False
     assert set(data['roots']) == set(snapshot.scores)
     assert data['expires_at'] > data['generated_at']
+    assert stat.S_IMODE(os.stat(Config.TRUST_POLICY_FILE).st_mode) == 0o640
+    assert stat.S_IMODE(os.stat(Config.TRUST_POLICY_FILE + '.lock').st_mode) == 0o640
+
+
+def test_first_runtime_publication_preserves_compatible_legacy_scores(app):
+    policy, _ = initialize_wot()
+    roots = [npub_to_hex(npub) for npub in policy.roots]
+    legacy = {
+        'version': 1,
+        'mode': 'enforce',
+        'roots': roots,
+        'scores': {**{root: 100 for root in roots}, 'a' * 64: 45},
+        'trust_threshold': 50,
+        'pow_difficulty': 20,
+        'require_pow_commitment': True,
+        'rate_limit_per_minute': 30,
+        'rate_limit_burst': 10,
+        'max_tracked_ips': 10000,
+        'generated_at': 1,
+        'expires_at': 2,
+    }
+    with open(Config.LEGACY_TRUST_POLICY_FILE, 'w') as legacy_file:
+        json.dump(legacy, legacy_file)
+    with open(Config.TRUST_POLICY_FILE, 'w') as runtime_file:
+        runtime_file.write('{broken')
+
+    republish_policy_settings(policy)
+
+    with open(Config.TRUST_POLICY_FILE) as policy_file:
+        published = json.load(policy_file)
+    assert published['scores']['a' * 64] == 45
 
 
 def test_rebuild_policy_records_success_and_publishes_snapshot(app):

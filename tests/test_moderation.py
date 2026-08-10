@@ -63,7 +63,7 @@ def test_ban_report_records_decision_enforces_and_purges(app):
     assert projection.published_revision == projection.desired_revision == 1
     with open(app.config["BANNED_PUBKEYS_FILE"]) as blocklist_file:
         assert json.load(blocklist_file) == ["bad-pubkey"]
-    assert stat.S_IMODE(os.stat(app.config["BANNED_PUBKEYS_FILE"]).st_mode) == 0o644
+    assert stat.S_IMODE(os.stat(app.config["BANNED_PUBKEYS_FILE"]).st_mode) == 0o640
 
 
 def test_reconciliation_publishes_an_empty_initial_projection(app):

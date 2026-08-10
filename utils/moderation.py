@@ -736,7 +736,7 @@ class ModerationDecisions:
                 json.dump(pubkeys, blocklist_file)
                 blocklist_file.flush()
                 os.fsync(blocklist_file.fileno())
-            os.chmod(temporary_path, 0o644)
+            os.chmod(temporary_path, 0o640)
             os.replace(temporary_path, blocklist_path)
         except OSError:
             if os.path.exists(temporary_path):

@@ -214,6 +214,55 @@ def test_blocklist_reloader_retains_last_valid_bans(tmp_path):
     assert subject.reload() == {"active-ban"}
 
 
+def test_reloaders_use_legacy_files_until_runtime_files_exist(tmp_path):
+    runtime_blocklist = tmp_path / "runtime-blocklist.json"
+    legacy_blocklist = tmp_path / "legacy-blocklist.json"
+    runtime_policy = tmp_path / "runtime-policy.json"
+    legacy_policy = tmp_path / "legacy-policy.json"
+    write_json(legacy_blocklist, ["legacy-ban"])
+    write_json(legacy_policy, policy_data(mode="monitor"))
+    blocklists = plugin.BlocklistReloader(
+        str(runtime_blocklist), str(legacy_blocklist)
+    )
+    policies = plugin.PolicyReloader(str(runtime_policy), str(legacy_policy))
+
+    assert blocklists.reload() == {"legacy-ban"}
+    assert policies.reload().mode == "monitor"
+
+    write_json(runtime_blocklist, [])
+    write_json(runtime_policy, policy_data(mode="enforce"))
+
+    assert blocklists.reload() == set()
+    assert policies.reload().mode == "enforce"
+
+    runtime_blocklist.unlink()
+    runtime_policy.unlink()
+    write_json(legacy_blocklist, ["stale-legacy-ban"])
+    write_json(legacy_policy, policy_data(mode="off"))
+
+    assert blocklists.reload() == set()
+    assert policies.reload().mode == "enforce"
+
+
+def test_reloaders_do_not_fail_open_when_initial_runtime_files_are_invalid(tmp_path):
+    runtime_blocklist = tmp_path / "runtime-blocklist.json"
+    legacy_blocklist = tmp_path / "legacy-blocklist.json"
+    runtime_policy = tmp_path / "runtime-policy.json"
+    legacy_policy = tmp_path / "legacy-policy.json"
+    runtime_blocklist.write_text("{broken", encoding="ascii")
+    runtime_policy.write_text("{broken", encoding="ascii")
+    write_json(legacy_blocklist, ["legacy-ban"])
+    write_json(legacy_policy, policy_data(mode="enforce"))
+
+    blocklists = plugin.BlocklistReloader(
+        str(runtime_blocklist), str(legacy_blocklist)
+    )
+    policies = plugin.PolicyReloader(str(runtime_policy), str(legacy_policy))
+
+    assert blocklists.reload() == {"legacy-ban"}
+    assert policies.reload().mode == "enforce"
+
+
 def test_runtime_flushes_aggregate_stats_atomically(tmp_path):
     stats_path = tmp_path / "trust_policy_stats.json"
     subject = plugin.WritePolicyRuntime(
@@ -229,6 +278,7 @@ def test_runtime_flushes_aggregate_stats_atomically(tmp_path):
         "updated_at": 100,
         "counters": {"accepted_off": 1},
     }
+    assert stat.S_IMODE(stats_path.stat().st_mode) == 0o640
 
 
 def test_ip_normalization_handles_ipv4_ipv6_dicts_and_bad_input():
