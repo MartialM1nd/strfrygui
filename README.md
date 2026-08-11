@@ -1,150 +1,280 @@
-# ⚠️ USE AT YOUR OWN RISK - VIBE CODED ⚠️
-
-This project is vibe coded. It works, but may have bugs, security issues, or unexpected behavior. Review the code before running in production.
-
----
-
 # StrfryGUI
 
-A web-based management portal for [strfry](https://github.com/hoytech/strfry), a Nostr relay written in C++.
+StrfryGUI is a Flask-based operations and moderation console for a local
+[strfry](https://github.com/hoytech/strfry) Nostr relay. It combines relay
+telemetry, event operations, moderation workflows, write-policy controls,
+configuration editing, and administrative tooling in one role-aware web UI.
 
-## Features
+StrfryGUI manages live relay data and includes destructive operations. Deploy it
+behind HTTPS, restrict access to trusted operators, use least-privilege service
+accounts, and maintain backups of both the control-plane SQLite database and
+the strfry event database.
 
-- **Operational Dashboard** - Persistent 24-hour relay health, database storage, WebSocket connections, write-policy outcomes, moderation workload, and role-aware alerts
-- **Event Management** - Combined search and delete UI with dropdown selectors for pubkey (supports npub), kind, time range, tag, event ID search, or advanced filters
-- **Moderation** - Handle NIP-56 reports (kind 1984) with lazy-loaded event content, clickable reporter/reported columns to search, reviewed checkbox, ban user with reason, delete reported event, auto-mark as reviewed when action taken
-- **Metadata Relay Management** - Add and test public metadata relays using pinned, SSRF-safe connections
-- **Dark Mode** - Toggle between light and dark themes, with automatic system preference detection
-- **Data Import/Export** - Import and export events in JSONL format, with fried export support for faster re-imports
-- **Negentropy Trees** - Create, build, and manage negentropy sync trees
-- **Compression Dictionaries** - View compression dictionary statistics
-- **Database Compaction** - Initiate database compaction to reclaim disk space
-- **Pubkey Banning** - Ban pubkeys from posting with automatic strfry write-policy plugin integration — bans sync in real-time without restart
-- **Plugin Manager** - Configure strfry write-policy plugin path, timeout, and lookback settings
-- **Image Rendering** - Inline image display in event content with NSFW blur (click to unblur, NIP-36 content-warning support)
-- **Configuration Editor** - Atomically edit supported relay settings with stale-write protection and a safe read-only mode
-- **Connection Monitoring** - View real-time connection and message statistics
-- **Multi-user Authentication** - Role-based access control (admin, moderator, viewer)
-- **Audit Logging** - Track user actions in scrollable log with timestamps
+## Current Capabilities
 
-## Tech Stack
+### Relay Operations
 
-- **Backend**: Python Flask
-- **Database**: SQLite (for user accounts)
-- **Auth**: Flask-Login with bcrypt password hashing
-- **Frontend**: Bootstrap 5, Chart.js
-- **Communication**: Local subprocess calls to strfry CLI + HTTP scraping of Prometheus metrics
+- Persistent dashboard summaries for relay health, event traffic, storage,
+  write-policy outcomes, moderation workload, and operator attention states.
+- Sampled connection, NIP-42 authentication, protocol-message, and slow-client
+  telemetry. The UI reports aggregate activity rather than individual sessions.
+- Event search by keyword, NIP-05 address, pubkey/npub, event ID, kind, time
+  range, tag, or advanced Nostr JSON filter.
+- Safe event inspection with escaped content and explicit sensitive-content
+  reveal for NIP-36/content-warning-tagged events.
+- Bounded JSONL import and export previews, including optional fried output and
+  explicit confirmation before skipping signature verification.
+- Negentropy tree management, compression dictionary inspection, and database
+  compaction guarded by relay-process and cross-process maintenance checks.
 
-## Security
+### Moderation and Policy
 
-- Role-based access control with three levels: `admin`, `moderator`, `viewer`
-- bcrypt password hashing
-- CSRF protection via Flask-WTF
-- Rate limiting on login attempts
-- All strfry commands use validated arguments (no shell injection)
-- Audit logging for all admin actions
-- Sessions configured with secure cookies (HTTPS required in production)
-- Configuration changes use revision checks, advisory locking, and atomic replacement
-- Metadata relay connections reject private, loopback, link-local, and mixed public/private DNS results
+- NIP-56 report queue with filtering, bounded pagination, review actions, event
+  deletion, author bans, and durable purge tracking.
+- Direct pubkey bans and exact-host NIP-05 domain bans with source provenance.
+  A pubkey can remain banned through another direct or domain source after one
+  source is removed.
+- Bounded NIP-05 reconciliation using public-address-only HTTP and WebSocket
+  connections, pinned DNS results, and signed kind-0 event validation.
+- Domain operation details with verified and unresolved identities, search,
+  independent pagination, and CSV export.
+- Bundled strfry write-policy plugin with atomically published blocklist and
+  trust-policy artifacts.
+- Web-of-Trust and NIP-13 Proof-of-Work policy modes: Off, Monitor, and Enforce.
+- Live policy-decision console with safe responsive rendering, local filters,
+  pause/resume, rotation recovery, bounded browser retention, and bounded
+  polling.
+
+### Administration and Security
+
+- Viewer, moderator, and administrator roles.
+- Focused administration pages for operators, audit history, metadata relays,
+  and the ban registry.
+- Operator safeguards that prevent self-demotion, self-deactivation,
+  self-deletion, and removal of the final active administrator.
+- Audit history for authentication and significant configuration, data,
+  moderation, policy, relay, and account mutations.
+- Public-only metadata relay management with canonical URL handling, bounded
+  WebSocket exchanges, signed metadata-event validation, and SSRF protections.
+- Revision-protected, source-preserving, locked, and atomic editing of supported
+  `strfry.conf` fields. Unsafe or unsupported files become read-only rather than
+  falling back to direct writes.
+- Global CSRF protection, secure session cookies, password hashing, account
+  lockout after repeated failures, and validated local login return URLs.
+- Dark and light themes with responsive desktop and mobile layouts.
+
+## Access Model
+
+| Capability | Viewer | Moderator | Admin |
+| --- | :---: | :---: | :---: |
+| Dashboard, metrics, and connection summaries | Yes | Yes | Yes |
+| Search and inspect events | Yes | Yes | Yes |
+| Delete events or delete by filter | No | Yes | Yes |
+| Policy decision log | No | Yes | Yes |
+| Moderation reports and event purges | No | Yes | Yes |
+| Ban pubkeys and reconcile NIP-05 domains | No | Yes | Yes |
+| View domain details and export domain CSV | No | Yes | Yes |
+| Retry pending purge or enforcement publication | No | Yes | Yes |
+| Unban pubkeys or domains | No | No | Yes |
+| Import/export and database maintenance | No | No | Yes |
+| Relay and plugin configuration | No | No | Yes |
+| Operators, audit history, metadata relays, and ban registry | No | No | Yes |
+| Change own password | Yes | Yes | Yes |
+| Change another operator's password | No | No | Yes |
+
+## Architecture
+
+- **Application:** Flask 3, Flask-Login, Flask-WTF, and Flask-Limiter.
+- **Control-plane database:** SQLite via SQLAlchemy. It stores accounts, audit
+  history, moderation state, ban provenance, telemetry samples, purge tracking,
+  metadata relays, and WoT settings.
+- **Relay database:** The separate strfry database configured by
+  `STRFRY_DB_PATH`.
+- **Relay integration:** Local strfry CLI commands using argument arrays without
+  a shell.
+- **Telemetry:** Prometheus metrics exposed by strfry and sampled by StrfryGUI.
+- **External verification:** Bounded HTTPS and WebSocket requests for NIP-05 and
+  public metadata relays.
+- **Frontend:** Server-rendered Jinja templates, Bootstrap 5, Bootstrap Icons,
+  Chart.js, and small framework-free JavaScript controllers.
+- **Background work:** In-process workers for moderation reconciliation,
+  reporting, dashboard sampling, and WoT builds.
 
 ## Requirements
 
-- Python 3.9+
-- strfry relay installed and configured
-- nginx (for reverse proxy with SSL)
-- Let's Encrypt SSL certificate
-- bech32>=1.2.0 (for npub support)
+- Linux.
+- Python 3.11 or newer.
+- A working local strfry installation and configuration.
+- Permission for the StrfryGUI service account to execute the strfry binary and
+  access the relay database for the operations you enable.
+- A strfry Prometheus endpoint for dashboard and connection telemetry.
+- Public HTTPS and WebSocket egress for NIP-05 and metadata lookups.
+- HTTPS termination for browser access. Session cookies are always marked
+  `Secure`.
+
+nginx and Let's Encrypt are useful deployment choices but are not application
+runtime dependencies.
 
 ## Installation
 
-The app installs to `/opt/strfrygui` and runs as the `www-data` user.
+The included paths and service files assume installation under
+`/opt/strfrygui`, a web service account named `www-data`, and a relay service
+account named `nostr`. Adjust them for your system.
 
-1. **Clone and install to /opt/:**
-   ```bash
-   sudo git clone https://github.com/MartialM1nd/strfrygui.git /opt/strfrygui
-   cd /opt/strfrygui
-   ```
+### 1. Install the Application
 
-2. **Create virtual environment:**
-   ```bash
-   sudo python3 -m venv venv
-   sudo ./venv/bin/pip install -r requirements.txt
-   ```
+Keep application source root-owned. The web process should not be able to modify
+Python source, templates, or the write-policy plugin.
 
-3. **Copy and edit configuration:**
-   ```bash
-   sudo cp .env.example .env
-   sudo nano .env  # Edit SECRET_KEY at minimum
-   ```
+```bash
+sudo git clone https://github.com/awstephan/strfrygui.git /opt/strfrygui
+sudo python3 -m venv /opt/strfrygui/venv
+sudo /opt/strfrygui/venv/bin/pip install -r /opt/strfrygui/requirements.txt
+sudo chown -R root:root /opt/strfrygui
+```
 
-4. **Edit nginx.conf with your domain:**
-   ```bash
-   sudo nano nginx.conf  # Replace YOUR_DOMAIN.COM with your actual domain
-   ```
+### 2. Create State Directories
 
-5. **Configure nginx:**
-   ```bash
-   sudo cp nginx.conf /etc/nginx/sites-available/strfrygui
-   sudo ln -s /etc/nginx/sites-available/strfrygui /etc/nginx/sites-enabled/
-   sudo nginx -t && sudo systemctl reload nginx
-   ```
+The SQLite database should live outside the source tree. The runtime directory
+is shared with the bundled write-policy plugin.
 
-6. **Get SSL certificate:**
-   ```bash
-   sudo certbot certonly --standalone -d strfrygui.YOUR_DOMAIN.COM
-   ```
+```bash
+sudo groupadd -f -r strfry-observers
+sudo usermod -aG strfry-observers nostr
+sudo usermod -aG strfry-observers www-data
+sudo install -d -o www-data -g www-data -m 0750 /var/lib/strfrygui
+sudo install -d -o root -g strfry-observers -m 2770 /opt/strfrygui/runtime
+```
 
-7. **Set permissions:**
-   ```bash
-   sudo chown -R www-data:www-data /opt/strfrygui
-   sudo groupadd -f -r strfry-observers
-   sudo usermod -aG strfry-observers nostr
-   sudo usermod -aG strfry-observers www-data
-   sudo install -d -o root -g strfry-observers -m 2770 /opt/strfrygui/runtime
-   ```
+Restart services after changing group membership.
 
-8. **Install systemd service:**
-   ```bash
-   sudo cp strfrygui.service /etc/systemd/system/
-   sudo systemctl daemon-reload
-   sudo systemctl enable strfrygui
-   sudo systemctl start strfrygui
-   ```
+### 3. Configure the Environment
 
-9. **First-time setup:**
-   - Visit `https://strfrygui.YOUR_DOMAIN.COM`
-   - Register the first admin user at `/register`
-   - Create additional users as needed
+```bash
+sudo cp /opt/strfrygui/.env.example /opt/strfrygui/.env
+sudo chown root:www-data /opt/strfrygui/.env
+sudo chmod 0640 /opt/strfrygui/.env
+sudo editor /opt/strfrygui/.env
+```
 
-## Configuration
-
-Edit `/opt/strfrygui/.env` with your settings:
+At minimum, set unique non-empty values for `SECRET_KEY` and
+`REGISTRATION_TOKEN`, and use the dedicated state path:
 
 ```env
-# Required: Generate with: python3 -c "import secrets; print(secrets.token_hex(32))"
-SECRET_KEY=
-
-# Required for first-time registration: Generate with: python3 -c "import secrets; print(secrets.token_hex(32))"
-REGISTRATION_TOKEN=
-
-DATABASE_URL=sqlite:////opt/strfrygui/strfrygui.db
+SECRET_KEY=<generated-secret>
+REGISTRATION_TOKEN=<generated-secret>
+DATABASE_URL=sqlite:////var/lib/strfrygui/strfrygui.db
 STRFRY_BINARY=/usr/local/bin/strfry
 STRFRY_CONFIG=/etc/strfry.conf
 STRFRY_DB_PATH=/var/lib/strfry
 STRFRY_METRICS_URL=http://localhost:7777/metrics
-DASHBOARD_SAMPLE_INTERVAL=60
 TRUSTED_PROXY_COUNT=1
-
-# Public metadata relays, one per line
-EXTERNAL_RELAYS="wss://relay.damus.io
-wss://nos.lol"
 ```
 
-### Safe Configuration Editing
+Generate secrets with:
 
-StrfryGUI never truncates `strfry.conf` in place. It preserves the supported source structure, checks that the file has not changed since the page was loaded, writes and syncs a temporary file, and atomically replaces the target. If the syntax is ambiguous or the service account cannot create and rename files in the containing directory, the Configuration and Plugins pages remain readable but disable writes.
+```bash
+python3 -c "import secrets; print(secrets.token_hex(32))"
+```
 
-Do not grant `www-data` write access to all of `/etc`. To enable web-based configuration safely, place the relay configuration in a dedicated directory shared only by strfry and StrfryGUI, then set `STRFRY_CONFIG` to that path. For example:
+`TRUSTED_PROXY_COUNT=1` is appropriate when exactly one trusted reverse proxy
+sits between clients and Flask. Use `0` when Flask is directly exposed.
+
+### 4. Configure HTTPS
+
+Update `nginx.conf` with the real hostname and certificate paths. Obtain a valid
+certificate before enabling the final TLS configuration, or use your ACME
+client's nginx/webroot integration.
+
+The application permits imports up to 5 MiB by default. Configure nginx with a
+slightly larger request allowance, for example:
+
+```nginx
+client_max_body_size 6m;
+```
+
+Align reverse-proxy timeouts with the bounded import, export, and maintenance
+operations you intend to use.
+
+### 5. Start the Service
+
+`strfrygui.service` is a simple single-process reference unit:
+
+```bash
+sudo cp /opt/strfrygui/strfrygui.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now strfrygui
+```
+
+The bundled unit uses Flask's server. Review and harden it for your deployment.
+Do not switch blindly to multiple WSGI workers: this project currently has
+in-process queues, workers, schedulers, and status state that would be duplicated
+across processes.
+
+### 6. Register the First Operator
+
+Visit `/register`, enter the configured registration token, and select the
+`admin` role for the first account. Registration closes after the first account
+is created, regardless of its selected role.
+
+## Configuration Reference
+
+### Core Settings
+
+| Variable | Purpose | Default |
+| --- | --- | --- |
+| `SECRET_KEY` | Flask session and CSRF signing secret; required | None |
+| `REGISTRATION_TOKEN` | Token for first-account registration | None |
+| `DATABASE_URL` | Control-plane SQLite URL | `sqlite:///strfrygui.db` |
+| `STRFRY_BINARY` | strfry executable | `/usr/local/bin/strfry` |
+| `STRFRY_CONFIG` | strfry configuration file | `/etc/strfry.conf` |
+| `STRFRY_DB_PATH` | strfry event database directory | `/var/lib/strfry` |
+| `STRFRY_METRICS_URL` | Prometheus metrics endpoint | `http://localhost:7777/metrics` |
+| `DASHBOARD_SAMPLE_INTERVAL` | Telemetry sample interval; minimum 60 seconds | `60` |
+| `TRUSTED_PROXY_COUNT` | Trusted proxy count for audit client addresses | `0` |
+
+### Data Operation Limits
+
+| Variable | Purpose | Default |
+| --- | --- | --- |
+| `IMPORT_MAX_BYTES` | Maximum pasted JSONL import size | `5242880` |
+| `IMPORT_MAX_EVENTS` | Maximum events in one import | `10000` |
+| `EXPORT_MAX_BYTES` | Maximum captured export output | `5242880` |
+
+### Moderation and Network Limits
+
+The `.env.example` file documents report synchronization, domain scan, NIP-05,
+response-size, address-count, and WebSocket message limits. Defaults are bounded
+in `config.py`; review them before increasing any value.
+
+Metadata relays are seeded into SQLite on first startup and managed under
+**Admin > Metadata relays**. New connections are limited to `ws://` and
+`wss://` destinations whose DNS answers are all globally routable. Private,
+loopback, link-local, multicast, and mixed public/private destinations are
+rejected.
+
+## Safe strfry Configuration Editing
+
+The Configuration and Plugins pages edit only these supported fields:
+
+- `relay.info.name`
+- `relay.info.description`
+- `relay.info.pubkey`
+- `relay.info.contact`
+- `relay.bind`
+- `relay.port`
+- `relay.writePolicy.plugin`
+- `relay.writePolicy.timeoutSeconds`
+- `relay.writePolicy.lookbackSeconds`
+
+StrfryGUI preserves the supported source structure, checks a SHA-256 revision,
+locks concurrent changes, writes and syncs a temporary file, and atomically
+replaces the target. Malformed, ambiguous, unsupported, or non-atomically
+writable configurations are shown read-only.
+
+Do not grant `www-data` write access to all of `/etc`. To enable web-based
+editing, place the relay configuration in a dedicated directory shared only by
+strfry and StrfryGUI:
 
 ```bash
 sudo groupadd -f -r strfry-config
@@ -154,153 +284,195 @@ sudo install -d -o root -g strfry-config -m 2770 /etc/strfrygui
 sudo install -o root -g strfry-config -m 0660 /etc/strfry.conf /etc/strfrygui/strfry.conf
 ```
 
-Update both strfry and `/opt/strfrygui/.env` to use `/etc/strfrygui/strfry.conf`, then restart both services. The editor intentionally remains read-only rather than falling back to a non-atomic write when these permissions are absent. Avoid editing the file manually while saving through the GUI. Symlink targets are retained, but hard-linked configuration files are not recommended because atomic replacement changes file identity.
+Point both services at `/etc/strfrygui/strfry.conf` and restart them. Avoid
+manual edits while saving through the GUI. Symlink targets are retained; hard
+links are not recommended because atomic replacement changes file identity.
 
-Metadata relay URLs are limited to `ws://` and `wss://` destinations that resolve entirely to globally routable addresses. Private or local relay access is intentionally unsupported by the web UI.
+## Write-Policy Plugin
 
-`TRUSTED_PROXY_COUNT` controls whether audit logging trusts `X-Forwarded-For`. Keep it at `0` when Flask is directly exposed. Set it to the exact number of trusted reverse proxies between clients and Flask; the bundled nginx deployment uses `1`. Values supplied by untrusted proxies are otherwise ignored.
+Add or update the `writePolicy` section in `strfry.conf`:
 
-Generate secure tokens:
-```bash
-# For SECRET_KEY
-python3 -c "import secrets; print(secrets.token_hex(32))"
-
-# For REGISTRATION_TOKEN
-python3 -c "import secrets; print(secrets.token_hex(32))"
-```
-
-### First-Time Registration
-
-The first user must register at `/register` with the correct `REGISTRATION_TOKEN` set in `.env`. This prevents unauthorized registration before you secure your relay. After the first user is created, registration is automatically closed.
-
-## Pubkey Banning
-
-StrfryGUI includes a **write-policy plugin** that blocks banned pubkeys from posting. Bans applied via the Moderation page or Events page take effect immediately — no strfry restart needed.
-
-### One-Time Setup
-
-Add the following to your `strfry.conf`:
-
-```toml
+```text
 relay {
     writePolicy {
         plugin = "/opt/strfrygui/utils/blocklist_plugin.py"
         timeoutSeconds = 10
+        lookbackSeconds = 0
     }
 }
 ```
 
-Then make the plugin executable and restart strfry once:
+Make the bundled plugin executable and restart strfry after changing its path:
 
 ```bash
-sudo chmod 755 /opt/strfrygui/utils/blocklist_plugin.py
+sudo chmod 0755 /opt/strfrygui/utils/blocklist_plugin.py
 sudo systemctl restart strfry
 ```
 
-Generated policy state and the live log use a private shared Unix group. Existing installations upgrading to this version must run these commands before restarting either service. They assume the relay runs as `nostr`; replace that username if yours differs:
+Once the plugin is configured and running, successful blocklist and trust-policy
+publication is picked up without restarting strfry. Publication failures remain
+visible and retryable. A published artifact proves that the file was written;
+it does not by itself prove that the running relay loaded the plugin.
 
-```bash
-sudo groupadd -f -r strfry-observers
-sudo usermod -aG strfry-observers nostr
-sudo usermod -aG strfry-observers www-data
-sudo install -d -o root -g strfry-observers -m 2770 /opt/strfrygui/runtime
-sudo systemctl restart strfrygui
-sudo systemctl restart strfry
-```
+Ban operations have separate observable stages:
 
-StrfryGUI and the plugin create policy, log, and lock files with mode `0640`. The setgid runtime directory keeps them in the shared group while allowing both services to publish their own atomic files.
+1. The ban and its provenance are committed to SQLite.
+2. The complete blocklist is atomically published to
+   `/opt/strfrygui/runtime/blocklist.json`.
+3. The running plugin reloads the artifact.
+4. Existing matching events are purged through durable, retryable work.
 
-You can also configure the plugin path via the **Plugins** page in the admin UI (`/plugins`).
-
-### How It Works
-
-1. You ban a pubkey via the UI (Moderation or Events page)
-2. The pubkey is added to `blocklist.json`
-3. The running plugin detects the blocklist mtime change and reloads it
-4. Any future events from that pubkey are rejected with `blocked: pubkey is banned`
-
-Unbanning triggers the same sync — the pubkey is removed from `blocklist.json` and the plugin reloads automatically.
+Direct and domain ban sources overlap. Removing one source does not allow the
+pubkey if another source remains active. Purged events cannot be restored.
 
 ### Web of Trust and Proof of Work
 
-The Plugins page can build a bounded, personalized web of trust from signed kind-3 follow lists already stored on this relay. It never fetches follow lists from external relays. Trusted roots score 100, direct follows score 80, and two-hop identities score 40 plus 5 for each distinct direct-follow endorsement. Identities below the configured score can be required to provide NIP-13 proof of work.
+- **Off:** Direct/domain bans remain active; trust and PoW do not reject other
+  authors.
+- **Monitor:** Decisions and counters are recorded without rejecting low-trust
+  events.
+- **Enforce:** Authors below the trust threshold must satisfy the configured
+  NIP-13 PoW and rate policy.
 
-The protection mode is managed without restarting strfry:
+The graph is built from signed kind-3 follow lists already stored locally. It is
+bounded to two hops, 5,000 direct identities, 100,000 total identities, 500,000
+edges, and 2,000 follows per contributing list. Failed builds retain the last
+valid snapshot; stale snapshots trust only configured roots until a successful
+rebuild.
 
-- **Off** keeps pubkey bans active but does not enforce trust or proof of work.
-- **Monitor** computes decisions and counters without rejecting low-trust events.
-- **Enforce** requires the configured proof-of-work difficulty from authors below the trust threshold.
+Local imports, synchronization, and stored-event replay bypass trust and PoW
+checks. Explicit bans always take precedence.
 
-The initial roots are `npub12ay99qrgh9vdk0eneu8t7ccfd7x8srt3ngvdajh5mufw5dpp590su28yuc` and `npub18ams6ewn5aj2n3wt2qawzglx9mr4nzksxhvrdc4gzrecw7n5tvjqctp424`. The initial trust threshold is 50 and untrusted proof-of-work difficulty is 20. The same page manages trusted root npubs, trust and proof-of-work thresholds, NIP-13 difficulty commitment, refresh frequency, low-trust rate limits, build status, and manual rebuilds. Settings are published atomically to `trust_policy.json`; runtime counters are periodically written to `trust_policy_stats.json`. Failed graph builds retain the last valid snapshot, and stale snapshots trust only configured roots until a successful rebuild.
+### Policy Decision Log
 
-Graph construction is limited to two hops, 5,000 direct identities, 100,000 total identities, and 500,000 follow edges. Individual follow lists above 2,000 entries do not contribute trust. Local imports, streams, syncs, and stored-event replay bypass trust and proof-of-work checks, while explicit pubkey bans always take precedence.
+The plugin records decision metadata after responding to strfry. It does not log
+event content, tags, signatures, or raw requests. The log rotates at 5 MiB with
+one 5 MiB backup. The browser retains at most 1,000 decisions and polls every
+2.5 seconds while visible and unpaused.
 
-### Live Policy Log
+## Database Maintenance
 
-Admins and moderators can open **Policy Log** to watch actual accepted and rejected events with Monitor-mode simulated outcomes. The page refreshes every 2.5 seconds, pauses in hidden browser tabs, and provides filters for action, simulated result, reason, kind, event ID, pubkey, source type, and source IP.
+Database compaction acts directly on strfry storage. StrfryGUI requires explicit
+confirmation, refuses to start while visible strfry processes are running, and
+also refuses when process visibility is unavailable. Stop the relay and verify
+backups before compacting.
 
-The plugin records only decision metadata after sending its response to strfry. It never logs event content, tags, signatures, or raw requests. Logging is best effort and cannot change an event decision. The current JSONL file rotates at 5 MiB with one 5 MiB backup, keeping disk usage near 10 MiB.
+Import, event deletion, negentropy mutation, and compaction share a filesystem
+maintenance lock to prevent overlapping GUI writes across worker processes.
 
-### NIP-05 Domain Bans
+## Backup and Recovery
 
-Moderators can add an exact NIP-05 domain rule from the Moderation page. StrfryGUI enumerates the domain's HTTPS `/.well-known/nostr.json` names map, then requires each listed pubkey's latest signed kind-0 profile to claim the matching identifier. Profiles are searched locally, on configured metadata relays, and on valid `wss://` relay hints from the directory.
+Back up these locations before upgrades or destructive maintenance:
 
-Directory enumeration is an extension used by many static NIP-05 providers, but it is not required by NIP-05. Dynamic endpoints that only answer `?name=` lookups cannot be domain-banned this way and are reported as reconciliation errors.
+- The control-plane SQLite database from `DATABASE_URL`.
+- The strfry event database at `STRFRY_DB_PATH`.
+- `strfry.conf`.
+- `/opt/strfrygui/runtime`, including policy artifacts and decision logs.
 
-Reconciliation is additive: newly verified pubkeys are banned and purged, while names omitted by later directory responses stay banned until an admin explicitly unbans the domain. Domain unban removes only that domain's source; direct and overlapping domain bans remain active. Purged notes cannot be restored, and a purge already in progress may finish before an unban completes.
-
-During upgrade, pre-existing pubkey bans are conservatively retained as direct sources because older releases did not record complete overlap provenance. Unbanning a migrated domain may therefore leave those legacy pubkeys active for explicit individual review.
-
-The network limits can be configured with `DOMAIN_SCAN_TOTAL_TIMEOUT`, `NIP05_HTTP_TIMEOUT`, `NIP05_MAX_RESPONSE_BYTES`, `NIP05_MAX_ADDRESSES`, `NIP05_MAX_NAMES`, `NIP05_MAX_RELAYS`, `NIP05_PROFILE_TIMEOUT`, `NIP05_RELAY_TIMEOUT`, and `NIP05_MAX_WS_MESSAGE_BYTES`.
-
-### Banned Pubkeys File
-
-The blocklist is stored at `/opt/strfrygui/runtime/blocklist.json`. This file is automatically created and managed by the app. The plugin monitors this file for changes and reloads on the fly.
-
-## Files You Must Edit After Cloning
-
-| File | What to change |
-|------|----------------|
-| `.env` | `SECRET_KEY` (required), `REGISTRATION_TOKEN` (required for first-time setup) |
-| `nginx.conf` | `strfrygui.YOUR_DOMAIN.COM`, SSL certificate paths |
-
-## User Roles
-
-| Role | Permissions |
-|------|-------------|
-| **admin** | Full access: users, config, delete events, import/export, db ops |
-| **moderator** | View metrics, search events, delete events |
-| **viewer** | Read-only: metrics, event search, view config |
+Do not delete the SQLite database merely to reset an account. It also contains
+audit history, reports, bans and provenance, purge status, metadata relays,
+telemetry samples, and WoT state.
 
 ## Development
 
-Run in development mode:
+Use isolated development paths. Importing `app.py` initializes the database,
+publishes policy state, and starts background workers and schedulers.
+
 ```bash
-cd /opt/strfrygui
+python3.11 -m venv venv
 source venv/bin/activate
-flask run --debug
+python -m pip install -r requirements.txt
+python -m pip install pytest ruff
 ```
+
+Run the test suite:
+
+```bash
+SECRET_KEY=test-secret python -m pytest
+```
+
+Run focused tests:
+
+```bash
+SECRET_KEY=test-secret python -m pytest tests/test_moderation.py
+SECRET_KEY=test-secret python -m pytest tests/test_admin.py::test_admin_is_get_only_redirect_to_operators
+```
+
+Lint:
+
+```bash
+ruff check .
+```
+
+For local execution, use an isolated `.env`, SQLite database, runtime directory,
+strfry configuration, and relay database. `--no-reload` avoids duplicate
+background workers from the debug reloader:
+
+```bash
+python -m flask --app app run --debug --no-reload
+```
+
+Authenticated browser sessions require HTTPS because session cookies are always
+marked `Secure`.
 
 ## Troubleshooting
 
-**Service won't start:**
+### Service startup
+
 ```bash
 sudo systemctl status strfrygui
-sudo journalctl -u strfrygui -n 50
+sudo journalctl -u strfrygui -n 100
 ```
 
-**Can't connect:**
-- Check nginx is running: `sudo systemctl status nginx`
-- Check firewall: `sudo ufw status`
+Check that:
 
-**Database issues:**
-- Delete `/opt/strfrygui/strfrygui.db` and restart to reset users
+- `SECRET_KEY` is set and `.env` is readable by the service account.
+- The SQLite directory is writable by `www-data`.
+- The runtime directory is writable by both StrfryGUI and the plugin group.
+- The strfry binary is executable by `www-data`.
+- The configured relay database permissions match the operations being used.
+- `STRFRY_METRICS_URL` is reachable for telemetry.
+- `strfry.conf` and its containing directory have the permissions required for
+  atomic replacement if web editing is enabled.
+
+### Read-only configuration
+
+The UI intentionally becomes read-only when parsing, revision, locking,
+ownership, group, or atomic replacement requirements cannot be met. Review the
+diagnostic shown on the page and the application log; do not work around it by
+granting broad write access to system directories.
+
+### Missing policy enforcement
+
+Confirm all of the following:
+
+- The configured plugin path is correct and executable.
+- strfry was restarted after a plugin path change.
+- The Plugins page reports successful policy publication.
+- The shared runtime directory is accessible to both services.
+- Recent policy telemetry or decision-log activity is present.
+
+## Project Layout
+
+```text
+app.py                 Flask routes, forms, workers, and startup
+config.py              Environment-backed application configuration
+models.py              SQLite control-plane models and indexes
+utils/configuration.py Safe source-preserving strfry config editor
+utils/relay.py         Public-only metadata relay networking
+utils/moderation.py    Ban, publication, purge, and unban workflows
+utils/wot.py           WoT graph and trust-policy publication
+utils/strfry.py        strfry CLI integration
+templates/             Server-rendered operations UI
+static/                Shared CSS and JavaScript controllers
+tests/                 Pytest regression suite
+```
 
 ## License
 
-GPL-3.0 - See LICENSE file
+GPL-3.0. See [LICENSE](LICENSE).
 
 ## Acknowledgments
 
 - [strfry](https://github.com/hoytech/strfry) by Doug Hoyte
-- [nostr](https://github.com/nostr-protocol/nostr) protocol
+- [Nostr protocol](https://github.com/nostr-protocol/nostr)
