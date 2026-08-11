@@ -334,3 +334,33 @@ def test_plugins_page_manages_and_publishes_wot_policy(monkeypatch, tmp_path):
         'delete_selected': '1',
         'selected_events': 'event-id',
     }).status_code == 403
+
+    monkeypatch.setattr(app_module, 'scan_events', lambda *args, **kwargs: [{
+        'id': 'a' * 64,
+        'pubkey': 'b' * 64,
+        'created_at': 1_700_000_000,
+        'kind': 1,
+        'tags': [],
+        'content': '<script>alert("event-xss")</script>',
+        'sig': 'c' * 128,
+    }])
+    event_page = moderator_client.post('/events', data={
+        'search': '1',
+        'search_type': 'all',
+        'limit': '25',
+    })
+    assert event_page.status_code == 200
+    assert b'Event explorer' in event_page.data
+    assert b'&lt;script&gt;alert' in event_page.data
+    assert b'<script>alert("event-xss")</script>' not in event_page.data
+    assert moderator_client.post('/events', data={
+        'delete_selected': '1',
+        'event_ids': 'a',
+    }).status_code == 400
+
+    empty_delete = moderator_client.post('/events/delete', data={
+        'filter_json': '{}',
+        'confirm_delete': 'DELETE',
+    })
+    assert empty_delete.status_code == 200
+    assert b'Empty filters are not allowed' in empty_delete.data

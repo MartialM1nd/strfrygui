@@ -36,7 +36,13 @@ from utils.metrics import get_summary, MetricsError
 from utils.auth import admin_required, moderator_required, viewer_or_higher, permission_required
 from utils.moderation import ModerationDecisions, ModerationError
 from utils.moderation_reports import sync_moderation_reports
-from utils.nip05 import normalize_domain
+from utils.nip05 import (
+    LOCAL_NAME_PATTERN,
+    PUBKEY_PATTERN,
+    Nip05VerificationError,
+    fetch_nip05_document,
+    normalize_domain,
+)
 from utils.domain_view import domain_identity_page, unresolved_identity_page
 from utils.decision_log import read_decision_log
 from utils.dashboard import collect_sample, connection_summary, dashboard_summary
@@ -312,7 +318,7 @@ class EventSearchForm(FlaskForm):
     tag_name = StringField('Tag Name (e.g., p, e)', validators=[Optional()])
     tag_value = StringField('Tag Value', validators=[Optional()])
     filter_json = TextAreaField('Custom Filter (JSON)', validators=[Optional()])
-    limit = IntegerField('Limit', default=25)
+    limit = IntegerField('Limit', default=25, validators=[NumberRange(min=1, max=1000)])
 
 
 class ExportForm(FlaskForm):
@@ -404,22 +410,6 @@ def is_nsfw_filter(tags):
             if len(tag) >= 1 and tag[0] == 'L' and 'content-warning' in str(tag[1]).lower():
                 return True
     return False
-
-
-@app.template_filter('render_images')
-def render_images_filter(content):
-    """Convert image URLs in content to img tags."""
-    if not content:
-        return ''
-    import re
-    image_extensions = ('.jpg', '.jpeg', '.png', '.gif', '.webp', '.svg', '.bmp')
-    url_pattern = r'https?://[^\s<>"\']+'
-    def replace_url(match):
-        url = match.group(0)
-        if any(url.lower().endswith(ext) for ext in image_extensions):
-            return f'<a href="{url}" target="_blank"><img src="{url}" class="event-image" loading="lazy" alt="Image"></a>'
-        return url
-    return re.sub(url_pattern, replace_url, content)
 
 
 @app.template_filter('human_size')
@@ -1080,92 +1070,100 @@ def register():
 @app.route('/events', methods=['GET', 'POST'])
 @viewer_or_higher
 def events():
-    form = EventSearchForm()
+    if request.method == 'GET' and request.args:
+        form = EventSearchForm(formdata=request.args)
+    else:
+        form = EventSearchForm()
     events_list = []
     error = None
     current_filter = {}
-    
-    if request.method == 'GET':
-        search_type = request.args.get('search_type', 'all')
-        form.search_type.data = search_type
-        
-        if search_type == 'pubkey' and request.args.get('pubkey'):
-            form.pubkey.data = request.args.get('pubkey')
+
+    if request.method == 'POST' and 'delete_selected' in request.form:
+        if current_user.role not in ('admin', 'moderator'):
+            abort(403)
+        event_ids = list(dict.fromkeys(request.form.getlist('event_ids')))
+        if any(PUBKEY_PATTERN.fullmatch(event_id) is None for event_id in event_ids):
+            abort(400, description='Event IDs must be exact 64-character hex values')
+        if event_ids:
             try:
-                current_filter = {'authors': [form.pubkey.data]}
-                events_list = scan_events(current_filter, limit=form.limit.data or 25)
+                id_filter = {'ids': event_ids}
+                delete_events(id_filter)
+                flash(f'Deleted {len(event_ids)} event(s) successfully', 'success')
+                log_audit('event_delete', f'Deleted {len(event_ids)} events via UI')
             except (ValueError, StrfryError) as e:
-                error = str(e)
-        elif search_type == 'event_id' and request.args.get('event_id'):
-            form.event_id.data = request.args.get('event_id')
+                flash(f'Failed to delete events: {e}', 'danger')
+        params = {'search_type': request.form.get('search_type', 'all')}
+        for name in (
+            'pubkey', 'kind', 'event_id', 'since', 'until', 'keyword', 'nip05',
+            'tag_name', 'tag_value', 'filter_json',
+        ):
+            if request.form.get(name):
+                params[name] = request.form.get(name)
+        params['limit'] = request.form.get('limit', 25)
+        return redirect(url_for('events', **params))
+
+    search_requested = (
+        request.method == 'POST' and 'search' in request.form
+    ) or (
+        request.method == 'GET' and 'search_type' in request.args
+    )
+    if search_requested:
+        if request.method == 'POST' and not form.validate():
+            error = ' '.join(
+                message for messages in form.errors.values() for message in messages
+            )
+        else:
+            error = validate_event_search(form)
+        if not error:
             try:
-                current_filter = {'ids': [form.event_id.data]}
-                events_list = scan_events(current_filter, limit=form.limit.data or 25)
-            except (ValueError, StrfryError) as e:
-                error = str(e)
-    elif request.method == 'POST':
-        if 'delete_selected' in request.form:
-            if current_user.role not in ('admin', 'moderator'):
-                abort(403)
-            event_ids = request.form.getlist('event_ids')
-            if event_ids:
-                try:
-                    id_filter = {'ids': event_ids}
-                    delete_events(id_filter)
-                    flash(f'Deleted {len(event_ids)} event(s) successfully', 'success')
-                    log_audit('event_delete', f'Deleted {len(event_ids)} events via UI')
-                except (ValueError, StrfryError) as e:
-                    flash(f'Failed to delete events: {e}', 'danger')
-            params = {'search_type': request.form.get('search_type', 'all')}
-            if request.form.get('pubkey'):
-                params['pubkey'] = request.form.get('pubkey')
-            if request.form.get('kind'):
-                params['kind'] = request.form.get('kind')
-            if request.form.get('event_id'):
-                params['event_id'] = request.form.get('event_id')
-            if request.form.get('since'):
-                params['since'] = request.form.get('since')
-            if request.form.get('until'):
-                params['until'] = request.form.get('until')
-            if request.form.get('keyword'):
-                params['keyword'] = request.form.get('keyword')
-            if request.form.get('nip05'):
-                params['nip05'] = request.form.get('nip05')
-            if request.form.get('tag_name'):
-                params['tag_name'] = request.form.get('tag_name')
-            if request.form.get('tag_value'):
-                params['tag_value'] = request.form.get('tag_value')
-            if request.form.get('filter_json'):
-                params['filter_json'] = request.form.get('filter_json')
-            params['limit'] = request.form.get('limit', 25)
-            return redirect(url_for('events', **params))
-        
-        if 'search' in request.form and form.validate():
-            try:
-                if form.search_type.data == 'nip05' and form.nip05.data:
+                if form.search_type.data == 'nip05':
                     pubkey = resolve_nip05(form.nip05.data)
                     if not pubkey:
-                        error = "Could not resolve NIP-05 address. Check the format (user@domain.com) and try again."
-                    else:
-                        current_filter = {'authors': [pubkey]}
+                        raise ValueError(
+                            'Could not resolve NIP-05 address. Check the address and try again.'
+                        )
+                    current_filter = {'authors': [pubkey]}
                 else:
                     current_filter = build_filter_from_form(form)
-                
-                if form.search_type.data == 'keyword' and form.keyword.data:
+
+                since_ts = parse_timestamp(form.since.data) if form.since.data else None
+                until_ts = parse_timestamp(form.until.data) if form.until.data else None
+                if since_ts is not None:
+                    current_filter['since'] = since_ts
+                if until_ts is not None:
+                    current_filter['until'] = until_ts
+
+                if form.search_type.data == 'keyword':
                     keyword = form.keyword.data.lower()
                     filter_obj = {k: v for k, v in current_filter.items() if k != 'limit'}
-                    filter_obj['limit'] = 1000
                     all_events = scan_events(filter_obj, limit=1000)
-                    events_list = [e for e in all_events if keyword in e.get('content', '').lower()]
-                    events_list = events_list[:form.limit.data or 25]
+                    events_list = [
+                        event for event in all_events
+                        if keyword in event.get('content', '').lower()
+                    ][:form.limit.data]
                 else:
-                    events_list = scan_events(current_filter, limit=form.limit.data or 25)
+                    events_list = scan_events(current_filter, limit=form.limit.data)
             except (ValueError, StrfryError) as e:
                 error = str(e)
-    
-    banned_pubkeys = [b.pubkey for b in BannedPubkey.query.all()]
-    
-    return render_template('events.html', form=form, events=events_list, error=error, current_filter=current_filter, banned_pubkeys=banned_pubkeys)
+
+    event_pubkeys = {event.get('pubkey') for event in events_list if event.get('pubkey')}
+    banned_pubkeys = set()
+    if event_pubkeys:
+        banned_pubkeys = {
+            ban.pubkey for ban in BannedPubkey.query.filter(
+                BannedPubkey.pubkey.in_(event_pubkeys)
+            )
+        }
+
+    return render_template(
+        'events.html',
+        form=form,
+        events=events_list,
+        error=error,
+        current_filter=current_filter,
+        banned_pubkeys=banned_pubkeys,
+        search_performed=search_requested,
+    )
 
 
 def parse_timestamp(value):
@@ -1192,22 +1190,84 @@ def parse_timestamp(value):
     return None
 
 
+def validate_event_search(form):
+    search_type = form.search_type.data or 'all'
+    allowed_types = {
+        'all', 'keyword', 'nip05', 'pubkey', 'event_id', 'kind', 'timerange',
+        'tag', 'advanced',
+    }
+    if search_type not in allowed_types:
+        return 'Unsupported search type.'
+    required_fields = {
+        'keyword': (form.keyword.data, 'Enter a keyword to search for.'),
+        'nip05': (form.nip05.data, 'Enter a NIP-05 address.'),
+        'pubkey': (form.pubkey.data, 'Enter a pubkey or npub.'),
+        'event_id': (form.event_id.data, 'Enter an event ID.'),
+        'kind': (form.kind.data, 'Enter an event kind.'),
+        'tag': (
+            form.tag_name.data and form.tag_value.data,
+            'Enter both a tag name and value.',
+        ),
+        'advanced': (form.filter_json.data, 'Enter a JSON filter.'),
+    }
+    if search_type in required_fields and not required_fields[search_type][0]:
+        return required_fields[search_type][1]
+    if not form.limit.data or not 1 <= form.limit.data <= 1000:
+        return 'Limit must be between 1 and 1000.'
+    if search_type == 'kind':
+        try:
+            int(form.kind.data)
+        except (TypeError, ValueError):
+            return 'Kind must be a valid number.'
+    if search_type == 'pubkey':
+        value = form.pubkey.data.strip()
+        if value.startswith('npub'):
+            try:
+                npub_to_hex(value)
+            except ValueError:
+                return 'Pubkey must be a valid npub or 64-character hex value.'
+        else:
+            try:
+                if len(value) != 64:
+                    raise ValueError
+                bytes.fromhex(value)
+            except ValueError:
+                return 'Pubkey must be a valid npub or 64-character hex value.'
+    if search_type == 'event_id':
+        value = form.event_id.data.strip()
+        try:
+            if len(value) != 64:
+                raise ValueError
+            bytes.fromhex(value)
+        except ValueError:
+            return 'Event ID must be 64 hexadecimal characters.'
+    if search_type == 'tag' and len(form.tag_name.data.strip()) != 1:
+        return 'Tag name must be one character.'
+    if search_type in ('keyword', 'timerange'):
+        since_ts = parse_timestamp(form.since.data) if form.since.data else None
+        until_ts = parse_timestamp(form.until.data) if form.until.data else None
+        if form.since.data and since_ts is None:
+            return 'Since must be a timestamp or valid date.'
+        if form.until.data and until_ts is None:
+            return 'Until must be a timestamp or valid date.'
+        if since_ts is not None and until_ts is not None and since_ts > until_ts:
+            return 'Since must be earlier than Until.'
+    return None
+
+
 def resolve_nip05(nip05_address):
     """Resolve a NIP-05 address to a pubkey."""
     try:
-        import requests
         local_part, _, domain = nip05_address.strip().partition('@')
-        if not local_part or not domain:
+        if not local_part or not domain or LOCAL_NAME_PATTERN.fullmatch(local_part) is None:
             return None
-        
-        url = f"https://{domain}/.well-known/nostr.json?name={local_part}"
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        data = response.json()
-        
-        pubkey = data.get('names', {}).get(local_part)
-        return pubkey
-    except Exception:
+        domain = normalize_domain(domain)
+        deadline = time.monotonic() + Config.NIP05_PROFILE_TIMEOUT
+        document = fetch_nip05_document(domain, local_name=local_part, deadline=deadline)
+        names = document.get('names') if isinstance(document, dict) else None
+        pubkey = names.get(local_part) if isinstance(names, dict) else None
+        return pubkey if isinstance(pubkey, str) and PUBKEY_PATTERN.fullmatch(pubkey) else None
+    except (ValueError, Nip05VerificationError):
         return None
 
 
@@ -1223,9 +1283,9 @@ def build_filter_from_form(form):
         filter_obj['limit'] = 1000
         since_ts = parse_timestamp(form.since.data) if form.since.data else None
         until_ts = parse_timestamp(form.until.data) if form.until.data else None
-        if since_ts:
+        if since_ts is not None:
             filter_obj['since'] = since_ts
-        if until_ts:
+        if until_ts is not None:
             filter_obj['until'] = until_ts
     elif search_type == 'nip05' and form.nip05.data:
         pubkey = resolve_nip05(form.nip05.data)
@@ -1244,20 +1304,20 @@ def build_filter_from_form(form):
         try:
             filter_obj['kinds'] = [int(form.kind.data.strip())]
         except ValueError:
-            return {'error': 'Kind must be a valid number'}
+            raise ValueError('Kind must be a valid number')
     elif search_type == 'timerange':
         since_ts = parse_timestamp(form.since.data) if form.since.data else None
         until_ts = parse_timestamp(form.until.data) if form.until.data else None
-        if since_ts:
+        if since_ts is not None:
             filter_obj['since'] = since_ts
-        if until_ts:
+        if until_ts is not None:
             filter_obj['until'] = until_ts
     elif search_type == 'tag' and form.tag_name.data and form.tag_value.data:
         tag_name = form.tag_name.data.strip()
         if tag_name:
             filter_obj['#' + tag_name[0]] = [form.tag_value.data.strip()]
     elif search_type == 'advanced' and form.filter_json.data:
-        return validate_filter_json(form.filter_json.data)
+        filter_obj = validate_filter_json(form.filter_json.data)
     
     return filter_obj
 
@@ -1275,6 +1335,8 @@ def events_delete():
         else:
             try:
                 filter_obj = validate_filter_json(form.filter_json.data)
+                if not filter_obj:
+                    raise ValueError('Empty filters are not allowed for deletion.')
                 result = delete_events(filter_obj)
                 success = 'Events deleted successfully'
                 log_audit('event_delete', f'Deleted events matching: {form.filter_json.data}')

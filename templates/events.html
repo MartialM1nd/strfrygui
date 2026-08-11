@@ -1,472 +1,322 @@
 {% extends "base.html" %}
+{% from "components/operations.html" import page_header, empty_state, field_errors %}
 
-{% block title %}Event Search{% if relay_name %} - {{ relay_name }}{% endif %} - StrfryGUI{% endblock %}
+{% block title %}Event Explorer{% if relay_name %} - {{ relay_name }}{% endif %} - StrfryGUI{% endblock %}
 
 {% block content %}
-<h2 class="mb-4"><i class="bi bi-search"></i>{% if relay_name %} Event Search for {{ relay_name }}{% else %} Event Search{% endif %}</h2>
+<div class="dashboard-shell event-shell">
+    {{ page_header(
+        'DATA PLANE',
+        'Event explorer',
+        'Search, inspect, and deliberately moderate relay events.',
+        (events|length ~ ' loaded') if search_performed and not error else ('Query failed' if error else 'Ready'),
+        'degraded' if error else 'healthy'
+    ) }}
 
-<div class="card mb-4">
-    <div class="card-header">
-        <h5 class="mb-0">Search Events</h5>
-    </div>
-    <div class="card-body">
+    <section class="dashboard-panel mb-4" aria-labelledby="eventSearchTitle">
+        <div class="dashboard-panel-header">
+            <div>
+                <div class="dashboard-section-label" id="eventSearchTitle">Query builder</div>
+                <div class="text-body-secondary small">Use a bounded Nostr filter against the local relay database.</div>
+            </div>
+            {% if search_performed %}<a class="btn btn-sm btn-outline-secondary" href="{{ url_for('events') }}"><i class="bi bi-x-lg"></i> Clear</a>{% endif %}
+        </div>
+
+        {% if error %}<div class="alert alert-danger" role="alert"><strong>Query failed.</strong> {{ error }}</div>{% endif %}
+
         <form method="POST" id="searchForm">
             {{ form.hidden_tag() }}
-            
-            <div class="row mb-3">
-                <div class="col-md-4">
-                    {{ form.search_type.label(class="form-label") }}
+            <input type="hidden" name="search" value="1">
+            <div class="event-query-grid">
+                <div>
+                    {{ form.search_type.label(class="form-label", for="searchType") }}
                     {{ form.search_type(class="form-select", id="searchType") }}
                 </div>
-                <div class="col-md-8 d-flex align-items-end">
-                    <button type="submit" name="search" class="btn btn-primary">
-                        <i class="bi bi-search"></i> Search
-                    </button>
-                </div>
-            </div>
-            
-            <div id="keywordFields" class="search-fields" style="display:none;">
-                <div class="mb-3">
+                <div class="event-search-field" data-search-field="keyword">
                     {{ form.keyword.label(class="form-label") }}
-                    {{ form.keyword(class="form-control", placeholder="Search for keyword in event content") }}
+                    {{ form.keyword(class="form-control", placeholder="Keyword in recent text notes") }}
                 </div>
-                <div class="mb-3">
-                    <small class="text-muted">Search recent kind 1 (text notes) for keyword. Optionally set time range below.</small>
-                </div>
-            </div>
-            
-            <div id="nip05Fields" class="search-fields" style="display:none;">
-                <div class="mb-3">
+                <div class="event-search-field" data-search-field="nip05">
                     {{ form.nip05.label(class="form-label") }}
-                    {{ form.nip05(class="form-control", placeholder="e.g., user@domain.com") }}
+                    {{ form.nip05(class="form-control", placeholder="name@example.com") }}
                 </div>
-                <div class="mb-3">
-                    <small class="text-muted">Enter a NIP-05 address to search for all events from that user.</small>
-                </div>
-            </div>
-            
-            <div id="pubkeyFields" class="search-fields">
-                <div class="mb-3">
+                <div class="event-search-field" data-search-field="pubkey">
                     {{ form.pubkey.label(class="form-label") }}
-                    {{ form.pubkey(class="form-control", placeholder="npub1... or hex pubkey") }}
+                    {{ form.pubkey(class="form-control font-monospace", placeholder="npub1... or hex pubkey") }}
                 </div>
-            </div>
-            
-            <div id="event_idFields" class="search-fields" style="display:none;">
-                <div class="mb-3">
+                <div class="event-search-field" data-search-field="event_id">
                     {{ form.event_id.label(class="form-label") }}
-                    {{ form.event_id(class="form-control", placeholder="Event ID (hex)") }}
+                    {{ form.event_id(class="form-control font-monospace", placeholder="64-character event ID") }}
                 </div>
-            </div>
-            
-            <div id="kindFields" class="search-fields" style="display:none;">
-                <div class="mb-3">
+                <div class="event-search-field" data-search-field="kind">
                     {{ form.kind.label(class="form-label") }}
-                    {{ form.kind(id="kindSelect", class="form-control", placeholder="Enter kind number (e.g., 1, 10000)") }}
+                    {{ form.kind(class="form-control", placeholder="1") }}
                 </div>
-            </div>
-            
-            <div id="timerangeFields" class="search-fields" style="display:none;">
-                <div class="row">
-                    <div class="col-md-6 mb-3">
-                        {{ form.since.label(class="form-label") }}
-                        {{ form.since(class="form-control", type="datetime-local") }}
-                        <div class="form-text">Leave empty for no start limit.</div>
-                    </div>
-                    <div class="col-md-6 mb-3">
-                        {{ form.until.label(class="form-label") }}
-                        {{ form.until(class="form-control", type="datetime-local") }}
-                        <div class="form-text">Leave empty for no end limit.</div>
-                    </div>
+                <div class="event-search-field event-tag-fields" data-search-field="tag">
+                    <div>{{ form.tag_name.label(class="form-label") }}{{ form.tag_name(class="form-control", placeholder="p") }}</div>
+                    <div>{{ form.tag_value.label(class="form-label") }}{{ form.tag_value(class="form-control font-monospace", placeholder="Tag value") }}</div>
                 </div>
-            </div>
-            
-            <div id="tagFields" class="search-fields" style="display:none;">
-                <div class="row">
-                    <div class="col-md-6 mb-3">
-                        {{ form.tag_name.label(class="form-label") }}
-                        {{ form.tag_name(class="form-control", placeholder="e.g., p (for pubkey) or e (for event)") }}
-                    </div>
-                    <div class="col-md-6 mb-3">
-                        {{ form.tag_value.label(class="form-label") }}
-                        {{ form.tag_value(class="form-control", placeholder="The tag value") }}
-                    </div>
-                </div>
-            </div>
-            
-            <div id="advancedFields" class="search-fields" style="display:none;">
-                <div class="mb-3">
+                <div class="event-search-field" data-search-field="advanced">
                     {{ form.filter_json.label(class="form-label") }}
-                    {{ form.filter_json(class="form-control font-monospace", rows="4", placeholder='{"kinds":[1], "limit": 100}') }}
+                    {{ form.filter_json(class="form-control font-monospace", rows="3", placeholder='{"kinds":[1]}') }}
                 </div>
-            </div>
-            
-            <div class="row mb-3">
-                <div class="col-md-3">
+                <div>
                     {{ form.limit.label(class="form-label") }}
-                    {{ form.limit(class="form-control", type="number", min="1", max="1000") }}
+                    {{ form.limit(class="form-control", min="1", max="1000") }}
+                    {{ field_errors(form.limit) }}
                 </div>
             </div>
+
+            <details class="event-query-more"{% if form.since.data or form.until.data or form.search_type.data == 'timerange' %} open{% endif %}>
+                <summary>Time range</summary>
+                <div class="event-time-grid">
+                    <div>{{ form.since.label(class="form-label") }}{{ form.since(class="form-control", type="datetime-local") }}<div class="form-text">Optional start, interpreted in the browser's local timezone.</div></div>
+                    <div>{{ form.until.label(class="form-label") }}{{ form.until(class="form-control", type="datetime-local") }}<div class="form-text">Optional end.</div></div>
+                </div>
+            </details>
+
+            <div class="operations-action-bar">
+                <span class="small text-body-secondary">Keyword searches inspect at most 1,000 recent local events before applying the result limit.</span>
+                <button type="submit" class="btn btn-primary"><i class="bi bi-search"></i> Run query</button>
+            </div>
         </form>
-        
-        {% if error %}
-        <div class="alert alert-danger mt-3">
-            <h5><i class="bi bi-exclamation-triangle"></i> Error</h5>
-            <p>{{ error }}</p>
-        </div>
-        {% endif %}
-    </div>
-</div>
+    </section>
 
-{% if current_filter %}
-<div class="alert alert-info mb-3">
-    <strong>Current filter:</strong> <code>{{ current_filter }}</code>
-</div>
-{% endif %}
-
-{% if events %}
-<div class="card">
-    <div class="card-header d-flex justify-content-between align-items-center">
-        <h5 class="mb-0">Results ({{ events|length }} events)</h5>
-        {% if current_user.role in ['admin', 'moderator'] %}
-        <form method="POST" id="deleteForm">
-            {{ form.hidden_tag() }}
-            <input type="hidden" name="search" value="1">
-            <input type="hidden" name="search_type" value="{{ form.search_type.data }}">
-            {% for key, value in current_filter.items() %}
-            {% if key == 'authors' %}
-            <input type="hidden" name="pubkey" value="{{ value[0] }}">
-            {% elif key == 'kinds' %}
-            <input type="hidden" name="kind" value="{{ value[0] }}">
-            {% elif key == 'ids' %}
-            <input type="hidden" name="event_id" value="{{ value[0] }}">
-            {% elif key == 'since' %}
-            <input type="hidden" name="since" value="{{ value }}">
-            {% elif key == 'until' %}
-            <input type="hidden" name="until" value="{{ value }}">
-            {% endif %}
-            {% endfor %}
-            <input type="hidden" name="keyword" value="{{ form.keyword.data or '' }}">
-            <input type="hidden" name="nip05" value="{{ form.nip05.data or '' }}">
-            <input type="hidden" name="tag_name" value="{{ form.tag_name.data or '' }}">
-            <input type="hidden" name="tag_value" value="{{ form.tag_value.data or '' }}">
-            <input type="hidden" name="filter_json" value="{{ form.filter_json.data or '' }}">
-            <input type="hidden" name="limit" value="{{ form.limit.data or 25 }}">
-            <button type="button" class="btn btn-danger btn-sm" id="deleteSelectedBtn" disabled onclick="showDeleteModal()">
-                <i class="bi bi-trash"></i> Delete Selected (<span id="selectedCount">0</span>)
-            </button>
-        </form>
-        {% endif %}
-    </div>
-    <div class="card-body">
-        <div class="table-responsive">
-            <table class="table table-sm table-hover">
-                <thead>
-                    <tr>
-                        <th style="width: 40px;"><input type="checkbox" id="selectAll"></th>
-                        <th>Kind</th>
-                        <th>Created</th>
-                        <th>Pubkey</th>
-                        <th>Content</th>
-                        <th style="width: 80px;">Actions</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for event in events %}
-                    <tr>
-                        <td><input type="checkbox" class="event-checkbox" value="{{ event.get('id', '') }}"></td>
-                        <td><span class="badge bg-info">{{ event.get('kind', '?') }}</span></td>
-                        <td><small>{{ event.get('created_at', 0)|datetime }}</small></td>
-                        <td><code class="text-truncate d-inline-block" style="max-width: 100px;" title="{{ event.get('pubkey', '') }}">{{ event.get('pubkey', '')|truncate(16) }}</code></td>
-                        <td>
-                            <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#content-{{ loop.index }}">
-                                <i class="bi bi-eye"></i> View
-                            </button>
-                        </td>
-                        <td>
-                            {% if current_user.role in ['admin', 'moderator'] %}
-                            <button class="btn btn-sm btn-outline-danger" onclick="deleteSingleEvent('{{ event.get('id', '') }}')">
-                                <i class="bi bi-trash"></i>
-                            </button>
-                            {% endif %}
-                        </td>
-                    </tr>
-                    <tr class="collapse" id="content-{{ loop.index }}" data-pubkey="{{ event.get('pubkey', '') }}">
-                        <td colspan="6">
-                            <div class="p-3 rounded bg-body-secondary">
-                                {% set event_pubkey = event.get('pubkey', '') %}
-                                {% set is_banned = event_pubkey in banned_pubkeys %}
-                                {% if is_banned %}
-                                <div class="alert alert-danger mb-3">
-                                    <i class="bi bi-exclamation-triangle-fill"></i> <strong>WARNING:</strong> This user is banned!
-                                </div>
-                                {% endif %}
-                                <div id="metadata-{{ loop.index }}" class="metadata-placeholder">
-                                    <em>Loading metadata...</em>
-                                </div>
-                                <strong>ID:</strong> <code>{{ event.get('id', '') }}</code><br>
-                                <strong>Pubkey:</strong> <a href="#" onclick="document.getElementById('searchType').value='pubkey'; document.getElementById('pubkeyFields').querySelector('input').value='{{ event_pubkey }}'; showFieldsForType('pubkey'); document.getElementById('searchForm').querySelector('button').click(); return false;" title="Search events from this pubkey"><code>{{ event_pubkey }}</code> <i class="bi bi-search"></i></a>{% if is_banned %} <span class="badge bg-danger">BANNED</span>{% endif %}<br>
-                                <strong>Created:</strong> {{ event.get('created_at', 0) }}<br>
-                                <strong>Kind:</strong> {{ event.get('kind', '') }}<br>
-                                <strong>Tags:</strong>
-                                <pre class="mt-2 mb-0">{{ event.get('tags', [])|tojson }}</pre>
-                                {% set is_nsfw = event.get('tags', [])|is_nsfw %}
-                                <strong>Content:</strong>
-                                <div class="event-content{% if is_nsfw %} nsfw-container{% endif %}" data-nsfw="{{ is_nsfw }}">
-                                    <pre class="mt-2 mb-0{% if is_nsfw %} nsfw-blur{% endif %}"{% if is_nsfw %} onclick="this.classList.toggle('unblurred')" title="Click to reveal NSFW content"{% endif %}>{{ event.get('content', '')|render_images|safe }}</pre>
-                                </div>
-                                <strong>Sig:</strong> <code class="text-break">{{ event.get('sig', '') }}</code>
-                                {% if not is_banned and current_user.role in ['admin', 'moderator'] %}
-                                <hr>
-                                <button class="btn btn-danger btn-sm" onclick="showEventBanModal('{{ event_pubkey }}')">
-                                    <i class="bi bi-x-circle"></i> Ban This User
-                                </button>
-                                {% endif %}
-                            </div>
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-    </div>
-</div>
-{% endif %}
-
-<div class="modal fade" id="deleteModal" tabindex="-1">
-    <div class="modal-dialog">
-        <div class="modal-content">
-            <div class="modal-header bg-danger text-white">
-                <h5 class="modal-title"><i class="bi bi-exclamation-triangle"></i> Confirm Delete</h5>
-                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body">
-                <p>Are you sure you want to delete <strong id="deleteCount">0</strong> event(s)?</p>
-                <p class="text-danger"><strong>This action cannot be undone!</strong></p>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                <button type="button" class="btn btn-danger" onclick="confirmDelete()">Delete</button>
-            </div>
-        </div>
-    </div>
-</div>
-
-<form method="POST" id="deleteSingleForm" style="display:none;">
-    {{ form.hidden_tag() }}
-    <input type="hidden" name="delete_selected">
-    <input type="hidden" name="event_ids" id="singleEventId">
-    <input type="hidden" name="search" value="1">
     {% if current_filter %}
-    <input type="hidden" name="filter_json" value='{{ current_filter|tojson }}'>
+    <section class="event-filter-summary mb-4" aria-label="Active Nostr filter">
+        <span class="dashboard-section-label">Active filter</span>
+        {% for key, value in current_filter.items() %}<span class="event-filter-chip"><strong>{{ key }}</strong> {{ value }}</span>{% endfor %}
+    </section>
     {% endif %}
+
+    {% if search_performed and not error %}
+    <section class="dashboard-panel event-results-panel" aria-labelledby="eventResultsTitle">
+        <div class="dashboard-panel-header">
+            <div>
+                <div class="dashboard-section-label" id="eventResultsTitle">Query results</div>
+                <div class="text-body-secondary small">{{ events|length }} event{% if events|length != 1 %}s{% endif %} loaded from this bounded query.</div>
+            </div>
+            {% if current_user.role in ['admin', 'moderator'] %}<a class="btn btn-sm btn-outline-danger" href="{{ url_for('events_delete') }}"><i class="bi bi-exclamation-triangle"></i> Advanced delete</a>{% endif %}
+        </div>
+
+        {% if current_user.role in ['admin', 'moderator'] and events %}
+        <div class="event-selection-bar mb-3" id="eventSelectionBar">
+            <label class="form-check mb-0"><input class="form-check-input" type="checkbox" id="selectAllEvents"> <span class="form-check-label">Select all loaded events</span></label>
+            <button class="btn btn-sm btn-danger" type="button" id="deleteSelectedEvents" disabled><i class="bi bi-trash"></i> Delete selected (<span id="selectedEventCount">0</span>)</button>
+        </div>
+        {% endif %}
+
+        <div class="event-result-list" id="eventResultList">
+            {% for event in events %}
+            {% set event_id = event.get('id', '') %}
+            {% set event_pubkey = event.get('pubkey', '') %}
+            {% set is_banned = event_pubkey in banned_pubkeys %}
+            {% set is_nsfw = event.get('tags', [])|is_nsfw %}
+            <article class="event-result-card{% if is_banned %} is-banned{% endif %}" id="event-card-{{ event_id }}">
+                {% if current_user.role in ['admin', 'moderator'] %}<label class="event-select"><input type="checkbox" class="form-check-input event-checkbox" value="{{ event_id }}" aria-label="Select event {{ event_id }}"></label>{% endif %}
+                <div class="event-result-main">
+                    <div class="event-result-meta">
+                        <span class="event-kind">Kind {{ event.get('kind', '?') }}</span>
+                        {% if is_banned %}<span class="badge bg-danger">Banned author</span>{% endif %}
+                        {% if is_nsfw %}<span class="badge bg-warning text-dark">Sensitive</span>{% endif %}
+                        <time class="small text-body-secondary">{{ event.get('created_at', 0)|datetime }}</time>
+                    </div>
+                    <div class="event-result-author">
+                        <div class="dashboard-metric-label">Author</div>
+                        <a class="operations-identifier" href="{{ url_for('events', search_type='pubkey', pubkey=event_pubkey) }}">{{ event_pubkey }}</a>
+                    </div>
+                    <div class="event-result-preview{% if is_nsfw %} is-sensitive{% endif %}" data-sensitive="{{ 'true' if is_nsfw else 'false' }}">
+                        <div class="dashboard-metric-label">Content preview</div>
+                        <p>{{ event.get('content', '') or 'Empty event content' }}</p>
+                        {% if is_nsfw %}<button class="btn btn-sm btn-outline-warning" type="button" data-event-action="reveal">Reveal sensitive text</button>{% endif %}
+                    </div>
+                </div>
+                <div class="event-result-actions">
+                    <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#event-detail-{{ loop.index }}" aria-controls="event-detail-{{ loop.index }}" aria-expanded="false"><i class="bi bi-eye"></i> Details</button>
+                    {% if current_user.role in ['admin', 'moderator'] %}
+                    <button class="btn btn-sm btn-outline-danger" type="button" data-event-action="delete" data-event-id="{{ event_id }}"><i class="bi bi-trash"></i> Delete</button>
+                    {% if not is_banned %}<button class="btn btn-sm btn-danger" type="button" data-event-action="ban" data-pubkey="{{ event_pubkey }}"><i class="bi bi-slash-octagon"></i> Ban author</button>{% endif %}
+                    {% endif %}
+                </div>
+                <div class="collapse event-result-detail" id="event-detail-{{ loop.index }}" data-pubkey="{{ event_pubkey }}">
+                    <div class="event-detail-grid">
+                        <div><span class="dashboard-metric-label">Event ID</span><code>{{ event_id }}</code></div>
+                        <div><span class="dashboard-metric-label">Signature</span><code>{{ event.get('sig', '') }}</code></div>
+                    </div>
+                    <div class="event-metadata mt-3" data-event-metadata><span class="text-body-secondary small">Open details to load author metadata.</span></div>
+                    <div class="dashboard-metric-label mt-3 mb-1">Tags</div>
+                    <pre class="event-code-block">{{ event.get('tags', [])|tojson(indent=2) }}</pre>
+                    <div class="dashboard-metric-label mt-3 mb-1">Full content</div>
+                    <pre class="event-code-block{% if is_nsfw %} is-sensitive{% endif %}" data-sensitive="{{ 'true' if is_nsfw else 'false' }}">{{ event.get('content', '') }}</pre>
+                </div>
+            </article>
+            {% endfor %}
+        </div>
+
+        {% if not events %}{{ empty_state('bi-inbox', 'No events matched', 'Change the query or broaden its bounded scope.') }}{% endif %}
+    </section>
+    {% endif %}
+</div>
+
+{% if current_user.role in ['admin', 'moderator'] %}
+<form method="POST" id="eventDeleteForm" class="d-none">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <input type="hidden" name="delete_selected" value="1">
+    <input type="hidden" name="search_type" value="{{ form.search_type.data or 'all' }}">
+    <input type="hidden" name="pubkey" value="{{ form.pubkey.data or '' }}">
+    <input type="hidden" name="event_id" value="{{ form.event_id.data or '' }}">
+    <input type="hidden" name="kind" value="{{ form.kind.data or '' }}">
+    <input type="hidden" name="keyword" value="{{ form.keyword.data or '' }}">
+    <input type="hidden" name="nip05" value="{{ form.nip05.data or '' }}">
+    <input type="hidden" name="since" value="{{ form.since.data or '' }}">
+    <input type="hidden" name="until" value="{{ form.until.data or '' }}">
+    <input type="hidden" name="tag_name" value="{{ form.tag_name.data or '' }}">
+    <input type="hidden" name="tag_value" value="{{ form.tag_value.data or '' }}">
+    <input type="hidden" name="filter_json" value="{{ form.filter_json.data or '' }}">
     <input type="hidden" name="limit" value="{{ form.limit.data or 25 }}">
 </form>
 
-<div class="modal fade" id="eventBanModal" tabindex="-1">
-    <div class="modal-dialog">
-        <div class="modal-content">
-            <div class="modal-header bg-danger text-white">
-                <h5 class="modal-title"><i class="bi bi-exclamation-triangle"></i> CONFIRM BAN</h5>
-                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body">
-                <p class="text-danger"><strong>This records a Ban immediately.</strong></p>
-                <p>Banning this user will:</p>
-                <ul>
-                    <li>Deny future writes from their pubkey</li>
-                    <li>Attempt to purge all existing events</li>
-                    <li>Keep failed work visible for retry</li>
-                </ul>
-                <div class="mb-3">
-                    <label for="eventBanReason" class="form-label">Reason (optional note):</label>
-                    <textarea id="eventBanReason" class="form-control" rows="2" placeholder="Reason for ban..."></textarea>
-                </div>
-                <p>Type <strong>DELETE</strong> to confirm:</p>
-                <input type="hidden" id="eventBanPubkey">
-                <input type="text" id="eventBanConfirmInput" class="form-control" placeholder="Type DELETE here">
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                <button type="button" class="btn btn-danger" id="eventConfirmBanBtn" disabled onclick="confirmEventBan()">Ban User</button>
+<div class="modal fade" id="eventActionModal" tabindex="-1" aria-labelledby="eventActionTitle" aria-describedby="eventActionDescription">
+    <div class="modal-dialog"><div class="modal-content">
+        <div class="modal-header"><div><div class="dashboard-section-label text-danger">Destructive action</div><h2 class="modal-title fs-5" id="eventActionTitle">Confirm action</h2></div><button class="btn-close" type="button" data-bs-dismiss="modal" aria-label="Close"></button></div>
+        <div class="modal-body">
+            <p id="eventActionDescription"></p>
+            <div id="eventBanFields" class="d-none">
+                <div class="operations-identifier mb-3" id="eventBanTarget"></div>
+                <label class="form-label" for="eventBanReason">Reason</label>
+                <textarea class="form-control" id="eventBanReason" rows="3"></textarea>
             </div>
         </div>
-    </div>
+        <div class="modal-footer"><button class="btn btn-outline-secondary" type="button" data-bs-dismiss="modal">Cancel</button><button class="btn btn-danger" type="button" id="confirmEventAction">Confirm</button></div>
+    </div></div>
 </div>
-
-<form method="POST" id="eventBanForm" style="display:none;">
-    <input type="hidden" name="csrf_token" value="{{ form.csrf_token.current_token }}">
-</form>
-
+{% endif %}
 {% endblock %}
 
 {% block scripts %}
 <script>
-const searchTypeSelect = document.getElementById('searchType');
-const searchFields = {
-    'all': null,
-    'keyword': document.getElementById('keywordFields'),
-    'nip05': document.getElementById('nip05Fields'),
-    'pubkey': document.getElementById('pubkeyFields'),
-    'event_id': document.getElementById('event_idFields'),
-    'kind': document.getElementById('kindFields'),
-    'timerange': document.getElementById('timerangeFields'),
-    'tag': document.getElementById('tagFields'),
-    'advanced': document.getElementById('advancedFields')
-};
+const searchType = document.getElementById('searchType');
+const searchFields = document.querySelectorAll('[data-search-field]');
 
-function showFieldsForType(type) {
-    Object.values(searchFields).forEach(el => { if (el) el.style.display = 'none'; });
-    if (searchFields[type]) {
-        searchFields[type].style.display = 'block';
+function updateSearchFields() {
+    const selected = searchType.value;
+    searchFields.forEach(field => field.classList.toggle('d-none', field.dataset.searchField !== selected));
+}
+
+searchType.addEventListener('change', updateSearchFields);
+updateSearchFields();
+
+const resultList = document.getElementById('eventResultList');
+const deleteForm = document.getElementById('eventDeleteForm');
+const actionModalElement = document.getElementById('eventActionModal');
+const actionModal = actionModalElement ? new bootstrap.Modal(actionModalElement) : null;
+let pendingEventAction = null;
+
+function selectedEventIds() {
+    return Array.from(document.querySelectorAll('.event-checkbox:checked')).map(checkbox => checkbox.value);
+}
+
+function updateSelection() {
+    const ids = selectedEventIds();
+    const count = document.getElementById('selectedEventCount');
+    const button = document.getElementById('deleteSelectedEvents');
+    if (count) count.textContent = ids.length;
+    if (button) button.disabled = ids.length === 0;
+}
+
+document.querySelectorAll('.event-checkbox').forEach(checkbox => checkbox.addEventListener('change', updateSelection));
+const selectAll = document.getElementById('selectAllEvents');
+if (selectAll) selectAll.addEventListener('change', function() {
+    document.querySelectorAll('.event-checkbox').forEach(checkbox => { checkbox.checked = this.checked; });
+    updateSelection();
+});
+
+function submitEventDelete(ids) {
+    deleteForm.querySelectorAll('input[name="event_ids"]').forEach(input => input.remove());
+    ids.forEach(id => {
+        const input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = 'event_ids';
+        input.value = id;
+        deleteForm.appendChild(input);
+    });
+    deleteForm.submit();
+}
+
+function showAction(action) {
+    pendingEventAction = action;
+    const title = document.getElementById('eventActionTitle');
+    const description = document.getElementById('eventActionDescription');
+    const banFields = document.getElementById('eventBanFields');
+    if (action.type === 'ban') {
+        title.textContent = 'Ban author and purge events';
+        description.textContent = 'This denies future writes and attempts to purge all existing events from this author.';
+        document.getElementById('eventBanTarget').textContent = action.pubkey;
+        document.getElementById('eventBanReason').value = '';
+        banFields.classList.remove('d-none');
+    } else {
+        title.textContent = action.ids.length === 1 ? 'Delete event' : 'Delete selected events';
+        description.textContent = 'Permanently delete ' + action.ids.length + ' event' + (action.ids.length === 1 ? '' : 's') + '. This cannot be undone.';
+        banFields.classList.add('d-none');
     }
+    actionModal.show();
 }
 
-searchTypeSelect.addEventListener('change', function() {
-    showFieldsForType(this.value);
-});
+const bulkDelete = document.getElementById('deleteSelectedEvents');
+if (bulkDelete) bulkDelete.addEventListener('click', () => showAction({ type: 'delete', ids: selectedEventIds() }));
 
-showFieldsForType(searchTypeSelect.value);
-
-const kindSelect = document.getElementById('kindSelect');
-const manualKindDiv = document.getElementById('manualKindDiv');
-
-if (kindSelect) {
-    kindSelect.addEventListener('change', function() {
-        if (manualKindDiv) {
-            manualKindDiv.style.display = this.value === 'other' ? 'block' : 'none';
-        }
-    });
-}
-
-const selectAll = document.getElementById('selectAll');
-const checkboxes = document.querySelectorAll('.event-checkbox');
-const deleteBtn = document.getElementById('deleteSelectedBtn');
-const selectedCount = document.getElementById('selectedCount');
-const deleteModalEl = document.getElementById('deleteModal');
-const deleteModal = deleteModalEl ? new bootstrap.Modal(deleteModalEl) : null;
-const deleteCountSpan = document.getElementById('deleteCount');
-
-function updateSelectedCount() {
-    const count = document.querySelectorAll('.event-checkbox:checked').length;
-    if (selectedCount) selectedCount.textContent = count;
-    if (deleteBtn) deleteBtn.disabled = count === 0;
-}
-
-if (selectAll) {
-    selectAll.addEventListener('change', function() {
-        checkboxes.forEach(cb => cb.checked = this.checked);
-        updateSelectedCount();
-    });
-}
-
-checkboxes.forEach(cb => cb.addEventListener('change', updateSelectedCount));
-
-function showDeleteModal() {
-    const count = document.querySelectorAll('.event-checkbox:checked').length;
-    if (deleteCountSpan) deleteCountSpan.textContent = count;
-    if (deleteModal) deleteModal.show();
-}
-
-function confirmDelete() {
-    const form = document.getElementById('deleteForm');
-    const selectedIds = Array.from(document.querySelectorAll('.event-checkbox:checked')).map(cb => cb.value);
-    
-    form.querySelectorAll('input[name="event_ids"]').forEach(el => el.remove());
-    selectedIds.forEach(id => {
-        const hiddenInput = document.createElement('input');
-        hiddenInput.type = 'hidden';
-        hiddenInput.name = 'event_ids';
-        hiddenInput.value = id;
-        form.appendChild(hiddenInput);
-    });
-    
-    const hiddenDeleteInput = document.createElement('input');
-    hiddenDeleteInput.type = 'hidden';
-    hiddenDeleteInput.name = 'delete_selected';
-    hiddenDeleteInput.value = '1';
-    form.appendChild(hiddenDeleteInput);
-    
-    form.submit();
-}
-
-function deleteSingleEvent(eventId) {
-    if (confirm('Delete this event? This cannot be undone.')) {
-        const form = document.getElementById('deleteSingleForm');
-        document.getElementById('singleEventId').value = eventId;
-        
-        const filterInput = form.querySelector('input[name="filter_json"]');
-        if (filterInput) {
-            filterInput.value = '{{ current_filter|tojson }}';
-        }
-        
-        form.submit();
+if (resultList) resultList.addEventListener('click', function(event) {
+    const button = event.target.closest('[data-event-action]');
+    if (!button) return;
+    if (button.dataset.eventAction === 'delete') showAction({ type: 'delete', ids: [button.dataset.eventId] });
+    if (button.dataset.eventAction === 'ban') showAction({ type: 'ban', pubkey: button.dataset.pubkey });
+    if (button.dataset.eventAction === 'reveal') {
+        button.closest('.event-result-card').querySelectorAll('[data-sensitive]').forEach(region => region.classList.remove('is-sensitive'));
+        button.remove();
     }
-}
-
-document.querySelectorAll('.font-monospace').forEach(el => {
-    el.style.fontFamily = 'monospace';
 });
 
-const eventBanModal = new bootstrap.Modal(document.getElementById('eventBanModal'));
-const eventBanConfirmInput = document.getElementById('eventBanConfirmInput');
-const eventConfirmBanBtn = document.getElementById('eventConfirmBanBtn');
-
-eventBanConfirmInput.addEventListener('input', function() {
-    eventConfirmBanBtn.disabled = this.value !== 'DELETE';
-});
-
-function showEventBanModal(pubkey) {
-    document.getElementById('eventBanPubkey').value = pubkey;
-    document.getElementById('eventBanReason').value = '';
-    eventBanConfirmInput.value = '';
-    eventConfirmBanBtn.disabled = true;
-    eventBanModal.show();
-}
-
-function confirmEventBan() {
-    const pubkey = document.getElementById('eventBanPubkey').value;
-    const reason = document.getElementById('eventBanReason').value.trim() || 'Banned from events page';
-    const form = document.getElementById('eventBanForm');
-    const csrfToken = form.querySelector('input[name="csrf_token"]').value;
-    
-    csrfFetch('/moderation/ban-by-pubkey', {
+const confirmAction = document.getElementById('confirmEventAction');
+if (confirmAction) confirmAction.addEventListener('click', async function() {
+    if (pendingEventAction.type === 'delete') {
+        submitEventDelete(pendingEventAction.ids);
+        return;
+    }
+    const reason = document.getElementById('eventBanReason').value.trim() || 'Banned from Event Explorer';
+    const body = new URLSearchParams({ pubkey: pendingEventAction.pubkey, reason });
+    const response = await csrfFetch('/moderation/ban-by-pubkey', {
         method: 'POST',
-        headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
-        },
-        body: 'csrf_token=' + encodeURIComponent(csrfToken) + '&pubkey=' + encodeURIComponent(pubkey) + '&reason=' + encodeURIComponent(reason)
-    }).then(response => {
-        if (response.ok) {
-            location.reload();
-        } else {
-            alert('Failed to ban user');
-        }
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body
     });
-}
+    if (response.ok) location.reload();
+    else {
+        document.getElementById('eventActionDescription').textContent = await response.text() || 'Ban failed.';
+        document.getElementById('eventActionDescription').className = 'text-danger';
+    }
+});
 
-document.querySelectorAll('[id^="content-"]').forEach(function(element) {
-    element.addEventListener('show.bs.collapse', function() {
-        const pubkey = this.getAttribute('data-pubkey');
-        const placeholder = this.querySelector('.metadata-placeholder');
-        if (pubkey && placeholder) {
-            fetch('/api/pubkey-metadata/' + encodeURIComponent(pubkey))
-                .then(function(response) { return response.json(); })
-                .then(function(metadata) {
-                    if (metadata.name || metadata.nip05) {
-                        var html = '';
-                        if (metadata.name) html += '<strong>Name:</strong> ' + metadata.name + '<br>';
-                        if (metadata.nip05) html += '<strong>NIP-05:</strong> ' + metadata.nip05 + '<br>';
-                        placeholder.innerHTML = html;
-                    } else {
-                        placeholder.innerHTML = '';
-                    }
-                })
-                .catch(function() {
-                    placeholder.innerHTML = '';
-                });
-        }
-    });
+document.addEventListener('show.bs.collapse', async function(event) {
+    const detail = event.target;
+    if (!detail.classList.contains('event-result-detail')) return;
+    const metadata = detail.querySelector('[data-event-metadata]');
+    const pubkey = detail.dataset.pubkey;
+    if (!metadata || !pubkey || metadata.dataset.loaded) return;
+    metadata.dataset.loaded = 'true';
+    metadata.textContent = 'Loading author metadata...';
+    try {
+        const response = await fetch('/api/pubkey-metadata/' + encodeURIComponent(pubkey), { headers: { Accept: 'application/json' } });
+        if (!response.ok || response.redirected) throw new Error('Metadata unavailable');
+        const value = await response.json();
+        metadata.replaceChildren();
+        if (value.name) metadata.appendChild(document.createTextNode('Name: ' + value.name));
+        if (value.name && value.nip05) metadata.appendChild(document.createTextNode(' · '));
+        if (value.nip05) metadata.appendChild(document.createTextNode('NIP-05: ' + value.nip05));
+        if (!value.name && !value.nip05) metadata.textContent = 'No author metadata found.';
+    } catch (error) {
+        metadata.textContent = error.message;
+        delete metadata.dataset.loaded;
+    }
 });
 </script>
 {% endblock %}
