@@ -319,6 +319,55 @@ def test_plugins_page_manages_and_publishes_wot_policy(monkeypatch, tmp_path):
     assert moderator_client.get('/policy-log').status_code == 200
     assert moderator_client.get('/api/write-policy-events').status_code == 200
 
+    imported = []
+    monkeypatch.setattr(
+        app_module,
+        'import_events',
+        lambda data, verify=True: imported.append((data, verify)),
+    )
+    unconfirmed_import = client.post('/import_export', data={
+        'import_submit': '1',
+        'file': '{"id":"event"}',
+        'no_verify': 'true',
+    })
+    assert unconfirmed_import.status_code == 200
+    assert b'Confirm that you understand the risk' in unconfirmed_import.data
+    assert imported == []
+
+    confirmed_import = client.post('/import_export', data={
+        'import_submit': '1',
+        'file': '{"id":"event"}',
+        'no_verify': 'true',
+        'confirm_no_verify': 'y',
+    })
+    assert confirmed_import.status_code == 200
+    assert confirmed_import.headers['Cache-Control'] == 'no-store'
+    assert imported == [('{"id":"event"}', False)]
+
+    assert client.post('/db', data={
+        'negentropy_build': '1',
+        'tree_id': '../unsafe',
+    }).status_code == 400
+    assert client.post('/db', data={
+        'negentropy_delete': '1',
+        'tree_id': 'safe-tree',
+    }).status_code == 400
+    assert client.post('/db', data={
+        'refresh_negentropy': '1',
+        'refresh_dict': '1',
+    }).status_code == 400
+
+    monkeypatch.setattr(
+        app_module,
+        'get_strfry_process_info',
+        lambda: {'process_count': 1, 'uptime_seconds': 30},
+    )
+    compaction_blocked = client.post('/db', data={
+        'compact': '1',
+        'confirm_compact': 'yes',
+    }, follow_redirects=True)
+    assert b'Stop all strfry processes before compacting' in compaction_blocked.data
+
     viewer_client = flask_app.test_client()
     with viewer_client.session_transaction() as session:
         session['_user_id'] = str(viewer_id)

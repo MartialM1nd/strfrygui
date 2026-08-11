@@ -1,160 +1,168 @@
 {% extends "base.html" %}
+{% from "components/operations.html" import page_header, panel_header, empty_state, field_errors %}
 
 {% block title %}Database{% if relay_name %} - {{ relay_name }}{% endif %} - StrfryGUI{% endblock %}
 
 {% block content %}
-<h2 class="mb-4"><i class="bi bi-database"></i>{% if relay_name %} Database for {{ relay_name }}{% else %} Database Management{% endif %}</h2>
+<div class="dashboard-shell">
+    {{ page_header(
+        'DATA PLANE · STORAGE',
+        'Database operations',
+        'Inspect synchronization indexes, compression dictionaries, and database maintenance.',
+        'Compacting' if compaction_status.running else 'Ready',
+        'degraded' if compaction_status.running else 'healthy'
+    ) }}
 
-<div class="row">
-    <div class="col-md-6">
-        <div class="card mb-4">
-            <div class="card-header">
-                <h5 class="mb-0"><i class="bi bi-diagram-3"></i> Negentropy Trees</h5>
-            </div>
-            <div class="card-body">
-                {% if negentropy_error %}
-                <div class="alert alert-danger">
-                    <p>{{ negentropy_error }}</p>
-                </div>
-                {% endif %}
-                
-                {% if negentropy_success %}
-                <div class="alert alert-success">
-                    <p>{{ negentropy_success }}</p>
-                </div>
-                {% endif %}
-                
-                <div class="d-flex justify-content-between align-items-center mb-2">
-                    <h6 class="mb-0">Current Trees</h6>
-                    <form method="POST" class="mb-0">
-                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                        <button type="submit" name="refresh_negentropy" class="btn btn-outline-secondary btn-sm">
-                            <i class="bi bi-arrow-clockwise"></i> Refresh
-                        </button>
-                    </form>
-                </div>
-                {% if trees %}
-                <table class="table table-sm">
-                    <thead>
-                        <tr>
-                            <th>ID</th>
-                            <th>Filter</th>
-                            <th>Size</th>
-                            <th>Fingerprint</th>
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for tree in trees %}
-                        <tr>
-                            <td>{{ tree.id }}</td>
-                            <td><code>{{ tree.filter }}</code></td>
-                            <td>{{ tree.size | human_size }}</td>
-                            <td><code class="small">{{ tree.fingerprint }}</code></td>
-                            <td>
-                                <form method="POST" class="d-inline">
+    <section class="dashboard-panel mb-4" aria-label="Negentropy trees">
+        {% call panel_header('Negentropy trees', 'Manage reconciliation indexes used to efficiently synchronize relay events.') %}
+        <form method="POST" class="mb-0">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" name="refresh_negentropy" class="btn btn-sm btn-outline-secondary">
+                <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh trees
+            </button>
+        </form>
+        {% endcall %}
+
+        {% if negentropy_error %}
+        <div class="alert alert-danger" role="alert">
+            <strong>Negentropy trees could not be loaded.</strong> {{ negentropy_error }}
+        </div>
+        {% endif %}
+
+        {% if negentropy_success %}
+        <div class="alert alert-success" role="status">
+            <strong>Negentropy operation completed.</strong> {{ negentropy_success }}
+        </div>
+        {% endif %}
+
+        {% if trees %}
+        <div class="table-responsive mb-4">
+            <table class="table table-sm align-middle mb-0">
+                <caption class="visually-hidden">Configured negentropy trees and available actions</caption>
+                <thead>
+                    <tr>
+                        <th scope="col">ID</th>
+                        <th scope="col">Filter</th>
+                        <th scope="col" class="text-end">Size</th>
+                        <th scope="col">Fingerprint</th>
+                        <th scope="col" class="text-end">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for tree in trees %}
+                    <tr>
+                        <th scope="row"><code>{{ tree.id }}</code></th>
+                        <td><code class="text-break">{{ tree.filter }}</code></td>
+                        <td class="text-end text-nowrap">{{ tree.size | human_size }}</td>
+                        <td><code class="small text-break">{{ tree.fingerprint }}</code></td>
+                        <td>
+                            <div class="d-flex flex-wrap justify-content-end gap-2" aria-label="Actions for negentropy tree {{ tree.id }}">
+                                <form method="POST">
                                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                     <input type="hidden" name="tree_id" value="{{ tree.id }}">
-                                    <button type="submit" name="negentropy_build" class="btn btn-sm btn-outline-primary" title="Build tree">
-                                        <i class="bi bi-arrow-repeat"></i>
+                                    <button type="submit" name="negentropy_build" class="btn btn-sm btn-outline-primary">
+                                        <i class="bi bi-arrow-repeat" aria-hidden="true"></i> Build tree
                                     </button>
                                 </form>
-                                <form method="POST" class="d-inline">
+                                <form method="POST">
                                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                     <input type="hidden" name="tree_id" value="{{ tree.id }}">
-                                    <button type="submit" name="negentropy_delete" class="btn btn-sm btn-outline-danger" title="Delete tree">
-                                        <i class="bi bi-trash"></i>
+                                    <input type="hidden" name="confirm_tree_delete" value="{{ tree.id }}">
+                                    <button type="submit" name="negentropy_delete" class="btn btn-sm btn-outline-danger" onclick="return confirm('Delete this negentropy tree?')">
+                                        <i class="bi bi-trash" aria-hidden="true"></i> Delete tree
                                     </button>
                                 </form>
-                            </td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-                {% elif not negentropy_error %}
-                <p class="text-muted">No negentropy trees configured. <span class="text-body-secondary">Click Refresh to load if trees exist.</span></p>
-                {% endif %}
-                
-                <hr>
-                
-                <h6>Add New Tree</h6>
-                <form method="POST">
-                    {{ negentropy_add_form.hidden_tag() }}
-                    <div class="mb-3">
-                        {{ negentropy_add_form.filter_json.label(class="form-label") }}
-                        {{ negentropy_add_form.filter_json(class="form-control font-monospace", rows="2", placeholder='{"kinds":[0]}') }}
-                    </div>
-                    <button type="submit" name="negentropy_add" class="btn btn-primary btn-sm">
-                        <i class="bi bi-plus"></i> Add Tree
-                    </button>
-                </form>
-            </div>
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
         </div>
-    </div>
-    
-    <div class="col-md-6">
-        <div class="card mb-4">
-            <div class="card-header">
-                <h5 class="mb-0"><i class="bi bi-file-zip"></i> Compression Dictionaries</h5>
-            </div>
-            <div class="card-body">
-                {% if dict_error %}
-                <div class="alert alert-danger">
-                    <p>{{ dict_error }}</p>
-                </div>
-                {% endif %}
-                
-                <div class="d-flex justify-content-between align-items-center mb-2">
-                    <span></span>
-                    <form method="POST" class="mb-0">
-                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                        <button type="submit" name="refresh_dict" class="btn btn-outline-secondary btn-sm">
-                            <i class="bi bi-arrow-clockwise"></i> Refresh
-                        </button>
-                    </form>
-                </div>
-                {% if dict_output %}
-                <pre class="p-3 bg-body-secondary">{{ dict_output }}</pre>
-                {% elif dict_output is none and not dict_error %}
-                <p class="text-muted">Click Refresh to load compression dictionaries.</p>
-                {% elif not dict_error %}
-                <p class="text-muted">No compression dictionaries found.</p>
-                {% endif %}
-            </div>
-        </div>
-        
-        <div class="card mb-4 border-warning">
-            <div class="card-header bg-warning text-dark">
-                <h5 class="mb-0"><i class="bi bi-hdd"></i> Database Compaction</h5>
-            </div>
-            <div class="card-body">
-                <p>Compaction reclaims disk space by removing fragmentation. The relay should be stopped during compaction.</p>
+        {% elif not negentropy_error %}
+        {{ empty_state('bi-diagram-3', 'No negentropy trees available', 'Refresh to check for configured trees, or add a tree below.') }}
+        {% endif %}
 
-                {% if compaction_status.running %}
-                <div class="d-flex align-items-center mb-3">
-                    <div class="spinner-border spinner-border-sm text-warning me-2" role="status">
-                        <span class="visually-hidden">Compacting...</span>
-                    </div>
-                    <span>Compaction in progress since <strong>{{ compaction_status.started_at.strftime('%Y-%m-%d %H:%M:%S') }}</strong>...</span>
-                </div>
-                {% elif compaction_status.finished_at %}
+        <div class="border-top pt-4">
+            <div class="dashboard-section-label mb-1" id="addTreeTitle">Add a negentropy tree</div>
+            <p class="small text-body-secondary">Define the Nostr filter this reconciliation index should cover.</p>
+            <form method="POST" aria-labelledby="addTreeTitle">
+                {{ negentropy_add_form.hidden_tag() }}
                 <div class="mb-3">
-                    {% if compaction_status.error %}
-                    <div class="alert alert-danger mb-2 py-2">Compaction failed: {{ compaction_status.error }}</div>
-                    {% else %}
-                    <div class="alert alert-success mb-2 py-2">Compaction completed successfully at {{ compaction_status.finished_at.strftime('%Y-%m-%d %H:%M:%S') }}.</div>
-                    {% endif %}
+                    {{ negentropy_add_form.filter_json.label(class="form-label") }}
+                    {{ negentropy_add_form.filter_json(class="form-control font-monospace", rows="3", placeholder='{"kinds":[0]}', aria_describedby="negentropyFilterHelp") }}
+                    <div class="form-text" id="negentropyFilterHelp">Enter a valid JSON Nostr filter, for example <code>{"kinds":[0]}</code>.</div>
+                    {{ field_errors(negentropy_add_form.filter_json) }}
                 </div>
-                {% endif %}
-
-                <form method="POST">
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                    <button type="submit" name="compact" class="btn btn-warning" {% if compaction_status.running %}disabled{% endif %}>
-                        <i class="bi bi-hdd{% if compaction_status.running %}-stack{% endif %}"></i> {% if compaction_status.running %}Compacting...{% else %}Compact Database{% endif %}
-                    </button>
-                </form>
-            </div>
+                <button type="submit" name="negentropy_add" class="btn btn-primary">
+                    <i class="bi bi-plus-lg" aria-hidden="true"></i> Add negentropy tree
+                </button>
+            </form>
         </div>
-    </div>
+    </section>
+
+    <section class="dashboard-panel mb-4" aria-label="Compression dictionaries">
+        {% call panel_header('Compression dictionaries', 'Inspect dictionaries available to strfry for compressed event storage.') %}
+        <form method="POST" class="mb-0">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <button type="submit" name="refresh_dict" class="btn btn-sm btn-outline-secondary">
+                <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh dictionaries
+            </button>
+        </form>
+        {% endcall %}
+
+        {% if dict_error %}
+        <div class="alert alert-danger mb-0" role="alert">
+            <strong>Compression dictionaries could not be loaded.</strong> {{ dict_error }}
+        </div>
+        {% elif dict_output %}
+        <pre class="p-3 mb-0 bg-body-secondary border rounded overflow-auto" aria-label="Compression dictionary output"><code>{{ dict_output }}</code></pre>
+        {% elif dict_output is none %}
+        {{ empty_state('bi-file-zip', 'Dictionaries not loaded', 'Refresh to inspect the compression dictionaries available to this relay.') }}
+        {% else %}
+        {{ empty_state('bi-file-zip', 'No compression dictionaries found', 'strfry returned no configured compression dictionaries.') }}
+        {% endif %}
+    </section>
+
+    <section class="dashboard-panel operations-danger-zone" aria-labelledby="compactionTitle">
+        <div class="dashboard-panel-header">
+            <div>
+                <div class="dashboard-section-label text-danger" id="compactionTitle">Database compaction</div>
+                <div class="text-body-secondary small">Reclaim fragmented disk space with a direct database maintenance operation.</div>
+            </div>
+            <span class="badge {% if compaction_status.running %}bg-warning text-dark{% else %}bg-danger{% endif %}">
+                {{ 'In progress' if compaction_status.running else 'Danger zone' }}
+            </span>
+        </div>
+
+        <div class="alert alert-warning" role="note">
+            <strong>Stop the relay before compacting.</strong> Compaction acts directly on database storage and should not run while the relay is serving traffic.
+        </div>
+
+        {% if compaction_status.running %}
+        <div class="d-flex align-items-center gap-2 mb-3" role="status" aria-live="polite">
+            <span class="spinner-border spinner-border-sm text-warning" aria-hidden="true"></span>
+            <span>Compaction in progress since <strong>{{ compaction_status.started_at.strftime('%Y-%m-%d %H:%M:%S') }}</strong>.</span>
+        </div>
+        {% elif compaction_status.finished_at %}
+            {% if compaction_status.error %}
+        <div class="alert alert-danger" role="alert"><strong>Compaction failed.</strong> {{ compaction_status.error }}</div>
+            {% else %}
+        <div class="alert alert-success" role="status"><strong>Compaction completed.</strong> Finished at {{ compaction_status.finished_at.strftime('%Y-%m-%d %H:%M:%S') }}.</div>
+            {% endif %}
+        {% endif %}
+
+        <form method="POST" class="operations-action-bar">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+            <label class="form-check small text-danger">
+                <input class="form-check-input" type="checkbox" name="confirm_compact" value="yes" required{% if compaction_status.running %} disabled{% endif %}>
+                I confirm all strfry relay processes are stopped.
+            </label>
+            <button type="submit" name="compact" class="btn btn-danger"{% if compaction_status.running %} disabled{% else %} onclick="return confirm('Confirm the relay is stopped and start database compaction?')"{% endif %}>
+                <i class="bi bi-hdd{% if compaction_status.running %}-stack{% endif %}" aria-hidden="true"></i>
+                {{ 'Compacting database...' if compaction_status.running else 'Compact database' }}
+            </button>
+        </form>
+    </section>
 </div>
 {% endblock %}

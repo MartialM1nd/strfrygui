@@ -1,9 +1,11 @@
 import subprocess
+import fcntl
 import json
 import os
 import selectors
 import tempfile
 import time
+from contextlib import contextmanager
 from config import Config
 
 
@@ -66,17 +68,22 @@ def validate_filter_json(filter_str):
         raise ValueError(f"Invalid JSON: {e}")
 
 
-def run_strfry_command(args, input_data=None, capture_output=True, timeout=300):
+def _strfry_command(args):
     binary = Config.STRFRY_BINARY
-    
+
     if not os.path.exists(binary):
         raise StrfryError(f"strfry binary not found at {binary}")
-    
+
     cmd = [binary]
     if Config.STRFRY_CONFIG:
         cmd.extend(['--config', Config.STRFRY_CONFIG])
     cmd.extend(args)
-    
+    return cmd
+
+
+def run_strfry_command(args, input_data=None, capture_output=True, timeout=300):
+    cmd = _strfry_command(args)
+
     try:
         result = subprocess.run(
             cmd,
@@ -91,9 +98,60 @@ def run_strfry_command(args, input_data=None, capture_output=True, timeout=300):
     except subprocess.TimeoutExpired:
         raise StrfryError("Command timed out")
     except FileNotFoundError:
-        raise StrfryError(f"strfry binary not found at {binary}")
+        raise StrfryError(f"strfry binary not found at {Config.STRFRY_BINARY}")
     except OSError as e:
         raise StrfryError(f"Failed to execute strfry: {e}")
+
+
+def run_strfry_command_limited(args, max_output_bytes, timeout=300):
+    """Run a read-only command while bounding captured stdout in memory and on disk."""
+    cmd = _strfry_command(args)
+    stderr_file = tempfile.TemporaryFile()
+    try:
+        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=stderr_file)
+    except (FileNotFoundError, OSError) as exc:
+        stderr_file.close()
+        raise StrfryError(f"Failed to execute strfry: {exc}") from exc
+
+    output = bytearray()
+    deadline = time.monotonic() + timeout
+    selector = selectors.DefaultSelector()
+    selector.register(process.stdout, selectors.EVENT_READ)
+    try:
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0 or not selector.select(remaining):
+                process.kill()
+                raise StrfryError("Command timed out")
+            chunk = os.read(
+                process.stdout.fileno(),
+                min(65536, max_output_bytes + 1 - len(output)),
+            )
+            if not chunk:
+                break
+            output.extend(chunk)
+            if len(output) > max_output_bytes:
+                process.kill()
+                raise StrfryError(
+                    f"Command output exceeds the {max_output_bytes}-byte safety limit"
+                )
+
+        remaining = max(0.1, deadline - time.monotonic())
+        return_code = process.wait(timeout=remaining)
+        if return_code != 0:
+            stderr_file.seek(0)
+            error = stderr_file.read().decode('utf-8', errors='replace').strip()
+            raise StrfryError(error or f"Command failed with code {return_code}")
+        return output.decode('utf-8').strip()
+    except subprocess.TimeoutExpired as exc:
+        process.kill()
+        raise StrfryError("Command timed out") from exc
+    finally:
+        selector.close()
+        if process.poll() is None:
+            process.kill()
+        process.wait()
+        stderr_file.close()
 
 
 def scan_events(filter_json, limit=100, timeout=300):
@@ -188,22 +246,22 @@ def count_events(filter_json):
 def delete_events(filter_json, timeout=300):
     filter_str = json.dumps(filter_json)
     cmd = ['delete', '--filter', filter_str]
-    output = run_strfry_command(cmd, timeout=timeout)
-    return output
+    with database_maintenance_lock():
+        return run_strfry_command(cmd, timeout=timeout)
 
 
 def export_events(since=None, until=None, reverse=False, fried=False):
     cmd = ['export']
-    if since:
+    if since is not None:
         cmd.extend(['--since', str(since)])
-    if until:
+    if until is not None:
         cmd.extend(['--until', str(until)])
     if reverse:
         cmd.append('--reverse')
     if fried:
         cmd.append('--fried')
     
-    return run_strfry_command(cmd)
+    return run_strfry_command_limited(cmd, Config.EXPORT_MAX_BYTES)
 
 
 def import_events(jsonl_data, verify=True):
@@ -213,24 +271,69 @@ def import_events(jsonl_data, verify=True):
     if not verify:
         cmd.append('--no-verify')
     
-    return run_strfry_command(cmd, input_data=jsonl_data)
+    with database_maintenance_lock():
+        return run_strfry_command(cmd, input_data=jsonl_data)
 
 
 def validate_jsonl(jsonl_data):
-    """Validate file contains valid JSONL before passing to strfry"""
+    """Validate bounded JSONL event objects before passing them to strfry."""
+    if len(jsonl_data.encode('utf-8')) > Config.IMPORT_MAX_BYTES:
+        raise StrfryError(
+            f"Import exceeds the {Config.IMPORT_MAX_BYTES}-byte safety limit"
+        )
+
+    event_count = 0
     for line_num, line in enumerate(jsonl_data.split('\n')):
         if line.strip():
+            event_count += 1
+            if event_count > Config.IMPORT_MAX_EVENTS:
+                raise StrfryError(
+                    f"Import exceeds the {Config.IMPORT_MAX_EVENTS}-event safety limit"
+                )
             try:
-                json.loads(line)
+                event = json.loads(line)
             except json.JSONDecodeError as e:
                 raise StrfryError(f"Invalid JSON at line {line_num + 1}: {e}")
+            if not isinstance(event, dict):
+                raise StrfryError(f"Line {line_num + 1} must contain a JSON object")
+    if event_count == 0:
+        raise StrfryError("Import must contain at least one JSON event object")
     return True
 
 
-def compact_database():
+@contextmanager
+def database_maintenance_lock():
+    """Prevent overlapping GUI database writes across worker processes."""
+    lock_file = acquire_database_maintenance_lock()
+    try:
+        yield
+    finally:
+        release_database_maintenance_lock(lock_file)
+
+
+def acquire_database_maintenance_lock():
+    lock_path = Config.DATABASE_MAINTENANCE_LOCK
+    os.makedirs(os.path.dirname(lock_path), exist_ok=True)
+    lock_file = open(lock_path, 'w')
+    try:
+        fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as exc:
+        lock_file.close()
+        raise StrfryError("Another database maintenance operation is in progress") from exc
+    return lock_file
+
+
+def release_database_maintenance_lock(lock_file):
+    fcntl.flock(lock_file, fcntl.LOCK_UN)
+    lock_file.close()
+
+
+def compact_database(lock_file=None):
     cmd = ['compact', '-']
-    output = run_strfry_command(cmd)
-    return output
+    if lock_file is not None:
+        return run_strfry_command(cmd)
+    with database_maintenance_lock():
+        return run_strfry_command(cmd)
 
 
 def get_strfry_uptime():
@@ -310,21 +413,24 @@ def _clear_negentropy_cache():
 def negentropy_add(filter_json):
     filter_str = json.dumps(filter_json)
     cmd = ['negentropy', 'add', filter_str]
-    output = run_strfry_command(cmd)
+    with database_maintenance_lock():
+        output = run_strfry_command(cmd)
     _clear_negentropy_cache()
     return output
 
 
 def negentropy_build(tree_id):
     cmd = ['negentropy', 'build', str(tree_id)]
-    output = run_strfry_command(cmd)
+    with database_maintenance_lock():
+        output = run_strfry_command(cmd)
     _clear_negentropy_cache()
     return output
 
 
 def negentropy_delete(tree_id):
     cmd = ['negentropy', 'delete', str(tree_id)]
-    output = run_strfry_command(cmd)
+    with database_maintenance_lock():
+        output = run_strfry_command(cmd)
     _clear_negentropy_cache()
     return output
 

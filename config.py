@@ -43,6 +43,10 @@ class Config:
     NIP05_PROFILE_TIMEOUT = float(os.getenv('NIP05_PROFILE_TIMEOUT', '10'))
     NIP05_RELAY_TIMEOUT = float(os.getenv('NIP05_RELAY_TIMEOUT', '3'))
     NIP05_MAX_WS_MESSAGE_BYTES = int(os.getenv('NIP05_MAX_WS_MESSAGE_BYTES', '262144'))
+    IMPORT_MAX_BYTES = max(1, int(os.getenv('IMPORT_MAX_BYTES', str(5 * 1024 * 1024))))
+    IMPORT_MAX_EVENTS = max(1, int(os.getenv('IMPORT_MAX_EVENTS', '10000')))
+    EXPORT_MAX_BYTES = max(1, int(os.getenv('EXPORT_MAX_BYTES', str(5 * 1024 * 1024))))
+    DATABASE_MAINTENANCE_LOCK = os.path.join(RUNTIME_DIR, 'database-maintenance.lock')
     
     EXTERNAL_RELAYS = os.getenv('EXTERNAL_RELAYS', 'wss://relay.damus.io\nwss://nos.lol').split('\n')
     EXTERNAL_RELAYS = [r.strip() for r in EXTERNAL_RELAYS if r.strip()]

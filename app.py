@@ -6,7 +6,7 @@ import threading
 import time
 from datetime import datetime, timedelta
 from urllib.parse import urlsplit
-from flask import Flask, render_template, redirect, url_for, flash, request, send_file, jsonify, abort
+from flask import Flask, render_template, redirect, url_for, flash, request, send_file, jsonify, abort, make_response
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from flask_wtf import CSRFProtect, FlaskForm
 from wtforms import BooleanField, StringField, PasswordField, SelectField, TextAreaField, IntegerField
@@ -30,7 +30,8 @@ from utils.strfry import (
     scan_events, delete_events, export_events, import_events,
     compact_database, negentropy_list, negentropy_add, negentropy_build,
     negentropy_delete, dict_list, get_config, update_config, StrfryError,
-    validate_filter_json, npub_to_hex
+    validate_filter_json, npub_to_hex, get_strfry_process_info,
+    acquire_database_maintenance_lock, release_database_maintenance_lock,
 )
 from utils.metrics import get_summary, MetricsError
 from utils.auth import admin_required, moderator_required, viewer_or_higher, permission_required
@@ -67,12 +68,13 @@ _wot_build_queue = queue.Queue(maxsize=1)
 _dashboard_sample_lock = threading.Lock()
 
 
-def _run_compaction():
+def _run_compaction(lock_file):
     try:
-        compact_database()
+        compact_database(lock_file=lock_file)
     except StrfryError as e:
         _compaction['error'] = str(e)
     finally:
+        release_database_maintenance_lock(lock_file)
         _compaction['finished_at'] = datetime.now()
         _compaction['running'] = False
 
@@ -322,15 +324,27 @@ class EventSearchForm(FlaskForm):
 
 
 class ExportForm(FlaskForm):
-    since = IntegerField('Since (timestamp)', validators=[Optional()])
-    until = IntegerField('Until (timestamp)', validators=[Optional()])
+    since = IntegerField('Since (timestamp)', validators=[Optional(), NumberRange(min=0)])
+    until = IntegerField('Until (timestamp)', validators=[Optional(), NumberRange(min=0)])
     reverse = SelectField('Order', choices=[('false', 'Ascending (oldest first)'), ('reverse', 'Descending (newest first)')])
     fried = SelectField('Fried Export', choices=[('false', 'No'), ('true', 'Yes (faster re-import)')])
 
+    def validate_until(self, field):
+        if self.since.data is not None and field.data is not None and field.data < self.since.data:
+            raise ValidationError('Until must be greater than or equal to since.')
+
 
 class ImportForm(FlaskForm):
-    file = TextAreaField('JSONL Data', validators=[DataRequired()])
+    file = TextAreaField('JSONL Data', validators=[
+        DataRequired(),
+        Length(max=Config.IMPORT_MAX_BYTES),
+    ])
     no_verify = SelectField('Skip Verification', choices=[('false', 'Verify signatures'), ('true', 'No verification (faster)')])
+    confirm_no_verify = BooleanField('I understand that signature verification will be skipped')
+
+    def validate_confirm_no_verify(self, field):
+        if self.no_verify.data == 'true' and not field.data:
+            raise ValidationError('Confirm that you understand the risk of skipping verification.')
 
 
 class ConfigForm(FlaskForm):
@@ -1361,9 +1375,9 @@ def import_export():
         if 'export_submit' in request.form and export_form.validate():
             try:
                 kwargs = {}
-                if export_form.since.data:
+                if export_form.since.data is not None:
                     kwargs['since'] = export_form.since.data
-                if export_form.until.data:
+                if export_form.until.data is not None:
                     kwargs['until'] = export_form.until.data
                 if export_form.reverse.data == 'reverse':
                     kwargs['reverse'] = True
@@ -1371,7 +1385,8 @@ def import_export():
                     kwargs['fried'] = True
                 
                 export_data = export_events(**kwargs)
-                export_success = f'Exported events (size: {len(export_data) if export_data else 0} bytes)'
+                export_size = len(export_data.encode('utf-8')) if export_data else 0
+                export_success = f'Exported events (size: {export_size} bytes)'
                 log_audit('export', f'Exported events with params: {kwargs}')
             except StrfryError as e:
                 export_error = str(e)
@@ -1385,7 +1400,7 @@ def import_export():
             except StrfryError as e:
                 import_error = str(e)
     
-    return render_template(
+    response = make_response(render_template(
         'import_export.html',
         export_form=export_form,
         import_form=import_form,
@@ -1394,6 +1409,16 @@ def import_export():
         import_error=import_error,
         import_success=import_success,
         export_data=export_data
+    ))
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
+def _valid_tree_id(tree_id):
+    return bool(
+        tree_id
+        and len(tree_id) <= 128
+        and all(character.isalnum() or character in '._-' for character in tree_id)
     )
 
 
@@ -1410,6 +1435,13 @@ def db_management():
     negentropy_add_form.limit.data = 0
     
     if request.method == 'POST':
+        actions = (
+            'negentropy_add', 'negentropy_build', 'negentropy_delete', 'compact',
+            'refresh_negentropy', 'refresh_dict',
+        )
+        if sum(action in request.form for action in actions) != 1:
+            abort(400, description='Submit exactly one database action')
+
         if 'negentropy_add' in request.form:
             try:
                 filter_obj = validate_filter_json(negentropy_add_form.filter_json.data)
@@ -1422,6 +1454,8 @@ def db_management():
         
         elif 'negentropy_build' in request.form:
             tree_id = request.form.get('tree_id')
+            if not _valid_tree_id(tree_id):
+                abort(400, description='Invalid negentropy tree ID')
             try:
                 result = negentropy_build(tree_id)
                 flash(f'Built tree {tree_id}')
@@ -1432,6 +1466,10 @@ def db_management():
         
         elif 'negentropy_delete' in request.form:
             tree_id = request.form.get('tree_id')
+            if not _valid_tree_id(tree_id):
+                abort(400, description='Invalid negentropy tree ID')
+            if request.form.get('confirm_tree_delete') != tree_id:
+                abort(400, description='Confirm the negentropy tree deletion')
             try:
                 result = negentropy_delete(tree_id)
                 flash(f'Deleted tree {tree_id}')
@@ -1443,16 +1481,29 @@ def db_management():
         elif 'compact' in request.form:
             if _compaction['running']:
                 flash('Compaction is already in progress.', 'warning')
+            elif request.form.get('confirm_compact') != 'yes':
+                flash('Confirm that the relay is stopped before compacting.', 'danger')
             else:
-                _compaction['running'] = True
-                _compaction['started_at'] = datetime.now()
-                _compaction['finished_at'] = None
-                _compaction['error'] = None
-                t = threading.Thread(target=_run_compaction, daemon=True)
-                _compaction['thread'] = t
-                t.start()
-                flash('Database compaction started in background.', 'info')
-                log_audit('compact', 'Database compaction initiated')
+                process_count = get_strfry_process_info()['process_count']
+                if process_count is None:
+                    flash('Cannot confirm that the relay is stopped; compaction was not started.', 'danger')
+                elif process_count > 0:
+                    flash('Stop all strfry processes before compacting the database.', 'danger')
+                else:
+                    try:
+                        lock_file = acquire_database_maintenance_lock()
+                    except StrfryError as e:
+                        flash(str(e), 'danger')
+                    else:
+                        _compaction['running'] = True
+                        _compaction['started_at'] = datetime.now()
+                        _compaction['finished_at'] = None
+                        _compaction['error'] = None
+                        t = threading.Thread(target=_run_compaction, args=(lock_file,), daemon=True)
+                        _compaction['thread'] = t
+                        t.start()
+                        flash('Database compaction started in background.', 'info')
+                        log_audit('compact', 'Database compaction initiated')
             return redirect(url_for('db_management'))
         
         elif 'refresh_negentropy' in request.form:
