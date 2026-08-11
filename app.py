@@ -5,6 +5,7 @@ import queue
 import threading
 import time
 from datetime import datetime, timedelta
+from urllib.parse import urlsplit
 from flask import Flask, render_template, redirect, url_for, flash, request, send_file, jsonify, abort
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from flask_wtf import FlaskForm
@@ -12,7 +13,7 @@ from wtforms import BooleanField, StringField, PasswordField, SelectField, TextA
 from wtforms.validators import DataRequired, InputRequired, Length, EqualTo, NumberRange, Optional, Regexp, ValidationError
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
-from sqlalchemy import func, or_
+from sqlalchemy import and_, func, or_
 from sqlalchemy.exc import OperationalError, SQLAlchemyError
 from werkzeug.utils import secure_filename
 from werkzeug.security import generate_password_hash
@@ -847,9 +848,9 @@ def api_moderation_reports():
     reported_filter = request.args.get('reported', '')
     event_id_filter = request.args.get('event_id', '')
     show_reviewed = request.args.get('show_reviewed', 'false') == 'true'
-    sort_order = request.args.get('sort', 'desc')
-    offset = int(request.args.get('offset', 0))
-    limit = int(request.args.get('limit', 25))
+    sort_order = 'asc' if request.args.get('sort') == 'asc' else 'desc'
+    offset = max(0, request.args.get('offset', default=0, type=int))
+    limit = min(100, max(1, request.args.get('limit', default=25, type=int)))
     
     query = ModerationReport.query
     
@@ -863,14 +864,65 @@ def api_moderation_reports():
         query = query.filter(ModerationReport.reported_event_id == event_id_filter)
     if not show_reviewed:
         query = query.filter(ModerationReport.reviewed == False)
-    
+
     total_count = query.count()
+    cursor_created_at = request.args.get('cursor_created_at', '')
+    cursor_id = request.args.get('cursor_id', type=int)
+    cursor_is_null = request.args.get('cursor_null') == '1'
+    try:
+        cursor_datetime = datetime.fromisoformat(cursor_created_at) if cursor_created_at else None
+    except ValueError:
+        cursor_datetime = None
+    cursor_active = cursor_id is not None and (cursor_datetime is not None or cursor_is_null)
+    if cursor_active:
+        if sort_order == 'desc':
+            if cursor_is_null:
+                query = query.filter(
+                    ModerationReport.created_at.is_(None),
+                    ModerationReport.id < cursor_id,
+                )
+            else:
+                query = query.filter(or_(
+                    ModerationReport.created_at < cursor_datetime,
+                    ModerationReport.created_at.is_(None),
+                    and_(
+                        ModerationReport.created_at == cursor_datetime,
+                        ModerationReport.id < cursor_id,
+                    ),
+                ))
+        else:
+            if cursor_is_null:
+                query = query.filter(or_(
+                    and_(
+                        ModerationReport.created_at.is_(None),
+                        ModerationReport.id > cursor_id,
+                    ),
+                    ModerationReport.created_at.is_not(None),
+                ))
+            else:
+                query = query.filter(or_(
+                    ModerationReport.created_at > cursor_datetime,
+                    and_(
+                        ModerationReport.created_at == cursor_datetime,
+                        ModerationReport.id > cursor_id,
+                    ),
+                ))
     if sort_order == 'desc':
         sort_columns = (ModerationReport.created_at.desc(), ModerationReport.id.desc())
     else:
         sort_columns = (ModerationReport.created_at.asc(), ModerationReport.id.asc())
-    reports = query.order_by(*sort_columns).offset(offset).limit(limit).all()
-    has_more = (offset + len(reports)) < total_count
+    page_query = query.order_by(*sort_columns)
+    if not cursor_active:
+        page_query = page_query.offset(offset)
+    page = page_query.limit(limit + 1).all()
+    has_more = len(page) > limit
+    reports = page[:limit]
+    next_cursor = None
+    if reports and has_more:
+        next_cursor = {
+            'created_at': reports[-1].created_at.isoformat() if reports[-1].created_at else None,
+            'id': reports[-1].id,
+        }
     
     reports_data = []
     for r in reports:
@@ -894,7 +946,8 @@ def api_moderation_reports():
     return jsonify({
         'reports': reports_data,
         'has_more': has_more,
-        'total_count': total_count
+        'total_count': total_count,
+        'next_cursor': next_cursor,
     })
 
 
@@ -1605,9 +1658,9 @@ def moderation():
     reported_filter = request.args.get('reported', '')
     event_id_filter = request.args.get('event_id', '')
     show_reviewed = request.args.get('show_reviewed', 'false') == 'true'
-    sort_order = request.args.get('sort', 'desc')
-    offset = int(request.args.get('offset', 0))
-    limit = int(request.args.get('limit', 25))
+    sort_order = 'asc' if request.args.get('sort') == 'asc' else 'desc'
+    offset = max(0, request.args.get('offset', default=0, type=int))
+    limit = min(100, max(1, request.args.get('limit', default=25, type=int)))
     
     query = ModerationReport.query
     
@@ -1632,14 +1685,26 @@ def moderation():
     reports = query.order_by(*sort_columns).offset(offset).limit(limit).all()
     total_count = query.count()
     has_more = (offset + len(reports)) < total_count
+    report_cursor = None
+    if reports and has_more:
+        report_cursor = {
+            'created_at': reports[-1].created_at.isoformat() if reports[-1].created_at else None,
+            'id': reports[-1].id,
+        }
+    open_report_count = ModerationReport.query.filter_by(reviewed=False).count()
+    new_report_count = ModerationReport.query.filter(
+        ModerationReport.created_at >= utcnow() - timedelta(hours=24)
+    ).count()
     pending_purges = EventPurge.query.filter_by(status='pending').order_by(EventPurge.created_at.desc()).all()
     completed_purges = EventPurge.query.filter_by(status='completed').order_by(
         EventPurge.created_at.desc()
     ).limit(25).all()
-    purges = pending_purges + completed_purges
     projection = ModerationDecisions.initialize_projection()
     banned_domains = BannedDomain.query.order_by(BannedDomain.banned_at.desc()).all()
     _attach_domain_source_counts(banned_domains)
+    active_domain_count = sum(
+        domain.scan_status in ('queued', 'running') for domain in banned_domains
+    )
     
     return render_template('moderation.html', reports=reports, 
                            report_type_filter=report_type_filter,
@@ -1651,12 +1716,25 @@ def moderation():
                            offset=offset,
                            limit=limit,
                            has_more=has_more,
+                           report_cursor=report_cursor,
                            total_count=total_count,
-                           purges=purges,
+                           open_report_count=open_report_count,
+                           new_report_count=new_report_count,
+                           pending_purges=pending_purges,
+                           completed_purges=completed_purges,
                            projection=projection,
                            banned_domains=banned_domains,
+                           active_domain_count=active_domain_count,
                            domain_form=domain_form,
                            form=form)
+
+
+def _moderation_return_url():
+    candidate = request.form.get('next', '')
+    parsed = urlsplit(candidate)
+    if parsed.scheme or parsed.netloc or parsed.path != url_for('moderation'):
+        return url_for('moderation')
+    return candidate
 
 
 @app.route('/moderation/report/<int:report_id>/review', methods=['POST'])
@@ -1668,7 +1746,7 @@ def moderation_review(report_id):
     except ModerationError as e:
         flash(str(e), 'danger')
     
-    return redirect(url_for('moderation'))
+    return redirect(_moderation_return_url())
 
 
 @app.route('/moderation/report/<int:report_id>/ban', methods=['POST'])
@@ -1680,7 +1758,7 @@ def moderation_ban(report_id):
         flash_moderation_outcome(outcome, 'Ban recorded.')
     except ModerationError as e:
         flash(f'Failed to ban user: {e}', 'danger')
-    return redirect(url_for('moderation'))
+    return redirect(_moderation_return_url())
 
 
 @app.route('/moderation/report/<int:report_id>/delete', methods=['POST'])
@@ -1692,7 +1770,7 @@ def moderation_delete_report(report_id):
     except ModerationError as e:
         flash(str(e), 'danger')
     
-    return redirect(url_for('moderation'))
+    return redirect(_moderation_return_url())
 
 
 @app.route('/moderation/report/<int:report_id>/delete-event', methods=['POST'])
@@ -1704,7 +1782,7 @@ def moderation_delete_event(report_id):
     except ModerationError as e:
         flash(f'Failed to delete event: {e}', 'danger')
     
-    return redirect(url_for('moderation'))
+    return redirect(_moderation_return_url())
 
 
 @app.route('/moderation/purge/<int:purge_id>/retry', methods=['POST'])
@@ -1720,7 +1798,7 @@ def moderation_retry_purge(purge_id):
             flash(f'Event purge remains pending: {purge.last_error}', 'warning')
     except ModerationError as e:
         flash(str(e), 'danger')
-    return redirect(url_for('moderation'))
+    return redirect(_moderation_return_url())
 
 
 @app.route('/moderation/enforcement/retry', methods=['POST'])

@@ -29,6 +29,11 @@ def verified_profile(name, domain, pubkey, relay_hints, configured_relays, deadl
     return ProfileClaimResult(verified=True, source="local")
 
 
+@pytest.mark.parametrize("details", ["null", "[]", '"status"', "invalid"])
+def test_domain_scan_details_normalizes_non_objects(details):
+    assert BannedDomain(last_scan_details=details).scan_details == {}
+
+
 def test_domain_reconciliation_enumerates_verifies_bans_and_purges(app):
     decisions = ModerationDecisions(
         actor_id=7,

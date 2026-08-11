@@ -19,6 +19,8 @@ MODERATION_REPORT_INDEXES = (
     'ON moderation_reports (reported_pubkey)',
     'CREATE INDEX IF NOT EXISTS ix_moderation_reports_reported_event_id '
     'ON moderation_reports (reported_event_id)',
+    'CREATE INDEX IF NOT EXISTS ix_moderation_reports_created_at '
+    'ON moderation_reports (created_at)',
 )
 
 
@@ -107,7 +109,7 @@ class ModerationReport(db.Model):
     reported_event_id = db.Column(db.String(64), index=True)
     report_type = db.Column(db.String(20), index=True)
     content = db.Column(db.Text)
-    created_at = db.Column(db.DateTime, default=utcnow)
+    created_at = db.Column(db.DateTime, default=utcnow, index=True)
     reviewed = db.Column(db.Boolean, default=False)
     reviewed_by = db.Column(db.Integer, db.ForeignKey('users.id'))
     reviewed_at = db.Column(db.DateTime)
@@ -189,7 +191,8 @@ class BannedDomain(db.Model):
     @property
     def scan_details(self):
         try:
-            return json.loads(self.last_scan_details or '{}')
+            details = json.loads(self.last_scan_details or '{}')
+            return details if isinstance(details, dict) else {}
         except json.JSONDecodeError:
             return {}
 

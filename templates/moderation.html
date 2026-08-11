@@ -3,636 +3,568 @@
 {% block title %}Moderation{% if relay_name %} - {{ relay_name }}{% endif %} - StrfryGUI{% endblock %}
 
 {% block content %}
-<h2 class="mb-4"><i class="bi bi-shield-exclamation"></i>{% if relay_name %} Moderation for {{ relay_name }}{% else %} Moderation{% endif %}</h2>
-
-{% if projection.status == 'pending' %}
-<div class="alert alert-warning d-flex justify-content-between align-items-center">
-    <div>
-        <strong>Ban enforcement pending.</strong>
-        Revision {{ projection.desired_revision }} has not been published{% if projection.last_error %}: {{ projection.last_error }}{% endif %}.
-    </div>
-    <form method="POST" action="{{ url_for('moderation_retry_enforcement') }}" class="ms-3">
-        <input type="hidden" name="csrf_token" value="{{ form.csrf_token.current_token }}">
-        <input type="hidden" name="next" value="moderation">
-        <button type="submit" class="btn btn-sm btn-warning">Retry enforcement</button>
-    </form>
-</div>
-{% endif %}
-
-<div class="card border-danger mb-4">
-    <div class="card-header bg-danger text-white">
-        <h5 class="mb-0"><i class="bi bi-globe2"></i> NIP-05 Domain Bans</h5>
-    </div>
-    <div class="card-body">
-        <p class="small text-muted">
-            The exact domain's <code>/.well-known/nostr.json</code> directory is enumerated. Listed pubkeys are banned only after a matching signed kind-0 profile is found locally or through configured and advertised relays.
-        </p>
-        <form method="POST" action="{{ url_for('moderation_ban_domain') }}" class="row g-3">
-            {{ domain_form.hidden_tag() }}
-            <div class="col-md-4">
-                {{ domain_form.domain.label(class="form-label") }}
-                {{ domain_form.domain(class="form-control", placeholder="example.com") }}
-            </div>
-            <div class="col-md-6">
-                {{ domain_form.reason.label(class="form-label") }}
-                {{ domain_form.reason(class="form-control", rows="1", placeholder="Reason for domain ban...") }}
-            </div>
-            <div class="col-md-2 d-flex align-items-end">
-                <button type="submit" class="btn btn-danger w-100" onclick="return confirm('Ban this NIP-05 domain and enumerate its directory?')">
-                    Ban Domain
-                </button>
-            </div>
-        </form>
-
-        {% if banned_domains %}
-        <div class="table-responsive mt-4">
-            <table class="table table-sm align-middle mb-0">
-                <thead>
-                    <tr><th>Domain</th><th>Reason</th><th>Last Scan</th><th>Results</th><th></th></tr>
-                </thead>
-                <tbody>
-                    {% for domain_ban in banned_domains %}
-                    <tr>
-                        <td><a href="{{ url_for('moderation_domain_details', domain_id=domain_ban.id) }}"><code>{{ domain_ban.domain }}</code></a><br><small class="text-muted">Exact host · {{ domain_ban.source_count }} banned pubkeys</small></td>
-                        <td><small>{{ domain_ban.reason or '-' }}</small></td>
-                        <td>
-                            <small>{{ domain_ban.last_scanned_at|datetime if domain_ban.last_scanned_at else 'Never' }}</small>
-                            {% if domain_ban.scan_status == 'queued' %}<br><span class="badge bg-secondary domain-scan-active">Queued</span>{% elif domain_ban.scan_status == 'running' %}<br><span class="badge bg-info domain-scan-active">Running</span>{% endif %}
-                            {% if domain_ban.last_scan_error %}<br><small class="text-danger">{{ domain_ban.last_scan_error }}</small>{% endif %}
-                        </td>
-                        <td>
-                            <small>
-                                {{ domain_ban.last_scan_events }} names,
-                                {{ domain_ban.last_scan_verified }} verified,
-                                {{ domain_ban.scan_details.get('unresolved', 0) }} unresolved,
-                                {{ domain_ban.last_scan_new_bans }} new bans
-                            </small>
-                            {% if domain_ban.scan_details.get('invalid_entries', 0) %}<br><small class="text-warning">{{ domain_ban.scan_details.get('invalid_entries') }} invalid directory entries</small>{% endif %}
-                            {% if domain_ban.scan_details.get('purge_completed', 0) or domain_ban.scan_details.get('purge_pending', 0) %}<br><small>Last scan: {{ domain_ban.scan_details.get('purge_completed', 0) }} purges completed, {{ domain_ban.scan_details.get('purge_pending', 0) }} pending</small>{% endif %}
-                            {% if domain_ban.scan_details.get('unresolved', 0) %}<br><a class="small" href="{{ url_for('moderation_domain_details', domain_id=domain_ban.id) }}">View unresolved identities</a>{% endif %}
-                        </td>
-                        <td class="text-end">
-                            <form method="POST" action="{{ url_for('moderation_reconcile_domain', domain_id=domain_ban.id) }}">
-                                <input type="hidden" name="csrf_token" value="{{ form.csrf_token.current_token }}">
-                                <button type="submit" class="btn btn-sm btn-outline-danger"{% if domain_ban.scan_status in ['queued', 'running'] %} disabled{% endif %}>Reconcile</button>
-                            </form>
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
+<div class="dashboard-shell moderation-shell">
+    <header class="dashboard-header mb-4">
+        <div>
+            <div class="dashboard-kicker">TRUST &amp; SAFETY</div>
+            <h1 class="dashboard-title mb-1">Moderation queue</h1>
+            <div class="text-body-secondary small">Review relay reports and take deliberate enforcement action.</div>
         </div>
-        <p class="small text-muted mt-3 mb-0">Admins can unban domains from the Admin page. Pubkeys with independent direct or domain sources remain banned; purged notes cannot be restored.</p>
-        {% endif %}
-    </div>
-</div>
+        <div class="dashboard-status" data-status="{% if open_report_count %}degraded{% else %}healthy{% endif %}">
+            <span class="dashboard-status-dot"></span>
+            <span>{{ open_report_count }} open</span>
+        </div>
+    </header>
 
-{% if purges %}
-<div class="card border-warning mb-4">
-    <div class="card-header bg-warning-subtle">
-        <h5 class="mb-0"><i class="bi bi-hourglass-split"></i> Recent Event Purges</h5>
-    </div>
-    <div class="table-responsive">
-        <table class="table table-sm mb-0">
-            <thead><tr><th>Target</th><th>Attempts</th><th>Last failure</th><th></th></tr></thead>
-            <tbody>
-                {% for purge in purges %}
-                <tr>
-                    <td>
-                        <span class="badge bg-secondary">{{ purge.target_type }}</span>
-                        <code>{{ purge.target }}</code>
-                        {% if purge.was_cancelled %}<span class="badge bg-secondary">Cancelled</span>{% elif purge.status == 'completed' %}<span class="badge bg-success">Completed</span>{% else %}<span class="badge bg-warning text-dark">Pending</span>{% endif %}
-                    </td>
-                    <td>{{ purge.attempts }}</td>
-                    <td><small class="{% if purge.last_error and not purge.was_cancelled %}text-danger{% else %}text-muted{% endif %}">{% if purge.last_error %}{{ purge.last_error }}{% elif purge.status == 'pending' %}Not attempted{% else %}-{% endif %}</small></td>
-                    <td class="text-end">
-                        {% if purge.status == 'pending' %}<form method="POST" action="{{ url_for('moderation_retry_purge', purge_id=purge.id) }}">
-                            <input type="hidden" name="csrf_token" value="{{ form.csrf_token.current_token }}">
-                            <button type="submit" class="btn btn-sm btn-outline-warning">Retry purge</button>
-                        </form>{% endif %}
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
-</div>
-{% endif %}
+    {% if projection.status == 'pending' %}
+    <section class="dashboard-attention mb-4" aria-labelledby="enforcementWarning">
+        <div class="d-flex flex-wrap justify-content-between align-items-center gap-3">
+            <div>
+                <div class="dashboard-section-label mb-1" id="enforcementWarning"><i class="bi bi-exclamation-diamond"></i> Needs attention</div>
+                <strong>Ban enforcement revision {{ projection.desired_revision }} is pending.</strong>
+                {% if projection.last_error %}<div class="small text-body-secondary mt-1">{{ projection.last_error }}</div>{% endif %}
+            </div>
+            <form method="POST" action="{{ url_for('moderation_retry_enforcement') }}">
+                <input type="hidden" name="csrf_token" value="{{ form.csrf_token.current_token }}">
+                <input type="hidden" name="next" value="moderation">
+                <button type="submit" class="btn btn-sm btn-warning">Retry enforcement</button>
+            </form>
+        </div>
+    </section>
+    {% endif %}
 
-<div class="card mb-4">
-    <div class="card-header">
-        <h5 class="mb-0">Filter Reports</h5>
-    </div>
-    <div class="card-body">
-        <form method="GET" class="row g-3">
-            <div class="col-md-2">
-                <label class="form-label">Report Type</label>
-                <select name="report_type" class="form-select">
-                    <option value="">All Types</option>
-                    <option value="nudity" {% if report_type_filter == 'nudity' %}selected{% endif %}>Nudity</option>
-                    <option value="spam" {% if report_type_filter == 'spam' %}selected{% endif %}>Spam</option>
-                    <option value="profanity" {% if report_type_filter == 'profanity' %}selected{% endif %}>Profanity</option>
-                    <option value="illegal" {% if report_type_filter == 'illegal' %}selected{% endif %}>Illegal</option>
-                    <option value="impersonation" {% if report_type_filter == 'impersonation' %}selected{% endif %}>Impersonation</option>
-                    <option value="other" {% if report_type_filter == 'other' %}selected{% endif %}>Other</option>
+    <section class="moderation-summary-grid mb-4" aria-label="Moderation report summary">
+        <article class="moderation-summary-item moderation-summary-primary">
+            <div class="dashboard-metric-label">Open reports</div>
+            <div class="moderation-summary-value" id="openReportCount">{{ open_report_count }}</div>
+            <div class="dashboard-metric-detail">Awaiting a decision</div>
+        </article>
+        <article class="moderation-summary-item">
+            <div class="dashboard-metric-label">New · 24 hours</div>
+            <div class="moderation-summary-value" id="newReportCount">{{ new_report_count }}</div>
+            <div class="dashboard-metric-detail">Recently received</div>
+        </article>
+        <article class="moderation-summary-item">
+            <div class="dashboard-metric-label">Current view</div>
+            <div class="moderation-summary-value" id="filteredReportCount">{{ total_count }}</div>
+            <div class="dashboard-metric-detail">Matching these filters</div>
+        </article>
+        <article class="moderation-summary-item">
+            <div class="dashboard-metric-label">Pending purges</div>
+            <div class="moderation-summary-value">{{ pending_purges|length }}</div>
+            <div class="dashboard-metric-detail">Operational follow-up</div>
+        </article>
+    </section>
+
+    <section class="dashboard-panel moderation-report-panel mb-4" aria-labelledby="reportQueueTitle">
+        <div class="dashboard-panel-header moderation-report-heading">
+            <div>
+                <div class="dashboard-section-label" id="reportQueueTitle">Report queue</div>
+                <div class="text-body-secondary small" aria-live="polite"><span id="visibleReportCount">{{ reports|length }}</span> loaded · {{ total_count }} matching</div>
+            </div>
+            {% if report_type_filter or reporter_filter or reported_filter or event_id_filter or show_reviewed or sort_order == 'asc' %}
+            <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('moderation') }}"><i class="bi bi-x-lg"></i> Clear filters</a>
+            {% endif %}
+        </div>
+
+        <form method="GET" class="moderation-filter-bar mb-4">
+            <div>
+                <label for="reportTypeFilter" class="form-label">Report type</label>
+                <select id="reportTypeFilter" name="report_type" class="form-select">
+                    <option value="">All types</option>
+                    {% for value, label in [('nudity', 'Nudity'), ('spam', 'Spam'), ('profanity', 'Profanity'), ('illegal', 'Illegal'), ('impersonation', 'Impersonation'), ('other', 'Other')] %}
+                    <option value="{{ value }}"{% if report_type_filter == value %} selected{% endif %}>{{ label }}</option>
+                    {% endfor %}
                 </select>
             </div>
-            <div class="col-md-2">
-                <label class="form-label">Date</label>
-                <select name="sort" class="form-select">
-                    <option value="desc" {% if sort_order == 'desc' %}selected{% endif %}>Newest First</option>
-                    <option value="asc" {% if sort_order == 'asc' %}selected{% endif %}>Oldest First</option>
+            <div>
+                <label for="reportSort" class="form-label">Order</label>
+                <select id="reportSort" name="sort" class="form-select">
+                    <option value="desc"{% if sort_order == 'desc' %} selected{% endif %}>Newest first</option>
+                    <option value="asc"{% if sort_order == 'asc' %} selected{% endif %}>Oldest first</option>
                 </select>
             </div>
-            <div class="col-md-2">
-                <label class="form-label">Reporter</label>
-                <input type="text" name="reporter" class="form-control" placeholder="Filter by reporter" value="{{ reporter_filter }}">
+            <div class="moderation-reviewed-filter">
+                <div class="form-check form-switch">
+                    <input class="form-check-input" type="checkbox" name="show_reviewed" id="showReviewed" value="true"{% if show_reviewed %} checked{% endif %}>
+                    <label class="form-check-label" for="showReviewed">Include reviewed</label>
+                </div>
             </div>
-            <div class="col-md-2">
-                <label class="form-label">Reported</label>
-                <input type="text" name="reported" class="form-control" placeholder="Filter by reported user" value="{{ reported_filter }}">
-            </div>
-            <div class="col-md-2">
-                <label class="form-label">Event ID</label>
-                <input type="text" name="event_id" class="form-control" placeholder="Filter by event ID" value="{{ event_id_filter }}">
-            </div>
-            <div class="col-md-2 d-flex align-items-end">
-                <div>
-                    <button type="submit" class="btn btn-primary mb-2">
-                        <i class="bi bi-search"></i> Filter
-                    </button>
-                    <div class="form-check">
-                        <input class="form-check-input" type="checkbox" name="show_reviewed" id="showReviewed" value="true" {% if show_reviewed %}checked{% endif %}>
-                        <label class="form-check-label" for="showReviewed">Show reviewed</label>
+            <div class="d-grid"><button type="submit" class="btn btn-primary"><i class="bi bi-funnel"></i> Apply</button></div>
+
+            <details class="moderation-filter-more"{% if reporter_filter or reported_filter or event_id_filter %} open{% endif %}>
+                <summary>More filters{% if reporter_filter or reported_filter or event_id_filter %} · active{% endif %}</summary>
+                <div class="moderation-filter-details">
+                    <div>
+                        <label for="reporterFilter" class="form-label">Exact reporter pubkey</label>
+                        <input id="reporterFilter" type="text" name="reporter" class="form-control font-monospace" value="{{ reporter_filter }}" placeholder="Hex pubkey">
+                    </div>
+                    <div>
+                        <label for="reportedFilter" class="form-label">Exact reported pubkey</label>
+                        <input id="reportedFilter" type="text" name="reported" class="form-control font-monospace" value="{{ reported_filter }}" placeholder="Hex pubkey">
+                    </div>
+                    <div>
+                        <label for="eventIdFilter" class="form-label">Exact event ID</label>
+                        <input id="eventIdFilter" type="text" name="event_id" class="form-control font-monospace" value="{{ event_id_filter }}" placeholder="Event ID">
                     </div>
                 </div>
-            </div>
+            </details>
         </form>
-    </div>
-</div>
 
-{% if reports %}
-<div class="card">
-    <div class="card-header d-flex justify-content-between align-items-center">
-        <h5 class="mb-0">Reports ({{ total_count|default(reports|length) }})</h5>
-        <small class="text-muted">Showing {{ reports|length }} reports</small>
-    </div>
-    <div class="card-body">
-        <div class="table-responsive">
-            <table class="table table-sm table-hover">
-                <thead>
-                    <tr>
-                        <th>Type</th>
-                        <th>Date</th>
-                        <th>Reporter</th>
-                        <th>Reported</th>
-                        <th>Event ID</th>
-                        <th style="width: 200px;">Actions</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for report in reports %}
-                    <tr>
-                        <td>
-                            {% if report.report_type == 'nudity' %}
-                            <span class="badge bg-danger">Nudity</span>
-                            {% elif report.report_type == 'spam' %}
-                            <span class="badge bg-warning text-dark">Spam</span>
-                            {% elif report.report_type == 'profanity' %}
-                            <span class="badge bg-warning text-dark">Profanity</span>
-                            {% elif report.report_type == 'illegal' %}
-                            <span class="badge bg-danger">Illegal</span>
-                            {% elif report.report_type == 'impersonation' %}
-                            <span class="badge bg-info">Impersonation</span>
-                            {% else %}
-                            <span class="badge bg-secondary">{{ report.report_type|default('Other') }}</span>
-                            {% endif %}
-                        </td>
-                        <td><small>{{ report.created_at|datetime if report.created_at else '-' }}</small></td>
-                        <td>
-                            {% if report.reporter_pubkey %}
-                            <a href="{{ url_for('events', search_type='pubkey', pubkey=report.reporter_pubkey) }}" title="Search events from this pubkey">
-                                <code class="text-truncate d-inline-block" style="max-width: 80px;">{{ report.reporter_pubkey }}</code>
-                            </a>
-                            {% else %}
-                            -
-                            {% endif %}
-                        </td>
-                        <td>
-                            {% if report.reported_pubkey %}
-                            <span class="{% if report.banned %}text-danger fw-bold{% endif %}">
-                                <a href="{{ url_for('events', search_type='pubkey', pubkey=report.reported_pubkey) }}" title="Search events from this pubkey">
-                                    <code class="text-truncate d-inline-block" style="max-width: 80px;">{{ report.reported_pubkey }}</code>
-                                </a>
-                                {% if report.banned %}<i class="bi bi-exclamation-triangle-fill" title="User Banned"></i>{% endif %}
-                            </span>
-                            {% else %}
-                            -
-                            {% endif %}
-                        </td>
-                        <td>
-                            {% if report.reported_event_id %}
-                            <a href="{{ url_for('events', search_type='event_id', event_id=report.reported_event_id) }}" title="Search for this event">
-                                <code class="text-truncate d-inline-block" style="max-width: 80px;">{{ report.reported_event_id }}</code>
-                            </a>
-                            {% else %}
-                            -
-                            {% endif %}
-                        </td>
-                        <td>
-                            <div class="btn-group btn-group-sm" role="group">
-                                <button class="btn btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#report-{{ loop.index }}" title="View">
-                                    <i class="bi bi-eye"></i>
-                                </button>
-                                {% if report.banned %}
-                                <button class="btn btn-outline-danger" onclick="deleteReport('{{ report.id }}')" title="Delete report">
-                                    <i class="bi bi-trash"></i>
-                                </button>
-                                {% else %}
-                                <button class="btn {% if report.reviewed %}btn-success{% else %}btn-outline-secondary{% endif %}" onclick="reviewReport('{{ report.id }}')" title="Mark as reviewed">
-                                    <i class="bi bi-check-lg"></i>
-                                </button>
-                                {% if report.reported_event_id %}
-                                <button class="btn btn-outline-warning" onclick="deleteEvent('{{ report.id }}')" title="Delete event">
-                                    <i class="bi bi-file-earmark-x"></i>
-                                </button>
-                                {% endif %}
-                                <button class="btn btn-danger" onclick="showBanModal('{{ report.id }}', '{{ report.reported_pubkey }}')" title="Ban user">
-                                    <i class="bi bi-x-circle"></i>
-                                </button>
-                                {% endif %}
-                            </div>
-                        </td>
-                    </tr>
-                    <tr class="collapse" id="report-{{ loop.index }}" data-event-id="{{ report.reported_event_id or '' }}">
-                        <td colspan="6">
-                            <div class="p-3 rounded bg-body-secondary">
-                                <strong>Report ID:</strong> <code>{{ report.event_id }}</code><br>
-                                <strong>Reporter:</strong> <a href="{{ url_for('events', search_type='pubkey', pubkey=report.reporter_pubkey) }}"><code>{{ report.reporter_pubkey or 'N/A' }}</code></a><br>
-                                <strong>Reported User:</strong> <a href="{{ url_for('events', search_type='pubkey', pubkey=report.reported_pubkey) }}"><code>{{ report.reported_pubkey or 'N/A' }}</code></a><br>
-                                <strong>Reported Event:</strong> <a href="{{ url_for('events', search_type='event_id', event_id=report.reported_event_id) }}"><code>{{ report.reported_event_id or 'N/A' }}</code></a><br>
-                                <strong>Created:</strong> {{ report.created_at|datetime if report.created_at else 'N/A' }}<br>
-                                {% if report.reported_event_id %}
-                                <hr>
-                                <strong>Reported Event Content:</strong>
-                                <div id="event-content-{{ loop.index }}" class="mt-2">
-                                    <span class="text-muted"><em>Loading event...</em></span>
-                                </div>
-                                {% else %}
-                                <strong>Content:</strong>
-                                <pre class="mt-2 mb-0">{{ report.content if report.content else 'No content' }}</pre>
-                                {% endif %}
-                                {% if report.reviewed %}
-                                <hr>
-                                <span class="text-success"><i class="bi bi-check-circle"></i> Reviewed by user ID {{ report.reviewed_by }} on {{ report.reviewed_at|datetime if report.reviewed_at else 'N/A' }}</span>
-                                {% endif %}
-                                {% if report.banned %}
-                                <hr>
-                                <span class="text-danger"><i class="bi bi-x-circle-fill"></i> Banned by user ID {{ report.banned_by }} on {{ report.banned_at|datetime if report.banned_at else 'N/A' }}</span>
-                                {% endif %}
-                            </div>
-                        </td>
-                    </tr>
-                    {% endfor %}
-                    <tr id="scrollSentinel">
-                        <td colspan="6" class="text-center py-3">
-                            <div id="loadingIndicator" style="display: none;">
-                                <span class="spinner-border spinner-border-sm me-2"></span> Loading more...
-                            </div>
-                            {% if not has_more and reports|length > 0 %}
-                            <small class="text-muted">No more reports</small>
-                            {% endif %}
-                        </td>
-                    </tr>
-                </tbody>
-            </table>
+        <div id="reportList" class="moderation-report-list" aria-busy="false">
+            {% for report in reports %}
+            <article class="moderation-report-card{% if report.banned %} is-banned{% elif report.reviewed %} is-reviewed{% endif %}" id="report-card-{{ report.id }}">
+                <div class="moderation-report-main">
+                    <div class="moderation-report-meta">
+                        <span class="moderation-type" data-type="{{ report.report_type or 'other' }}">{{ report.report_type|default('Other', true)|title }}</span>
+                        {% if report.banned %}<span class="badge bg-danger">Banned</span>{% elif report.reviewed %}<span class="badge bg-success">Reviewed</span>{% else %}<span class="badge bg-warning text-dark">Open</span>{% endif %}
+                        <time class="text-body-secondary small" datetime="{{ report.created_at.isoformat() if report.created_at else '' }}">{{ report.created_at|datetime if report.created_at else 'Unknown date' }}</time>
+                    </div>
+                    <div class="moderation-report-target">
+                        <div class="dashboard-metric-label">Reported target</div>
+                        {% if report.reported_pubkey %}
+                        <a class="moderation-identifier" href="{{ url_for('events', search_type='pubkey', pubkey=report.reported_pubkey) }}"><code>{{ report.reported_pubkey }}</code></a>
+                        {% elif report.reported_event_id %}
+                        <a class="moderation-identifier" href="{{ url_for('events', search_type='event_id', event_id=report.reported_event_id) }}"><code>{{ report.reported_event_id }}</code></a>
+                        {% else %}<span class="text-body-secondary">No target identifier</span>{% endif %}
+                    </div>
+                    <div class="moderation-report-reason">
+                        <div class="dashboard-metric-label">Reporter note</div>
+                        <p class="mb-0">{{ report.content or 'No explanation was included with this report.' }}</p>
+                    </div>
+                    <div class="moderation-report-context small text-body-secondary">
+                        Reporter:
+                        {% if report.reporter_pubkey %}<a href="{{ url_for('events', search_type='pubkey', pubkey=report.reporter_pubkey) }}"><code>{{ report.reporter_pubkey }}</code></a>{% else %}unknown{% endif %}
+                        {% if report.reported_event_id %}<span>· Event: <a href="{{ url_for('events', search_type='event_id', event_id=report.reported_event_id) }}"><code>{{ report.reported_event_id }}</code></a></span>{% endif %}
+                    </div>
+                </div>
+                <div class="moderation-report-actions" aria-label="Actions for report {{ report.id }}">
+                    <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#report-detail-{{ report.id }}" aria-expanded="false" aria-controls="report-detail-{{ report.id }}"><i class="bi bi-eye"></i> Details</button>
+                    {% if report.banned %}
+                    <button class="btn btn-sm btn-outline-danger" type="button" data-report-action="delete" data-report-id="{{ report.id }}"><i class="bi bi-trash"></i> Delete report</button>
+                    {% else %}
+                    {% if not report.reviewed %}<button class="btn btn-sm btn-outline-success" type="button" data-report-action="review" data-report-id="{{ report.id }}"><i class="bi bi-check-lg"></i> Mark reviewed</button>{% endif %}
+                    {% if report.reported_event_id %}<button class="btn btn-sm btn-outline-warning" type="button" data-report-action="delete-event" data-report-id="{{ report.id }}"><i class="bi bi-file-earmark-x"></i> Purge event</button>{% endif %}
+                    {% if report.reported_pubkey %}<button class="btn btn-sm btn-danger" type="button" data-report-action="ban" data-report-id="{{ report.id }}" data-pubkey="{{ report.reported_pubkey }}" data-report-type="{{ report.report_type or 'other' }}" data-event-id="{{ report.reported_event_id or '' }}"><i class="bi bi-slash-octagon"></i> Ban author</button>{% endif %}
+                    {% endif %}
+                </div>
+                <div class="collapse moderation-report-detail" id="report-detail-{{ report.id }}" data-event-id="{{ report.reported_event_id or '' }}">
+                    <div class="moderation-detail-grid">
+                        <div><span class="dashboard-metric-label">Report event</span><code class="text-break">{{ report.event_id }}</code></div>
+                        <div><span class="dashboard-metric-label">Reported pubkey</span><code class="text-break">{{ report.reported_pubkey or 'N/A' }}</code></div>
+                        <div><span class="dashboard-metric-label">Reported event</span><code class="text-break">{{ report.reported_event_id or 'N/A' }}</code></div>
+                    </div>
+                    <div class="mt-3">
+                        <div class="dashboard-metric-label mb-1">Full reporter note</div>
+                        <pre class="moderation-content mb-0">{{ report.content or 'No explanation was included with this report.' }}</pre>
+                    </div>
+                    {% if report.reported_event_id %}
+                    <div class="mt-3">
+                        <div class="dashboard-metric-label mb-1">Reported event preview</div>
+                        <div class="moderation-event-preview" data-event-preview><span class="text-body-secondary">Open details to load the event.</span></div>
+                    </div>
+                    {% endif %}
+                    {% if report.reviewed or report.banned %}
+                    <div class="moderation-history mt-3 small">
+                        {% if report.reviewed %}<div><i class="bi bi-check-circle text-success"></i> Reviewed by user {{ report.reviewed_by }}{% if report.reviewed_at %} on {{ report.reviewed_at|datetime }}{% endif %}</div>{% endif %}
+                        {% if report.banned %}<div><i class="bi bi-slash-octagon text-danger"></i> Banned by user {{ report.banned_by }}{% if report.banned_at %} on {{ report.banned_at|datetime }}{% endif %}</div>{% endif %}
+                    </div>
+                    {% endif %}
+                </div>
+            </article>
+            {% endfor %}
         </div>
-    </div>
-</div>
-{% else %}
-<div class="alert alert-info">
-    No reports found matching your filters.
-</div>
-{% endif %}
 
-<div class="modal fade" id="banModal" tabindex="-1">
+        <div id="reportEmptyState" class="moderation-empty-state{% if reports %} d-none{% endif %}">
+            <i class="bi bi-inbox"></i>
+            <strong>No reports match this view</strong>
+            <span>Clear filters or include reviewed reports to broaden the queue.</span>
+        </div>
+
+        <div class="moderation-load-more mt-4" aria-live="polite">
+            <div id="reportLoadError" class="alert alert-warning d-none" role="alert"></div>
+            <button id="loadMoreReports" class="btn btn-outline-secondary{% if not has_more %} d-none{% endif %}" type="button">
+                <span class="spinner-border spinner-border-sm me-2 d-none" aria-hidden="true"></span><span>Load more reports</span>
+            </button>
+            <div id="reportComplete" class="small text-body-secondary{% if has_more %} d-none{% endif %}" tabindex="-1">End of report queue.</div>
+        </div>
+    </section>
+
+    <details class="dashboard-panel moderation-operation mb-3"{% if pending_purges %} open{% endif %}>
+        <summary>
+            <span><span class="dashboard-section-label">Event purge operations</span><small>Retry pending work and inspect recent outcomes.</small></span>
+            <span class="badge {% if pending_purges %}bg-warning text-dark{% else %}bg-secondary{% endif %}">{{ pending_purges|length }} pending</span>
+        </summary>
+        <div class="moderation-operation-body">
+            {% if pending_purges %}
+            <div class="dashboard-section-label mb-2">Needs attention</div>
+            <div class="moderation-operation-list mb-4">
+                {% for purge in pending_purges %}
+                <div class="moderation-operation-row">
+                    <div><span class="badge bg-warning text-dark">Pending {{ purge.target_type }}</span> <code class="text-break">{{ purge.target }}</code>{% if purge.last_error %}<div class="small text-danger mt-1">{{ purge.last_error }}</div>{% endif %}</div>
+                    <form method="POST" action="{{ url_for('moderation_retry_purge', purge_id=purge.id) }}">
+                        <input type="hidden" name="csrf_token" value="{{ form.csrf_token.current_token }}">
+                        <input type="hidden" name="next" value="{{ request.full_path.rstrip('?') }}">
+                        <button type="submit" class="btn btn-sm btn-outline-warning">Retry</button>
+                    </form>
+                </div>
+                {% endfor %}
+            </div>
+            {% endif %}
+            <div class="dashboard-section-label mb-2">Recent history</div>
+            {% if completed_purges %}
+            <div class="moderation-operation-list">
+                {% for purge in completed_purges %}
+                <div class="moderation-operation-row">
+                    <div><span class="badge {% if purge.was_cancelled %}bg-secondary{% else %}bg-success{% endif %}">{{ 'Cancelled' if purge.was_cancelled else 'Completed' }}</span> <code class="text-break">{{ purge.target }}</code>{% if purge.last_error %}<div class="small text-body-secondary mt-1">{{ purge.last_error }}</div>{% endif %}</div>
+                    <small class="text-body-secondary">{{ purge.attempts }} attempt{% if purge.attempts != 1 %}s{% endif %}</small>
+                </div>
+                {% endfor %}
+            </div>
+            {% else %}<p class="text-body-secondary mb-0">No completed purge history.</p>{% endif %}
+        </div>
+    </details>
+
+    <details class="dashboard-panel moderation-operation"{% if active_domain_count %} open{% endif %}>
+        <summary>
+            <span><span class="dashboard-section-label">Domain ban operations</span><small>Manage exact-host NIP-05 bans and reconciliation.</small></span>
+            <span class="badge {% if active_domain_count %}bg-info{% else %}bg-secondary{% endif %}">{{ banned_domains|length }} active</span>
+        </summary>
+        <div class="moderation-operation-body">
+            <details class="moderation-subdisclosure mb-4">
+                <summary><i class="bi bi-plus-circle"></i> Ban a domain</summary>
+                <form method="POST" action="{{ url_for('moderation_ban_domain') }}" class="row g-3 mt-1">
+                    {{ domain_form.hidden_tag() }}
+                    <div class="col-md-4">{{ domain_form.domain.label(class="form-label") }}{{ domain_form.domain(class="form-control", placeholder="example.com") }}</div>
+                    <div class="col-md-6">{{ domain_form.reason.label(class="form-label") }}{{ domain_form.reason(class="form-control", rows="1", placeholder="Reason for domain ban") }}</div>
+                    <div class="col-md-2 d-flex align-items-end"><button type="submit" class="btn btn-danger w-100" onclick="return confirm('Ban this exact NIP-05 domain and enumerate its directory?')">Ban domain</button></div>
+                </form>
+            </details>
+
+            {% if banned_domains %}
+            <div class="moderation-operation-list">
+                {% for domain_ban in banned_domains %}
+                <div class="moderation-operation-row moderation-domain-row">
+                    <div>
+                        <a href="{{ url_for('moderation_domain_details', domain_id=domain_ban.id) }}"><code>{{ domain_ban.domain }}</code></a>
+                        <div class="small text-body-secondary">{{ domain_ban.source_count }} banned pubkeys · Last scan {{ domain_ban.last_scanned_at|datetime if domain_ban.last_scanned_at else 'never' }}</div>
+                        {% if domain_ban.scan_status in ['queued', 'running'] %}<span class="badge bg-info mt-1">{{ domain_ban.scan_status|title }}</span>{% endif %}
+                        {% if domain_ban.last_scan_error %}<div class="small text-danger mt-1">{{ domain_ban.last_scan_error }}</div>{% endif %}
+                        <div class="small mt-1">{{ domain_ban.last_scan_verified }} verified · {{ domain_ban.scan_details.get('unresolved', 0) }} unresolved · {{ domain_ban.last_scan_new_bans }} new bans</div>
+                    </div>
+                    <div class="d-flex gap-2">
+                        <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('moderation_domain_details', domain_id=domain_ban.id) }}">Details</a>
+                        <form method="POST" action="{{ url_for('moderation_reconcile_domain', domain_id=domain_ban.id) }}">
+                            <input type="hidden" name="csrf_token" value="{{ form.csrf_token.current_token }}">
+                            <button type="submit" class="btn btn-sm btn-outline-danger"{% if domain_ban.scan_status in ['queued', 'running'] %} disabled{% endif %}>Reconcile</button>
+                        </form>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            <p class="small text-body-secondary mt-3 mb-0">Refresh this page to update scan progress. Domain removal remains on the Admin page.</p>
+            {% else %}<p class="text-body-secondary mb-0">No active domain bans.</p>{% endif %}
+        </div>
+    </details>
+</div>
+
+<div class="modal fade" id="banModal" tabindex="-1" aria-labelledby="banModalTitle" aria-describedby="banModalDescription">
     <div class="modal-dialog">
         <div class="modal-content">
-            <div class="modal-header bg-danger text-white">
-                <h5 class="modal-title"><i class="bi bi-exclamation-triangle"></i> CONFIRM BAN</h5>
-                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            <div class="modal-header">
+                <div><div class="dashboard-section-label text-danger">Destructive action</div><h2 class="modal-title fs-5" id="banModalTitle">Ban author and purge events</h2></div>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
             </div>
             <div class="modal-body">
-                <p class="text-danger"><strong>This records a Ban immediately.</strong></p>
-                <p>Banning this user will:</p>
-                <ul>
-                    <li>Deny future writes from their pubkey</li>
-                    <li>Attempt to purge all existing events</li>
-                    <li>Keep failed enforcement or purge work visible for retry</li>
-                </ul>
-                <div class="mb-3">
-                    <label class="form-label">Reason (optional note):</label>
-                    <textarea id="banReason" class="form-control" rows="2" placeholder="Reason for ban..."></textarea>
-                </div>
+                <p id="banModalDescription">This denies future writes and attempts to purge all existing events from the reported author.</p>
+                <div class="moderation-ban-target mb-3"><span class="dashboard-metric-label">Target pubkey</span><code id="banTargetPubkey" class="text-break"></code><div id="banTargetContext" class="small text-body-secondary mt-1"></div></div>
+                <label for="banReason" class="form-label">Reason</label>
+                <textarea id="banReason" class="form-control" rows="3" placeholder="Reason for this ban"></textarea>
                 <input type="hidden" id="banReportId">
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                <button type="button" class="btn btn-danger" onclick="confirmBan()">Ban User</button>
+                <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-danger" id="confirmBanButton">Ban and purge</button>
             </div>
         </div>
     </div>
 </div>
 
-<form method="POST" id="actionForm" style="display:none;">
+<form method="POST" id="actionForm" class="d-none">
     <input type="hidden" name="csrf_token" value="{{ form.csrf_token.current_token }}">
+    <input type="hidden" name="next" value="{{ request.full_path.rstrip('?') }}">
+    <input type="hidden" name="reason" id="actionReason">
 </form>
-
 {% endblock %}
 
 {% block scripts %}
 <script>
+const reportList = document.getElementById('reportList');
+const loadMoreButton = document.getElementById('loadMoreReports');
+const reportLoadError = document.getElementById('reportLoadError');
+const reportComplete = document.getElementById('reportComplete');
+const visibleReportCount = document.getElementById('visibleReportCount');
 const banModal = new bootstrap.Modal(document.getElementById('banModal'));
+let nextCursor = {{ report_cursor|tojson }};
+let currentLimit = {{ limit }};
+let reportLoading = false;
 
-if (document.querySelector('.domain-scan-active')) {
-    setTimeout(function() { location.reload(); }, 3000);
+function node(tag, className, text) {
+    const element = document.createElement(tag);
+    if (className) element.className = className;
+    if (text !== undefined && text !== null) element.textContent = text;
+    return element;
 }
 
-function showBanModal(reportId, pubkey) {
-    document.getElementById('banReportId').value = reportId;
-    document.getElementById('banReason').value = '';
-    banModal.show();
+function reportSearchLink(searchType, parameter, value) {
+    if (!value) return node('span', 'text-body-secondary', 'No target identifier');
+    const link = node('a', 'moderation-identifier');
+    const params = new URLSearchParams({ search_type: searchType });
+    params.set(parameter, value);
+    link.href = '/events?' + params.toString();
+    link.appendChild(node('code', '', value));
+    return link;
 }
 
-function confirmBan() {
-    if (!confirm('Record this Ban and attempt to purge the user\'s existing events?')) return;
-    const reportId = document.getElementById('banReportId').value;
-    const reason = document.getElementById('banReason').value || 'Banned via moderation page';
-    const form = document.getElementById('actionForm');
-    form.action = '/moderation/report/' + reportId + '/ban';
-    form.method = 'POST';
-    
-    const reasonInput = document.createElement('input');
-    reasonInput.type = 'hidden';
-    reasonInput.name = 'reason';
-    reasonInput.value = reason;
-    form.appendChild(reasonInput);
-    
-    form.submit();
+function reportStatus(report) {
+    if (report.banned) return ['Banned', 'bg-danger'];
+    if (report.reviewed) return ['Reviewed', 'bg-success'];
+    return ['Open', 'bg-warning text-dark'];
 }
 
-function reviewReport(reportId) {
-    const form = document.getElementById('actionForm');
-    form.action = '/moderation/report/' + reportId + '/review';
-    form.method = 'POST';
-    form.submit();
+function actionButton(label, style, icon, action, report) {
+    const button = node('button', 'btn btn-sm ' + style);
+    button.type = 'button';
+    button.dataset.reportAction = action;
+    button.dataset.reportId = report.id;
+    if (report.reported_pubkey) button.dataset.pubkey = report.reported_pubkey;
+    if (report.report_type) button.dataset.reportType = report.report_type;
+    if (report.reported_event_id) button.dataset.eventId = report.reported_event_id;
+    const iconElement = node('i', 'bi ' + icon);
+    button.append(iconElement, document.createTextNode(' ' + label));
+    return button;
 }
 
-function deleteReport(reportId) {
-    if (confirm('Delete this report?')) {
-        const form = document.getElementById('actionForm');
-        form.action = '/moderation/report/' + reportId + '/delete';
-        form.method = 'POST';
-        form.submit();
+function detailValue(label, value) {
+    const wrapper = node('div');
+    wrapper.append(node('span', 'dashboard-metric-label', label), node('code', 'text-break', value || 'N/A'));
+    return wrapper;
+}
+
+function createReportCard(report) {
+    const card = node('article', 'moderation-report-card');
+    if (report.banned) card.classList.add('is-banned');
+    else if (report.reviewed) card.classList.add('is-reviewed');
+    card.id = 'report-card-' + report.id;
+
+    const main = node('div', 'moderation-report-main');
+    const meta = node('div', 'moderation-report-meta');
+    const type = node('span', 'moderation-type', titleCase(report.report_type || 'other'));
+    type.dataset.type = report.report_type || 'other';
+    const [statusText, statusClass] = reportStatus(report);
+    const status = node('span', 'badge ' + statusClass, statusText);
+    const date = node('time', 'text-body-secondary small', formatDate(report.created_at));
+    if (report.created_at) date.dateTime = report.created_at;
+    meta.append(type, status, date);
+
+    const target = node('div', 'moderation-report-target');
+    target.appendChild(node('div', 'dashboard-metric-label', 'Reported target'));
+    target.appendChild(report.reported_pubkey
+        ? reportSearchLink('pubkey', 'pubkey', report.reported_pubkey)
+        : reportSearchLink('event_id', 'event_id', report.reported_event_id));
+
+    const reason = node('div', 'moderation-report-reason');
+    reason.append(node('div', 'dashboard-metric-label', 'Reporter note'), node('p', 'mb-0', report.content || 'No explanation was included with this report.'));
+
+    const context = node('div', 'moderation-report-context small text-body-secondary');
+    context.appendChild(document.createTextNode('Reporter: '));
+    if (report.reporter_pubkey) context.appendChild(reportSearchLink('pubkey', 'pubkey', report.reporter_pubkey));
+    else context.appendChild(document.createTextNode('unknown'));
+    if (report.reported_event_id) {
+        context.appendChild(document.createTextNode(' · Event: '));
+        context.appendChild(reportSearchLink('event_id', 'event_id', report.reported_event_id));
     }
-}
+    main.append(meta, target, reason, context);
 
-function deleteEvent(reportId) {
-    if (!confirm('Delete just this reported event?')) return;
-    const form = document.getElementById('actionForm');
-    form.action = '/moderation/report/' + reportId + '/delete-event';
-    form.method = 'POST';
-    form.submit();
-}
-
-let currentOffset = {{ offset|default(0) }};
-let currentLimit = {{ limit|default(25) }};
-let hasMore = {{ 'true' if has_more else 'false' }};
-let isLoading = false;
-
-const observer = new IntersectionObserver(function(entries) {
-    if (entries[0].isIntersecting && hasMore && !isLoading) {
-        loadMoreReports();
+    const actions = node('div', 'moderation-report-actions');
+    actions.setAttribute('aria-label', 'Actions for report ' + report.id);
+    const detailsButton = node('button', 'btn btn-sm btn-outline-secondary');
+    detailsButton.type = 'button';
+    detailsButton.dataset.bsToggle = 'collapse';
+    detailsButton.dataset.bsTarget = '#report-detail-' + report.id;
+    detailsButton.setAttribute('aria-controls', 'report-detail-' + report.id);
+    detailsButton.append(node('i', 'bi bi-eye'), document.createTextNode(' Details'));
+    actions.appendChild(detailsButton);
+    if (report.banned) {
+        actions.appendChild(actionButton('Delete report', 'btn-outline-danger', 'bi-trash', 'delete', report));
+    } else {
+        if (!report.reviewed) actions.appendChild(actionButton('Mark reviewed', 'btn-outline-success', 'bi-check-lg', 'review', report));
+        if (report.reported_event_id) actions.appendChild(actionButton('Purge event', 'btn-outline-warning', 'bi-file-earmark-x', 'delete-event', report));
+        if (report.reported_pubkey) actions.appendChild(actionButton('Ban author', 'btn-danger', 'bi-slash-octagon', 'ban', report));
     }
-}, { rootMargin: '100px' });
 
-const sentinel = document.getElementById('scrollSentinel');
-if (sentinel) observer.observe(sentinel);
+    const detail = node('div', 'collapse moderation-report-detail');
+    detail.id = 'report-detail-' + report.id;
+    detail.dataset.eventId = report.reported_event_id || '';
+    const detailGrid = node('div', 'moderation-detail-grid');
+    detailGrid.append(
+        detailValue('Report event', report.event_id),
+        detailValue('Reported pubkey', report.reported_pubkey),
+        detailValue('Reported event', report.reported_event_id)
+    );
+    detail.appendChild(detailGrid);
+    const note = node('div', 'mt-3');
+    note.append(node('div', 'dashboard-metric-label mb-1', 'Full reporter note'), node('pre', 'moderation-content mb-0', report.content || 'No explanation was included with this report.'));
+    detail.appendChild(note);
+    if (report.reported_event_id) {
+        const previewWrapper = node('div', 'mt-3');
+        const preview = node('div', 'moderation-event-preview');
+        preview.dataset.eventPreview = '';
+        preview.appendChild(node('span', 'text-body-secondary', 'Open details to load the event.'));
+        previewWrapper.append(node('div', 'dashboard-metric-label mb-1', 'Reported event preview'), preview);
+        detail.appendChild(previewWrapper);
+    }
+    if (report.reviewed || report.banned) {
+        const history = node('div', 'moderation-history mt-3 small');
+        if (report.reviewed) history.appendChild(node('div', '', 'Reviewed by user ' + (report.reviewed_by || 'unknown') + (report.reviewed_at ? ' on ' + formatDate(report.reviewed_at) : ''));
+        if (report.banned) history.appendChild(node('div', '', 'Banned by user ' + (report.banned_by || 'unknown') + (report.banned_at ? ' on ' + formatDate(report.banned_at) : ''));
+        detail.appendChild(history);
+    }
 
-document.querySelectorAll('[id^="report-"]').forEach(function(element) {
-    element.addEventListener('show.bs.collapse', function() {
-        const eventId = this.getAttribute('data-event-id');
-        if (!eventId) return;
-        
-        const rowIndex = this.id.replace('report-', '');
-        const contentDiv = document.getElementById('event-content-' + rowIndex);
-        if (!contentDiv || contentDiv.dataset.loaded === 'true') return;
-        
-        contentDiv.dataset.loaded = 'true';
-        
-        fetch('/api/event/' + encodeURIComponent(eventId))
-            .then(function(r) { return r.json(); })
-            .then(function(event) {
-                if (event.error) {
-                    contentDiv.innerHTML = '<span class="text-danger">Event not found</span>';
-                    return;
-                }
-                let html = '<strong>Kind:</strong> ' + event.kind + '<br>';
-                
-                // Fetch author metadata
-                fetch('/api/pubkey-metadata/' + encodeURIComponent(event.pubkey))
-                    .then(function(r) { return r.json(); })
-                    .then(function(metadata) {
-                        let authorHtml = '<code>' + event.pubkey + '</code>';
-                        if (metadata.name) {
-                            authorHtml = '<strong>' + metadata.name + '</strong> ' + authorHtml;
-                        }
-                        if (metadata.nip05) {
-                            authorHtml += ' <span class="text-info">' + metadata.nip05 + '</span>';
-                        }
-                        contentDiv.querySelector('.author-display').innerHTML = authorHtml;
-                    })
-                    .catch(function() {
-                        contentDiv.querySelector('.author-display').innerHTML = '<code>' + event.pubkey + '</code>';
-                    });
-                
-                html += '<strong>Author:</strong> <span class="author-display"><em>Loading...</em></span><br>';
-                if (event.content) {
-                    html += '<strong>Content:</strong><pre class="mt-1 mb-0" style="white-space: pre-wrap; word-break: break-word;">' + event.content + '</pre>';
-                }
-                if (event.tags && event.tags.length > 0) {
-                    html += '<strong>Tags:</strong><pre class="mt-1 mb-0">' + JSON.stringify(event.tags) + '</pre>';
-                }
-                contentDiv.innerHTML = html;
-            })
-            .catch(function() {
-                contentDiv.innerHTML = '<span class="text-danger">Failed to load event</span>';
-            });
-    });
+    card.append(main, actions, detail);
+    return card;
+}
+
+function titleCase(value) {
+    return String(value).replaceAll('_', ' ').replace(/\b\w/g, character => character.toUpperCase());
+}
+
+function formatDate(value) {
+    if (!value) return 'Unknown date';
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? 'Unknown date' : date.toLocaleString();
+}
+
+reportList.querySelectorAll('time[datetime]').forEach(function(element) {
+    element.textContent = formatDate(element.dateTime);
 });
 
-function loadMoreReports() {
-    isLoading = true;
-    document.getElementById('loadingIndicator').style.display = 'block';
-    
-    const params = new URLSearchParams(window.location.search);
-    params.set('offset', currentOffset + currentLimit);
-    
-    fetch('/api/moderation-reports?' + params.toString())
-        .then(function(r) { return r.json(); })
-        .then(function(data) {
-            appendReports(data.reports);
-            hasMore = data.has_more;
-            currentOffset += data.reports.length;
-            document.getElementById('loadingIndicator').style.display = 'none';
-            isLoading = false;
-        })
-        .catch(function() {
-            document.getElementById('loadingIndicator').style.display = 'none';
-            isLoading = false;
-        });
+function submitReportAction(action, reportId, reason) {
+    const form = document.getElementById('actionForm');
+    const paths = {
+        review: '/moderation/report/' + reportId + '/review',
+        delete: '/moderation/report/' + reportId + '/delete',
+        'delete-event': '/moderation/report/' + reportId + '/delete-event',
+        ban: '/moderation/report/' + reportId + '/ban'
+    };
+    form.action = paths[action];
+    document.getElementById('actionReason').value = reason || '';
+    form.submit();
 }
 
-function appendReports(reports) {
-    const tbody = document.querySelector('tbody');
-    const startIndex = tbody.querySelectorAll('tr:not(#scrollSentinel)').length;
-    
-    reports.forEach(function(report, i) {
-        const index = startIndex + i + 1;
-        
-        const tr = document.createElement('tr');
-        tr.innerHTML = buildReportRowHTML(report, index);
-        tbody.insertBefore(tr, sentinel);
-        
-        const collapseTr = document.createElement('tr');
-        collapseTr.className = 'collapse';
-        collapseTr.id = 'report-' + index;
-        collapseTr.setAttribute('data-event-id', report.reported_event_id || '');
-        collapseTr.innerHTML = buildReportCollapseHTML(report, index);
-        tbody.insertBefore(collapseTr, sentinel);
-        
-        collapseTr.addEventListener('show.bs.collapse', function() {
-            const eventId = this.getAttribute('data-event-id');
-            if (!eventId) return;
-            
-            const contentDiv = document.getElementById('event-content-' + index);
-            if (!contentDiv || contentDiv.dataset.loaded === 'true') return;
-            
-            contentDiv.dataset.loaded = 'true';
-            
-            fetch('/api/event/' + encodeURIComponent(eventId))
-                .then(function(r) { return r.json(); })
-                .then(function(event) {
-                    if (event.error) {
-                        contentDiv.innerHTML = '<span class="text-danger">Event not found</span>';
-                        return;
-                    }
-                    let html = '<strong>Kind:</strong> ' + event.kind + '<br>';
-                    
-                    // Fetch author metadata
-                    fetch('/api/pubkey-metadata/' + encodeURIComponent(event.pubkey))
-                        .then(function(r) { return r.json(); })
-                        .then(function(metadata) {
-                            let authorHtml = '<code>' + event.pubkey + '</code>';
-                            if (metadata.name) {
-                                authorHtml = '<strong>' + metadata.name + '</strong> ' + authorHtml;
-                            }
-                            if (metadata.nip05) {
-                                authorHtml += ' <span class="text-info">' + metadata.nip05 + '</span>';
-                            }
-                            contentDiv.querySelector('.author-display').innerHTML = authorHtml;
-                        })
-                        .catch(function() {
-                            contentDiv.querySelector('.author-display').innerHTML = '<code>' + event.pubkey + '</code>';
-                        });
-                    
-                    html += '<strong>Author:</strong> <span class="author-display"><em>Loading...</em></span><br>';
-                    if (event.content) {
-                        html += '<strong>Content:</strong><pre class="mt-1 mb-0" style="white-space: pre-wrap; word-break: break-word;">' + event.content + '</pre>';
-                    }
-                    if (event.tags && event.tags.length > 0) {
-                        html += '<strong>Tags:</strong><pre class="mt-1 mb-0">' + JSON.stringify(event.tags) + '</pre>';
-                    }
-                    contentDiv.innerHTML = html;
-                })
-                .catch(function() {
-                    contentDiv.innerHTML = '<span class="text-danger">Failed to load event</span>';
-                });
-        });
-    });
-}
-
-function buildReportRowHTML(report, index) {
-    let typeBadge = '';
-    switch(report.report_type) {
-        case 'nudity': typeBadge = '<span class="badge bg-danger">Nudity</span>'; break;
-        case 'spam': typeBadge = '<span class="badge bg-warning text-dark">Spam</span>'; break;
-        case 'profanity': typeBadge = '<span class="badge bg-warning text-dark">Profanity</span>'; break;
-        case 'illegal': typeBadge = '<span class="badge bg-danger">Illegal</span>'; break;
-        case 'impersonation': typeBadge = '<span class="badge bg-info">Impersonation</span>'; break;
-        default: typeBadge = '<span class="badge bg-secondary">' + (report.report_type || 'Other') + '</span>';
+reportList.addEventListener('click', function(event) {
+    const button = event.target.closest('[data-report-action]');
+    if (!button) return;
+    const action = button.dataset.reportAction;
+    if (action === 'review') submitReportAction(action, button.dataset.reportId);
+    if (action === 'delete' && confirm('Delete this moderation report?')) submitReportAction(action, button.dataset.reportId);
+    if (action === 'delete-event' && confirm('Purge this reported event? This cannot be undone.')) submitReportAction(action, button.dataset.reportId);
+    if (action === 'ban') {
+        document.getElementById('banReportId').value = button.dataset.reportId;
+        document.getElementById('banTargetPubkey').textContent = button.dataset.pubkey;
+        document.getElementById('banTargetContext').textContent = titleCase(button.dataset.reportType || 'other') + (button.dataset.eventId ? ' report · event ' + button.dataset.eventId : ' report');
+        document.getElementById('banReason').value = '';
+        banModal.show();
     }
-    
-    const dateStr = report.created_at ? formatDate(report.created_at) : '-';
-    const reporterLink = report.reporter_pubkey ? 
-        '<a href="/events?search_type=pubkey&pubkey=' + report.reporter_pubkey + '" title="Search events from this pubkey"><code class="text-truncate d-inline-block" style="max-width: 80px;">' + report.reporter_pubkey + '</code></a>' : '-';
-    const reportedClass = report.banned ? 'text-danger fw-bold' : '';
-    const bannedIcon = report.banned ? '<i class="bi bi-exclamation-triangle-fill" title="User Banned"></i>' : '';
-    const reportedLink = report.reported_pubkey ?
-        '<span class="' + reportedClass + '"><a href="/events?search_type=pubkey&pubkey=' + report.reported_pubkey + '" title="Search events from this pubkey"><code class="text-truncate d-inline-block" style="max-width: 80px;">' + report.reported_pubkey + '</code></a>' + bannedIcon + '</span>' : '-';
-    const eventId = report.reported_event_id ? 
-        '<a href="/events?search_type=event_id&event_id=' + report.reported_event_id + '" title="Search for this event"><code class="text-truncate d-inline-block" style="max-width: 80px;" title="' + report.reported_event_id + '">' + report.reported_event_id + '</code></a>' : '-';
-    
-    let actions = '<div class="btn-group btn-group-sm" role="group">' +
-        '<button class="btn btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#report-' + index + '" title="View"><i class="bi bi-eye"></i></button>';
-    
-    if (report.banned) {
-        actions += '<button class="btn btn-outline-danger" onclick="deleteReport(\'' + report.id + '\')" title="Delete report"><i class="bi bi-trash"></i></button>';
-    } else {
-        const reviewClass = report.reviewed ? 'btn-success' : 'btn-outline-secondary';
-        actions += '<button class="btn ' + reviewClass + '" onclick="reviewReport(\'' + report.id + '\')" title="Mark as reviewed"><i class="bi bi-check-lg"></i></button>';
-        if (report.reported_event_id) {
-            actions += '<button class="btn btn-outline-warning" onclick="deleteEvent(\'' + report.id + '\')" title="Delete event"><i class="bi bi-file-earmark-x"></i></button>';
+});
+
+document.getElementById('confirmBanButton').addEventListener('click', function() {
+    const reportId = document.getElementById('banReportId').value;
+    const reason = document.getElementById('banReason').value.trim() || 'Banned via moderation report';
+    submitReportAction('ban', reportId, reason);
+});
+
+document.addEventListener('show.bs.collapse', function(event) {
+    const detail = event.target;
+    if (!detail.classList.contains('moderation-report-detail') || !detail.dataset.eventId) return;
+    const preview = detail.querySelector('[data-event-preview]');
+    if (preview && !preview.dataset.loaded && !preview.dataset.loading) loadEventPreview(preview, detail.dataset.eventId);
+});
+
+async function loadEventPreview(preview, eventId) {
+    preview.dataset.loading = 'true';
+    preview.replaceChildren(node('span', 'text-body-secondary', 'Loading reported event...'));
+    try {
+        const eventResponse = await fetch('/api/event/' + encodeURIComponent(eventId), { headers: { Accept: 'application/json' } });
+        if (!eventResponse.ok || eventResponse.redirected || !(eventResponse.headers.get('content-type') || '').includes('application/json')) throw new Error('Event request failed');
+        const relayEvent = await eventResponse.json();
+        if (relayEvent.error) throw new Error('Event not found');
+        preview.replaceChildren();
+        const facts = node('div', 'moderation-event-facts small');
+        facts.append(node('span', '', 'Kind ' + relayEvent.kind), node('span', '', 'Author ' + relayEvent.pubkey));
+        preview.appendChild(facts);
+        try {
+            const metadataResponse = await fetch('/api/pubkey-metadata/' + encodeURIComponent(relayEvent.pubkey), { headers: { Accept: 'application/json' } });
+            if (metadataResponse.ok && !metadataResponse.redirected) {
+                const metadata = await metadataResponse.json();
+                const identity = [metadata.name, metadata.nip05].filter(Boolean).join(' · ');
+                if (identity) preview.appendChild(node('div', 'small text-info mt-2', identity));
+            }
+        } catch (error) {
+            // Metadata is supplementary; the event remains usable without it.
         }
-        actions += '<button class="btn btn-danger" onclick="showBanModal(\'' + report.id + '\', \'' + (report.reported_pubkey || '') + '\')" title="Ban user"><i class="bi bi-x-circle"></i></button>';
+        if (relayEvent.content) preview.appendChild(node('pre', 'moderation-content mt-2 mb-0', relayEvent.content));
+        if (Array.isArray(relayEvent.tags) && relayEvent.tags.length) preview.appendChild(node('pre', 'moderation-content mt-2 mb-0', JSON.stringify(relayEvent.tags, null, 2)));
+        preview.dataset.loaded = 'true';
+    } catch (error) {
+        preview.replaceChildren(node('span', 'text-danger', error.message + '. '));
+        const retry = node('button', 'btn btn-sm btn-link p-0', 'Retry');
+        retry.type = 'button';
+        retry.addEventListener('click', function() { loadEventPreview(preview, eventId); });
+        preview.appendChild(retry);
+    } finally {
+        delete preview.dataset.loading;
     }
-    actions += '</div>';
-    
-    let row = '<td>' + typeBadge + '</td>';
-    row += '<td><small>' + dateStr + '</small></td>';
-    row += '<td>' + reporterLink + '</td>';
-    row += '<td>' + reportedLink + '</td>';
-    row += '<td>' + eventId + '</td>';
-    row += '<td>' + actions + '</td>';
-    
-    return row;
 }
 
-function buildReportCollapseHTML(report, index) {
-    const eventContentDiv = report.reported_event_id ? 
-        '<div id="event-content-' + index + '" class="mt-2"><span class="text-muted"><em>Loading event...</em></span></div>' :
-        '<pre class="mt-2 mb-0">' + (report.content || 'No content') + '</pre>';
-    
-    const reviewedHtml = report.reviewed ? 
-        '<hr><span class="text-success"><i class="bi bi-check-circle"></i> Reviewed by user ID ' + report.reviewed_by + ' on ' + formatDate(report.reviewed_at) + '</span>' : '';
-    const bannedHtml = report.banned ? 
-        '<hr><span class="text-danger"><i class="bi bi-x-circle-fill"></i> Banned by user ID ' + report.banned_by + ' on ' + formatDate(report.banned_at) + '</span>' : '';
-    
-    return '<td colspan="6">' +
-        '<div class="p-3 rounded bg-body-secondary">' +
-        '<strong>Report ID:</strong> <code>' + report.event_id + '</code><br>' +
-        '<strong>Reporter:</strong> <a href="/events?search_type=pubkey&pubkey=' + (report.reporter_pubkey || '') + '"><code>' + (report.reporter_pubkey || 'N/A') + '</code></a><br>' +
-        '<strong>Reported User:</strong> <a href="/events?search_type=pubkey&pubkey=' + (report.reported_pubkey || '') + '"><code>' + (report.reported_pubkey || 'N/A') + '</code></a><br>' +
-        '<strong>Reported Event:</strong> <a href="/events?search_type=event_id&event_id=' + (report.reported_event_id || '') + '"><code>' + (report.reported_event_id || 'N/A') + '</code></a><br>' +
-        '<strong>Created:</strong> ' + formatDate(report.created_at) + '<br>' +
-        (report.reported_event_id ? '<hr><strong>Reported Event Content:</strong>' + eventContentDiv : '<strong>Content:</strong>' + eventContentDiv) +
-        reviewedHtml + bannedHtml +
-        '</div></td>';
-}
-
-function formatDate(isoString) {
-    const date = new Date(isoString);
-    return date.toLocaleString();
-}
+loadMoreButton.addEventListener('click', async function() {
+    if (reportLoading) return;
+    reportLoading = true;
+    reportList.setAttribute('aria-busy', 'true');
+    reportLoadError.classList.add('d-none');
+    loadMoreButton.disabled = true;
+    loadMoreButton.querySelector('.spinner-border').classList.remove('d-none');
+    try {
+        const params = new URLSearchParams(window.location.search);
+        params.delete('offset');
+        params.set('limit', currentLimit);
+        if (nextCursor) {
+            params.set('cursor_id', nextCursor.id);
+            if (nextCursor.created_at) params.set('cursor_created_at', nextCursor.created_at);
+            else params.set('cursor_null', '1');
+        }
+        const response = await fetch('/api/moderation-reports?' + params.toString(), { headers: { Accept: 'application/json' } });
+        if (!response.ok || response.redirected || !(response.headers.get('content-type') || '').includes('application/json')) throw new Error('Your session may have expired or the report request failed');
+        const data = await response.json();
+        data.reports.forEach(function(report) {
+            if (!document.getElementById('report-card-' + report.id)) reportList.appendChild(createReportCard(report));
+        });
+        nextCursor = data.next_cursor;
+        visibleReportCount.textContent = reportList.children.length;
+        document.getElementById('reportEmptyState').classList.toggle('d-none', reportList.children.length > 0);
+        const moveFocusToCompletion = !data.has_more && document.activeElement === loadMoreButton;
+        loadMoreButton.classList.toggle('d-none', !data.has_more);
+        reportComplete.classList.toggle('d-none', data.has_more);
+        if (moveFocusToCompletion) reportComplete.focus();
+    } catch (error) {
+        reportLoadError.textContent = error.message + '. Try again.';
+        reportLoadError.classList.remove('d-none');
+    } finally {
+        reportLoading = false;
+        reportList.setAttribute('aria-busy', 'false');
+        loadMoreButton.disabled = false;
+        loadMoreButton.querySelector('.spinner-border').classList.add('d-none');
+    }
+});
 </script>
 {% endblock %}

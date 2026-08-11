@@ -198,6 +198,7 @@ def test_existing_database_migration_creates_report_indexes(app):
         'ix_moderation_reports_reporter_pubkey',
         'ix_moderation_reports_reported_pubkey',
         'ix_moderation_reports_reported_event_id',
+        'ix_moderation_reports_created_at',
     }
     with db.engine.begin() as connection:
         for index_name in index_names:

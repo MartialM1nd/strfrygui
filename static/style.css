@@ -193,8 +193,68 @@ footer {
 .connection-verb { display: inline-flex; align-items: center; min-width: 4.5rem; border: 1px solid var(--bs-border-color); border-radius: 999px; padding: 0.2rem 0.55rem; color: var(--dashboard-blue); font-family: var(--bs-font-monospace); font-size: 0.75rem; font-weight: 650; }
 .connection-session-boundary { border-style: dashed; background: color-mix(in srgb, var(--dashboard-blue) 3%, var(--bs-body-bg)); }
 
+.moderation-shell { --moderation-amber: #f0b849; }
+.moderation-summary-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0.85rem; }
+.moderation-summary-item { min-height: 118px; border: 1px solid var(--bs-border-color); border-radius: 10px; padding: 1rem; background: var(--bs-body-bg); }
+.moderation-summary-primary { border-color: color-mix(in srgb, var(--moderation-amber) 55%, var(--bs-border-color)); background: color-mix(in srgb, var(--moderation-amber) 4%, var(--bs-body-bg)); }
+.moderation-summary-value { margin: 0.2rem 0; font-size: clamp(1.55rem, 3vw, 2.15rem); font-weight: 680; letter-spacing: -0.04em; }
+.moderation-report-panel { padding: clamp(0.85rem, 2vw, 1.25rem); }
+.moderation-report-heading { padding-bottom: 1rem; border-bottom: 1px solid var(--bs-border-color); }
+.moderation-filter-bar { display: grid; grid-template-columns: minmax(150px, 1fr) minmax(150px, 1fr) auto auto; gap: 0.85rem; align-items: end; }
+.moderation-reviewed-filter { min-height: 38px; display: flex; align-items: center; padding: 0 0.35rem; }
+.moderation-filter-more { grid-column: 1 / -1; border-top: 1px solid var(--bs-border-color); padding-top: 0.75rem; }
+.moderation-filter-more > summary,
+.moderation-subdisclosure > summary { width: fit-content; color: var(--dashboard-blue); cursor: pointer; font-size: 0.85rem; font-weight: 650; }
+.moderation-filter-details { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0.85rem; margin-top: 0.85rem; }
+.moderation-report-list { display: grid; gap: 0.8rem; }
+.moderation-report-card { display: grid; grid-template-columns: minmax(0, 1fr) auto; border: 1px solid var(--bs-border-color); border-left: 3px solid var(--moderation-amber); border-radius: 9px; background: var(--bs-body-bg); overflow: hidden; }
+.moderation-report-card.is-reviewed { border-left-color: var(--dashboard-green); }
+.moderation-report-card.is-banned { border-left-color: var(--dashboard-red); }
+.moderation-report-main { min-width: 0; display: grid; grid-template-columns: minmax(190px, 0.75fr) minmax(200px, 1fr) minmax(260px, 1.5fr); gap: 0.8rem 1rem; padding: 1rem; }
+.moderation-report-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 0.45rem; align-content: start; }
+.moderation-type { display: inline-flex; align-items: center; border: 1px solid var(--bs-border-color); border-radius: 999px; padding: 0.2rem 0.55rem; color: var(--dashboard-blue); font-size: 0.75rem; font-weight: 650; }
+.moderation-type[data-type="nudity"],
+.moderation-type[data-type="illegal"] { color: var(--dashboard-red); }
+.moderation-type[data-type="spam"],
+.moderation-type[data-type="profanity"] { color: var(--bs-warning-text-emphasis); }
+.moderation-report-target,
+.moderation-report-reason { min-width: 0; }
+.moderation-report-reason p { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; }
+.moderation-identifier { display: block; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.moderation-report-context { grid-column: 1 / -1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.moderation-report-context .moderation-identifier { display: inline; }
+.moderation-report-actions { display: flex; flex-direction: column; justify-content: center; gap: 0.45rem; min-width: 150px; padding: 1rem; border-left: 1px solid var(--bs-border-color); background: color-mix(in srgb, var(--bs-tertiary-bg) 40%, transparent); }
+.moderation-report-actions .btn { white-space: nowrap; }
+.moderation-report-detail { grid-column: 1 / -1; padding: 1rem; border-top: 1px solid var(--bs-border-color); background: color-mix(in srgb, var(--bs-tertiary-bg) 50%, var(--bs-body-bg)); }
+.moderation-detail-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; }
+.moderation-detail-grid span { display: block; margin-bottom: 0.2rem; }
+.moderation-content { max-height: 280px; overflow: auto; padding: 0.75rem; background: var(--bs-body-bg); }
+.moderation-event-preview { border: 1px dashed var(--bs-border-color); border-radius: 7px; padding: 0.85rem; background: var(--bs-body-bg); }
+.moderation-event-facts { display: flex; flex-wrap: wrap; gap: 0.75rem; }
+.moderation-event-facts span { border: 1px solid var(--bs-border-color); border-radius: 999px; padding: 0.2rem 0.55rem; }
+.moderation-history { display: grid; gap: 0.35rem; }
+.moderation-empty-state { display: grid; place-items: center; gap: 0.35rem; min-height: 220px; color: var(--bs-secondary-color); text-align: center; }
+.moderation-empty-state i { color: var(--dashboard-blue); font-size: 1.5rem; }
+.moderation-load-more { text-align: center; }
+.moderation-operation { padding: 0; overflow: hidden; }
+.moderation-operation > summary { display: flex; align-items: center; justify-content: space-between; gap: 1rem; padding: 1rem 1.1rem; cursor: pointer; list-style: none; }
+.moderation-operation > summary::-webkit-details-marker { display: none; }
+.moderation-operation > summary::after { content: "+"; order: 2; color: var(--bs-secondary-color); font-size: 1.25rem; }
+.moderation-operation[open] > summary::after { content: "−"; }
+.moderation-operation > summary > span:first-child { display: grid; gap: 0.25rem; }
+.moderation-operation > summary > .badge { margin-left: auto; }
+.moderation-operation-body { padding: 1rem 1.1rem; border-top: 1px solid var(--bs-border-color); }
+.moderation-operation-list { display: grid; gap: 0.6rem; }
+.moderation-operation-row { display: flex; align-items: center; justify-content: space-between; gap: 1rem; border: 1px solid var(--bs-border-color); border-radius: 7px; padding: 0.8rem; }
+.moderation-domain-row > div:first-child { min-width: 0; }
+.moderation-subdisclosure { border: 1px dashed var(--bs-border-color); border-radius: 8px; padding: 0.85rem; }
+.moderation-ban-target { border: 1px solid color-mix(in srgb, var(--dashboard-red) 45%, var(--bs-border-color)); border-radius: 8px; padding: 0.85rem; background: color-mix(in srgb, var(--dashboard-red) 4%, var(--bs-body-bg)); }
+.moderation-ban-target span { display: block; margin-bottom: 0.25rem; }
+
 @media (max-width: 1399px) {
     .dashboard-metric-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .moderation-report-main { grid-template-columns: minmax(175px, 0.75fr) minmax(220px, 1fr); }
+    .moderation-report-reason { grid-column: 1 / -1; }
 }
 
 @media (max-width: 767px) {
@@ -202,11 +262,27 @@ footer {
     .dashboard-metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
     .dashboard-metric { min-height: 155px; }
     .dashboard-chart { height: 250px; }
+    .moderation-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .moderation-filter-bar { grid-template-columns: 1fr 1fr; }
+    .moderation-filter-details { grid-template-columns: 1fr; }
+    .moderation-report-card { grid-template-columns: 1fr; }
+    .moderation-report-main { grid-template-columns: 1fr; }
+    .moderation-report-reason,
+    .moderation-report-context { grid-column: 1; }
+    .moderation-report-context { white-space: normal; overflow-wrap: anywhere; }
+    .moderation-report-actions { flex-direction: row; flex-wrap: wrap; justify-content: flex-start; border-left: 0; border-top: 1px solid var(--bs-border-color); }
+    .moderation-report-detail { grid-column: 1; }
+    .moderation-detail-grid { grid-template-columns: 1fr; }
+    .moderation-operation-row { align-items: flex-start; flex-direction: column; }
 }
 
 @media (max-width: 480px) {
     .dashboard-metric-grid { grid-template-columns: 1fr; }
     .dashboard-attention-items { display: grid; }
+    .moderation-summary-grid,
+    .moderation-filter-bar { grid-template-columns: 1fr; }
+    .moderation-report-actions .btn { flex: 1 1 100%; min-height: 42px; }
+    .moderation-operation > summary { align-items: flex-start; }
 }
 
 .event-image {

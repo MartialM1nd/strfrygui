@@ -3,7 +3,7 @@ import json
 from datetime import timedelta
 
 from config import Config
-from models import User, WoTBuildState, WoTPolicy, db, utcnow
+from models import ModerationReport, User, WoTBuildState, WoTPolicy, db, utcnow
 from utils import moderation_reports
 from utils.wot import DEFAULT_ROOT_NPUBS
 
@@ -190,9 +190,128 @@ def test_plugins_page_manages_and_publishes_wot_policy(monkeypatch, tmp_path):
     monkeypatch.setattr(app_module, 'sync_moderation_reports', fail_request_sync)
     monkeypatch.setattr(app_module, 'scan_events', fail_request_sync)
     monkeypatch.setattr(moderation_reports, 'scan_events', fail_request_sync)
+    with flask_app.app_context():
+        open_report = ModerationReport(
+            event_id='ux-open-report',
+            reporter_pubkey='reporter',
+            reported_pubkey='reported',
+            report_type='spam',
+            content='Repeated promotional posts',
+            created_at=utcnow(),
+        )
+        reviewed_report = ModerationReport(
+            event_id='ux-reviewed-report',
+            report_type='other',
+            reviewed=True,
+            created_at=utcnow() - timedelta(days=2),
+        )
+        db.session.add_all([open_report, reviewed_report])
+        db.session.commit()
+        open_report_id = open_report.id
+
     flask_app.config['WTF_CSRF_ENABLED'] = True
-    assert moderator_client.get('/moderation').status_code == 200
+    moderation_page = moderator_client.get('/moderation')
+    assert moderation_page.status_code == 200
+    assert moderation_page.data.index(b'Report queue') < moderation_page.data.index(b'Event purge operations')
+    assert moderation_page.data.index(b'Event purge operations') < moderation_page.data.index(b'Domain ban operations')
+    assert b'id="openReportCount">1<' in moderation_page.data
+    assert b'id="newReportCount">1<' in moderation_page.data
+    assert b'Load more reports' in moderation_page.data
+    assert b'innerHTML' not in moderation_page.data
+    assert b'location.reload' not in moderation_page.data
     flask_app.config['WTF_CSRF_ENABLED'] = False
+    assert moderator_client.get('/api/moderation-reports?offset=nope&limit=9999').status_code == 200
+
+    with flask_app.app_context():
+        cursor_reports = [
+            ModerationReport(
+                event_id=f'cursor-report-{index}',
+                report_type='spam',
+                created_at=utcnow() + timedelta(minutes=index),
+            )
+            for index in range(4)
+        ]
+        db.session.add_all(cursor_reports)
+        db.session.commit()
+        ordered_cursor_ids = [report.id for report in reversed(cursor_reports)]
+    first_page = moderator_client.get('/api/moderation-reports?limit=2').get_json()
+    assert [report['id'] for report in first_page['reports']] == ordered_cursor_ids[:2]
+    with flask_app.app_context():
+        db.session.get(ModerationReport, ordered_cursor_ids[0]).reviewed = True
+        db.session.commit()
+    second_page = moderator_client.get('/api/moderation-reports', query_string={
+        'limit': 2,
+        'cursor_created_at': first_page['next_cursor']['created_at'],
+        'cursor_id': first_page['next_cursor']['id'],
+    }).get_json()
+    assert second_page['reports'][0]['id'] == ordered_cursor_ids[2]
+
+    with flask_app.app_context():
+        duplicate_time = utcnow() + timedelta(hours=1)
+        nullable_reports = [
+            ModerationReport(
+                event_id=f'nullable-report-{index}',
+                reporter_pubkey='nullable-page',
+                report_type='spam',
+                created_at=duplicate_time,
+            )
+            for index in range(4)
+        ]
+        db.session.add_all(nullable_reports)
+        db.session.commit()
+        nullable_reports[0].created_at = None
+        nullable_reports[1].created_at = None
+        db.session.commit()
+        expected_nullable_ids = [
+            nullable_reports[3].id,
+            nullable_reports[2].id,
+            nullable_reports[1].id,
+            nullable_reports[0].id,
+        ]
+    paged_ids = []
+    cursor = None
+    while True:
+        query = {'limit': 1, 'reporter': 'nullable-page'}
+        if cursor:
+            query['cursor_id'] = cursor['id']
+            if cursor['created_at']:
+                query['cursor_created_at'] = cursor['created_at']
+            else:
+                query['cursor_null'] = '1'
+        page = moderator_client.get('/api/moderation-reports', query_string=query).get_json()
+        paged_ids.extend(report['id'] for report in page['reports'])
+        cursor = page['next_cursor']
+        if not cursor:
+            break
+    assert paged_ids == expected_nullable_ids
+
+    ascending_ids = []
+    cursor = None
+    while True:
+        query = {'limit': 1, 'reporter': 'nullable-page', 'sort': 'asc'}
+        if cursor:
+            query['cursor_id'] = cursor['id']
+            if cursor['created_at']:
+                query['cursor_created_at'] = cursor['created_at']
+            else:
+                query['cursor_null'] = '1'
+        page = moderator_client.get('/api/moderation-reports', query_string=query).get_json()
+        ascending_ids.extend(report['id'] for report in page['reports'])
+        cursor = page['next_cursor']
+        if not cursor:
+            break
+    assert ascending_ids == list(reversed(expected_nullable_ids))
+
+    preserved = moderator_client.post(
+        f'/moderation/report/{open_report_id}/review',
+        data={'next': '/moderation?report_type=spam'},
+    )
+    assert preserved.headers['Location'].endswith('/moderation?report_type=spam')
+    rejected = moderator_client.post(
+        f'/moderation/report/{open_report_id}/review',
+        data={'next': 'https://example.com/'},
+    )
+    assert rejected.headers['Location'].endswith('/moderation')
     assert moderator_client.get('/policy-log').status_code == 200
     assert moderator_client.get('/api/write-policy-events').status_code == 200
 
