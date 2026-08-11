@@ -167,6 +167,9 @@ def test_plugins_page_manages_and_publishes_wot_policy(monkeypatch, tmp_path):
     dashboard_api = client.get('/api/dashboard')
     assert dashboard_page.status_code == 200
     assert b'RELAY CONTROL' in dashboard_page.data
+    assert b'aria-current="page"' in dashboard_page.data
+    assert b'aria-label="Toggle color theme"' in dashboard_page.data
+    assert b'href="#mainContent"' in dashboard_page.data
     assert b'Admission outcomes' in dashboard_page.data
     assert dashboard_api.status_code == 200
     assert 'moderation' in dashboard_api.get_json()
@@ -219,6 +222,7 @@ def test_plugins_page_manages_and_publishes_wot_policy(monkeypatch, tmp_path):
     assert b'Load more reports' in moderation_page.data
     assert b'innerHTML' not in moderation_page.data
     assert b'location.reload' not in moderation_page.data
+    assert client.post('/api/metadata-relays', json={'url': 'wss://relay.example'}).status_code == 400
     flask_app.config['WTF_CSRF_ENABLED'] = False
     assert moderator_client.get('/api/moderation-reports?offset=nope&limit=9999').status_code == 200
 
@@ -326,3 +330,7 @@ def test_plugins_page_manages_and_publishes_wot_policy(monkeypatch, tmp_path):
     assert 'moderation' not in viewer_dashboard.get_json()
     assert viewer_client.get('/connections').status_code == 200
     assert viewer_client.get('/api/connections').status_code == 200
+    assert viewer_client.post('/events', data={
+        'delete_selected': '1',
+        'selected_events': 'event-id',
+    }).status_code == 403

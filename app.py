@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 from urllib.parse import urlsplit
 from flask import Flask, render_template, redirect, url_for, flash, request, send_file, jsonify, abort
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
-from flask_wtf import FlaskForm
+from flask_wtf import CSRFProtect, FlaskForm
 from wtforms import BooleanField, StringField, PasswordField, SelectField, TextAreaField, IntegerField
 from wtforms.validators import DataRequired, InputRequired, Length, EqualTo, NumberRange, Optional, Regexp, ValidationError
 from flask_limiter import Limiter
@@ -198,6 +198,7 @@ app = Flask(__name__)
 app.config.from_object(Config)
 
 db.init_app(app)
+csrf = CSRFProtect(app)
 
 login_manager = LoginManager(app)
 login_manager.login_view = 'login'
@@ -1033,7 +1034,7 @@ def login():
     return render_template('login.html', form=form)
 
 
-@app.route('/logout')
+@app.route('/logout', methods=['POST'])
 @login_required
 def logout():
     log_audit('logout', f'User logged out')
@@ -1104,6 +1105,8 @@ def events():
                 error = str(e)
     elif request.method == 'POST':
         if 'delete_selected' in request.form:
+            if current_user.role not in ('admin', 'moderator'):
+                abort(403)
             event_ids = request.form.getlist('event_ids')
             if event_ids:
                 try:

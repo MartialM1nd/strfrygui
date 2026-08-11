@@ -3,79 +3,90 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="csrf-token" content="{{ csrf_token() }}">
     <title>{% block title %}StrfryGUI{% endblock %}</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.1/font/bootstrap-icons.css">
     <link rel="icon" type="image/svg+xml" href="{{ url_for('static', filename='favicon.svg') }}">
     <link rel="alternate icon" href="{{ url_for('static', filename='favicon.ico') }}">
     <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script>
+        try {
+            const storedTheme = localStorage.getItem('theme');
+            const initialTheme = storedTheme || (window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+            document.documentElement.setAttribute('data-bs-theme', initialTheme);
+        } catch (error) {
+            document.documentElement.setAttribute('data-bs-theme', 'dark');
+        }
+    </script>
 </head>
 <body class="bg-body">
-    <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
+    <a class="skip-link" href="#mainContent">Skip to main content</a>
+    <nav class="navbar navbar-expand-lg bg-body-tertiary border-bottom">
         <div class="container-fluid">
             <a class="navbar-brand" href="{{ url_for('index') }}">
                 <i class="bi bi-speedometer2"></i> StrfryGUI
             </a>
-            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
+            <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav" aria-controls="navbarNav" aria-expanded="false" aria-label="Toggle navigation">
                 <span class="navbar-toggler-icon"></span>
             </button>
             <div class="collapse navbar-collapse" id="navbarNav">
                 {% if current_user.is_authenticated %}
                 <ul class="navbar-nav me-auto">
                     <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('index') }}">
+                        <a class="nav-link{% if request.endpoint == 'index' %} active{% endif %}" href="{{ url_for('index') }}"{% if request.endpoint == 'index' %} aria-current="page"{% endif %}>
                             <i class="bi bi-graph-up"></i> Dashboard
                         </a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('events') }}">
+                        <a class="nav-link{% if request.endpoint in ['events', 'events_delete'] %} active{% endif %}" href="{{ url_for('events') }}"{% if request.endpoint in ['events', 'events_delete'] %} aria-current="page"{% endif %}>
                             <i class="bi bi-search"></i> Events
                         </a>
                     </li>
                     {% if current_user.role == 'admin' %}
                     <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('import_export') }}">
+                        <a class="nav-link{% if request.endpoint == 'import_export' %} active{% endif %}" href="{{ url_for('import_export') }}"{% if request.endpoint == 'import_export' %} aria-current="page"{% endif %}>
                             <i class="bi bi-upload-download"></i> Import/Export
                         </a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('db_management') }}">
+                        <a class="nav-link{% if request.endpoint == 'db_management' %} active{% endif %}" href="{{ url_for('db_management') }}"{% if request.endpoint == 'db_management' %} aria-current="page"{% endif %}>
                             <i class="bi bi-database"></i> Database
                         </a>
                     </li>
                     {% endif %}
                     <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('connections') }}">
+                        <a class="nav-link{% if request.endpoint == 'connections' %} active{% endif %}" href="{{ url_for('connections') }}"{% if request.endpoint == 'connections' %} aria-current="page"{% endif %}>
                             <i class="bi bi-hdd-network"></i> Connections
                         </a>
                     </li>
                     {% if current_user.role == 'admin' %}
                     <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('config_view') }}">
+                        <a class="nav-link{% if request.endpoint == 'config_view' %} active{% endif %}" href="{{ url_for('config_view') }}"{% if request.endpoint == 'config_view' %} aria-current="page"{% endif %}>
                             <i class="bi bi-gear"></i> Config
                         </a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('plugins') }}">
+                        <a class="nav-link{% if request.endpoint in ['plugins', 'update_wot_policy', 'rebuild_wot_policy'] %} active{% endif %}" href="{{ url_for('plugins') }}"{% if request.endpoint in ['plugins', 'update_wot_policy', 'rebuild_wot_policy'] %} aria-current="page"{% endif %}>
                             <i class="bi bi-puzzle"></i> Plugins
                         </a>
                     </li>
                     {% endif %}
                     {% if current_user.role in ['admin', 'moderator'] %}
                     <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('policy_log') }}">
+                        <a class="nav-link{% if request.endpoint == 'policy_log' %} active{% endif %}" href="{{ url_for('policy_log') }}"{% if request.endpoint == 'policy_log' %} aria-current="page"{% endif %}>
                             <i class="bi bi-activity"></i> Policy Log
                         </a>
                     </li>
                     <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('moderation') }}">
+                        <a class="nav-link{% if request.endpoint and request.endpoint.startswith('moderation') %} active{% endif %}" href="{{ url_for('moderation') }}"{% if request.endpoint and request.endpoint.startswith('moderation') %} aria-current="page"{% endif %}>
                             <i class="bi bi-shield-exclamation"></i> Moderation
                         </a>
                     </li>
                     {% endif %}
                     {% if current_user.role == 'admin' %}
                     <li class="nav-item">
-                        <a class="nav-link" href="{{ url_for('admin') }}">
+                        <a class="nav-link{% if request.endpoint and request.endpoint.startswith('admin') %} active{% endif %}" href="{{ url_for('admin') }}"{% if request.endpoint and request.endpoint.startswith('admin') %} aria-current="page"{% endif %}>
                             <i class="bi bi-people"></i> Admin
                         </a>
                     </li>
@@ -83,9 +94,9 @@
                 </ul>
                 <ul class="navbar-nav">
                     <li class="nav-item">
-                        <a class="nav-link" href="#" id="themeToggle" title="Toggle theme">
+                        <button class="nav-link border-0 bg-transparent" type="button" id="themeToggle" aria-label="Toggle color theme" aria-pressed="false">
                             <i class="bi bi-sun-fill" id="themeIcon"></i>
-                        </a>
+                        </button>
                     </li>
                     <li class="nav-item dropdown">
                         <a class="nav-link dropdown-toggle" href="#" id="userDropdown" role="button" data-bs-toggle="dropdown">
@@ -95,7 +106,12 @@
                         <ul class="dropdown-menu dropdown-menu-end">
                             <li><span class="dropdown-item-text text-muted">Last login: {{ current_user.last_login.strftime('%Y-%m-%d %H:%M') if current_user.last_login else 'Never' }}</span></li>
                             <li><hr class="dropdown-divider"></li>
-                            <li><a class="dropdown-item" href="{{ url_for('logout') }}"><i class="bi bi-box-arrow-right"></i> Logout</a></li>
+                            <li>
+                                <form method="POST" action="{{ url_for('logout') }}">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                    <button class="dropdown-item" type="submit"><i class="bi bi-box-arrow-right"></i> Logout</button>
+                                </form>
+                            </li>
                         </ul>
                     </li>
                 </ul>
@@ -104,13 +120,13 @@
         </div>
     </nav>
 
-    <main class="container-fluid py-4">
+    <main class="container-fluid py-4" id="mainContent" tabindex="-1">
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
                 {% for category, message in messages %}
                 <div class="alert alert-{{ category }} alert-dismissible fade show" role="alert">
                     {{ message }}
-                    <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+                    <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Dismiss"></button>
                 </div>
                 {% endfor %}
             {% endif %}
@@ -121,30 +137,7 @@
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
-    <script>
-        (function() {
-            const html = document.documentElement;
-            const icon = document.getElementById('themeIcon');
-            const stored = localStorage.getItem('theme');
-            const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-            const theme = stored || (prefersDark ? 'dark' : 'light');
-            html.setAttribute('data-bs-theme', theme);
-            updateIcon(theme);
-
-            document.getElementById('themeToggle').addEventListener('click', function(e) {
-                e.preventDefault();
-                const current = html.getAttribute('data-bs-theme');
-                const next = current === 'dark' ? 'light' : 'dark';
-                html.setAttribute('data-bs-theme', next);
-                localStorage.setItem('theme', next);
-                updateIcon(next);
-            });
-
-            function updateIcon(t) {
-                icon.className = t === 'dark' ? 'bi bi-moon-fill' : 'bi bi-sun-fill';
-            }
-        })();
-    </script>
+    <script src="{{ url_for('static', filename='app.js') }}"></script>
     {% block scripts %}{% endblock %}
 </body>
 </html>

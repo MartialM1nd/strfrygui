@@ -27,6 +27,7 @@
                 <div class="d-flex justify-content-between align-items-center mb-2">
                     <h6 class="mb-0">Current Trees</h6>
                     <form method="POST" class="mb-0">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <button type="submit" name="refresh_negentropy" class="btn btn-outline-secondary btn-sm">
                             <i class="bi bi-arrow-clockwise"></i> Refresh
                         </button>
@@ -52,12 +53,14 @@
                             <td><code class="small">{{ tree.fingerprint }}</code></td>
                             <td>
                                 <form method="POST" class="d-inline">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                     <input type="hidden" name="tree_id" value="{{ tree.id }}">
                                     <button type="submit" name="negentropy_build" class="btn btn-sm btn-outline-primary" title="Build tree">
                                         <i class="bi bi-arrow-repeat"></i>
                                     </button>
                                 </form>
                                 <form method="POST" class="d-inline">
+                                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                     <input type="hidden" name="tree_id" value="{{ tree.id }}">
                                     <button type="submit" name="negentropy_delete" class="btn btn-sm btn-outline-danger" title="Delete tree">
                                         <i class="bi bi-trash"></i>
@@ -104,6 +107,7 @@
                 <div class="d-flex justify-content-between align-items-center mb-2">
                     <span></span>
                     <form method="POST" class="mb-0">
+                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                         <button type="submit" name="refresh_dict" class="btn btn-outline-secondary btn-sm">
                             <i class="bi bi-arrow-clockwise"></i> Refresh
                         </button>
@@ -144,6 +148,7 @@
                 {% endif %}
 
                 <form method="POST">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <button type="submit" name="compact" class="btn btn-warning" {% if compaction_status.running %}disabled{% endif %}>
                         <i class="bi bi-hdd{% if compaction_status.running %}-stack{% endif %}"></i> {% if compaction_status.running %}Compacting...{% else %}Compact Database{% endif %}
                     </button>

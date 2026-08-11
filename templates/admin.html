@@ -382,7 +382,7 @@ function addRelay() {
     var url = document.getElementById('newRelayUrl').value.trim();
     if (!url) return alert('Please enter a relay URL');
     
-    fetch('/api/metadata-relays', {
+    csrfFetch('/api/metadata-relays', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url: url })
@@ -402,13 +402,13 @@ function addRelay() {
 function deleteRelay(id) {
     if (!confirm('Delete this relay?')) return;
     
-    fetch('/api/metadata-relays/' + id, { method: 'DELETE' })
+    csrfFetch('/api/metadata-relays/' + id, { method: 'DELETE' })
     .then(function() { loadRelays(); })
     .catch(function() { alert('Failed to delete relay'); });
 }
 
 function toggleRelay(id) {
-    fetch('/api/metadata-relays/' + id + '/toggle', { method: 'POST' })
+    csrfFetch('/api/metadata-relays/' + id + '/toggle', { method: 'POST' })
     .then(function() { loadRelays(); })
     .catch(function() { alert('Failed to toggle relay'); });
 }
@@ -418,7 +418,7 @@ function testRelay(id) {
     btn.disabled = true;
     btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>';
     
-    fetch('/api/metadata-relays/' + id + '/test', { method: 'POST' })
+    csrfFetch('/api/metadata-relays/' + id + '/test', { method: 'POST' })
     .then(function(r) { return r.json(); })
     .then(function(data) {
         if (data.status === 'success') {

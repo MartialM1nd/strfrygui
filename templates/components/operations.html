@@ -1,0 +1,39 @@
+{% macro page_header(kicker, title, description, status=None, state='healthy', freshness_id=None) -%}
+<header class="dashboard-header mb-4">
+    <div>
+        <div class="dashboard-kicker">{{ kicker }}</div>
+        <h1 class="dashboard-title mb-1">{{ title }}</h1>
+        <div class="text-body-secondary small"{% if freshness_id %} id="{{ freshness_id }}"{% endif %}>{{ description }}</div>
+    </div>
+    {% if status %}
+    <div class="dashboard-status" data-status="{{ state }}">
+        <span class="dashboard-status-dot"></span>
+        <span>{{ status }}</span>
+    </div>
+    {% endif %}
+</header>
+{%- endmacro %}
+
+{% macro panel_header(label, detail=None) -%}
+<div class="dashboard-panel-header">
+    <div>
+        <div class="dashboard-section-label">{{ label }}</div>
+        {% if detail %}<div class="text-body-secondary small">{{ detail }}</div>{% endif %}
+    </div>
+    {% if caller is defined %}{{ caller() }}{% endif %}
+</div>
+{%- endmacro %}
+
+{% macro empty_state(icon, title, detail) -%}
+<div class="operations-empty-state">
+    <i class="bi {{ icon }}" aria-hidden="true"></i>
+    <strong>{{ title }}</strong>
+    <span>{{ detail }}</span>
+</div>
+{%- endmacro %}
+
+{% macro field_errors(field) -%}
+{% if field.errors %}
+<div class="invalid-feedback d-block" role="alert">{{ field.errors|join(' ') }}</div>
+{% endif %}
+{%- endmacro %}

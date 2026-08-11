@@ -3,6 +3,18 @@ body {
     background-color: #f8f9fa;
 }
 
+.skip-link { position: fixed; z-index: 1100; top: 0.5rem; left: 0.5rem; transform: translateY(-150%); border-radius: 6px; padding: 0.55rem 0.8rem; background: var(--bs-body-bg); color: var(--bs-body-color); box-shadow: 0 0 0 2px var(--bs-primary); }
+.skip-link:focus { transform: translateY(0); }
+.operations-empty-state { display: grid; place-items: center; gap: 0.35rem; min-height: 180px; color: var(--bs-secondary-color); text-align: center; }
+.operations-empty-state i { color: var(--dashboard-blue); font-size: 1.5rem; }
+.operations-action-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 0.75rem; padding-top: 1rem; border-top: 1px solid var(--bs-border-color); }
+.operations-danger-zone { border-color: color-mix(in srgb, var(--dashboard-red) 48%, var(--bs-border-color)); background: color-mix(in srgb, var(--dashboard-red) 3%, var(--bs-body-bg)); }
+.operations-identifier { overflow-wrap: anywhere; font-family: var(--bs-font-monospace); font-size: 0.82rem; }
+
+@media (max-width: 480px) {
+    .operations-action-bar .btn { width: 100%; min-height: 42px; }
+}
+
 .navbar-brand {
     font-weight: 600;
 }
