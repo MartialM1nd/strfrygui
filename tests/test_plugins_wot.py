@@ -4,6 +4,7 @@ from datetime import timedelta
 
 from config import Config
 from models import User, WoTBuildState, WoTPolicy, db, utcnow
+from utils import moderation_reports
 from utils.wot import DEFAULT_ROOT_NPUBS
 
 
@@ -45,7 +46,7 @@ def test_plugins_page_manages_and_publishes_wot_policy(monkeypatch, tmp_path):
     app_module = importlib.import_module('app')
     monkeypatch.setattr(app_module, 'queue_wot_rebuild', lambda: False)
     monkeypatch.setattr(app_module, '_collect_dashboard_sample', lambda: None)
-    monkeypatch.setattr(app_module, '_sync_reports_if_due', lambda: None)
+    monkeypatch.setattr(app_module, 'sync_moderation_reports', lambda: None)
     flask_app = app_module.app
     flask_app.config['TESTING'] = True
     flask_app.config['WTF_CSRF_ENABLED'] = False
@@ -182,6 +183,16 @@ def test_plugins_page_manages_and_publishes_wot_policy(monkeypatch, tmp_path):
     with moderator_client.session_transaction() as session:
         session['_user_id'] = str(moderator_id)
         session['_fresh'] = True
+
+    def fail_request_sync(*args, **kwargs):
+        raise AssertionError('moderation page must not synchronize reports')
+
+    monkeypatch.setattr(app_module, 'sync_moderation_reports', fail_request_sync)
+    monkeypatch.setattr(app_module, 'scan_events', fail_request_sync)
+    monkeypatch.setattr(moderation_reports, 'scan_events', fail_request_sync)
+    flask_app.config['WTF_CSRF_ENABLED'] = True
+    assert moderator_client.get('/moderation').status_code == 200
+    flask_app.config['WTF_CSRF_ENABLED'] = False
     assert moderator_client.get('/policy-log').status_code == 200
     assert moderator_client.get('/api/write-policy-events').status_code == 200
 

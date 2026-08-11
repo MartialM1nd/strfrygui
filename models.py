@@ -8,6 +8,25 @@ from sqlalchemy import text
 
 db = SQLAlchemy()
 
+MODERATION_REPORT_INDEXES = (
+    'CREATE INDEX IF NOT EXISTS ix_moderation_reports_reviewed_created_id '
+    'ON moderation_reports (reviewed, created_at, id)',
+    'CREATE INDEX IF NOT EXISTS ix_moderation_reports_report_type '
+    'ON moderation_reports (report_type)',
+    'CREATE INDEX IF NOT EXISTS ix_moderation_reports_reporter_pubkey '
+    'ON moderation_reports (reporter_pubkey)',
+    'CREATE INDEX IF NOT EXISTS ix_moderation_reports_reported_pubkey '
+    'ON moderation_reports (reported_pubkey)',
+    'CREATE INDEX IF NOT EXISTS ix_moderation_reports_reported_event_id '
+    'ON moderation_reports (reported_event_id)',
+)
+
+
+def ensure_moderation_report_indexes(connection):
+    """Create moderation report indexes for databases predating the models."""
+    for statement in MODERATION_REPORT_INDEXES:
+        connection.execute(text(statement))
+
 
 def utcnow():
     return datetime.now(UTC).replace(tzinfo=None)
@@ -72,13 +91,21 @@ class AuditLog(db.Model):
 
 class ModerationReport(db.Model):
     __tablename__ = 'moderation_reports'
+    __table_args__ = (
+        db.Index(
+            'ix_moderation_reports_reviewed_created_id',
+            'reviewed',
+            'created_at',
+            'id',
+        ),
+    )
     
     id = db.Column(db.Integer, primary_key=True)
     event_id = db.Column(db.String(64), unique=True)
-    reporter_pubkey = db.Column(db.String(64))
-    reported_pubkey = db.Column(db.String(64))
-    reported_event_id = db.Column(db.String(64))
-    report_type = db.Column(db.String(20))
+    reporter_pubkey = db.Column(db.String(64), index=True)
+    reported_pubkey = db.Column(db.String(64), index=True)
+    reported_event_id = db.Column(db.String(64), index=True)
+    report_type = db.Column(db.String(20), index=True)
     content = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=utcnow)
     reviewed = db.Column(db.Boolean, default=False)

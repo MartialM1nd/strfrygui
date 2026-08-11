@@ -4,7 +4,7 @@ import os
 import queue
 import threading
 import time
-from datetime import UTC, datetime, timedelta
+from datetime import datetime, timedelta
 from flask import Flask, render_template, redirect, url_for, flash, request, send_file, jsonify, abort
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from flask_wtf import FlaskForm
@@ -22,7 +22,8 @@ import tempfile
 from config import Config, Security
 from models import (
     db, User, AuditLog, ModerationReport, BannedPubkey, BannedDomain, MetadataRelay,
-    EventPurge, PubkeyBanSource, WoTBuildState, utcnow,
+    EventPurge, PubkeyBanSource, WoTBuildState, ensure_moderation_report_indexes,
+    utcnow,
 )
 from utils.strfry import (
     scan_events, delete_events, export_events, import_events,
@@ -33,6 +34,7 @@ from utils.strfry import (
 from utils.metrics import get_summary, MetricsError
 from utils.auth import admin_required, moderator_required, viewer_or_higher, permission_required
 from utils.moderation import ModerationDecisions, ModerationError
+from utils.moderation_reports import sync_moderation_reports
 from utils.nip05 import normalize_domain
 from utils.domain_view import domain_identity_page, unresolved_identity_page
 from utils.decision_log import read_decision_log
@@ -56,8 +58,6 @@ _compaction = {
 _domain_scan_queue = queue.Queue(maxsize=1)
 _wot_build_queue = queue.Queue(maxsize=1)
 _dashboard_sample_lock = threading.Lock()
-_report_sync_lock = threading.Lock()
-_report_sync_last = 0.0
 
 
 def _run_compaction():
@@ -629,9 +629,11 @@ def _dashboard_sampler():
 
 def _report_sync_scheduler():
     while True:
+        started_at = time.monotonic()
         with app.app_context():
-            _sync_reports_if_due()
-        time.sleep(300)
+            sync_moderation_reports()
+        elapsed = time.monotonic() - started_at
+        time.sleep(max(1, 300 - elapsed))
 
 
 def flash_moderation_outcome(outcome, success_message):
@@ -863,8 +865,11 @@ def api_moderation_reports():
         query = query.filter(ModerationReport.reviewed == False)
     
     total_count = query.count()
-    sort_column = ModerationReport.created_at.desc() if sort_order == 'desc' else ModerationReport.created_at.asc()
-    reports = query.order_by(sort_column).offset(offset).limit(limit).all()
+    if sort_order == 'desc':
+        sort_columns = (ModerationReport.created_at.desc(), ModerationReport.id.desc())
+    else:
+        sort_columns = (ModerationReport.created_at.asc(), ModerationReport.id.asc())
+    reports = query.order_by(*sort_columns).offset(offset).limit(limit).all()
     has_more = (offset + len(reports)) < total_count
     
     reports_data = []
@@ -1592,81 +1597,9 @@ def admin():
     return render_template('admin.html', users=users, audit_logs=audit_logs, edit_forms=edit_forms, create_user_form=create_user_form, change_password_form=change_password_form, banned_pubkeys=banned_pubkeys, banned_domains=banned_domains, audit_offset=audit_offset, audit_limit=audit_limit, audit_has_more=audit_has_more, audit_total=total_logs)
 
 
-def sync_moderation_reports():
-    """Fetch reports from strfry and sync to database."""
-    try:
-        reports = scan_events({'kinds': [1984], 'limit': 200}, limit=200)
-        added = 0
-        for report in reports:
-            event_id = report.get('id')
-            existing = ModerationReport.query.filter_by(event_id=event_id).first()
-            
-            if existing:
-                continue
-            
-            tags = report.get('tags', [])
-            report_type = None
-            reported_pubkey = None
-            reported_event_id = None
-            
-            for tag in tags:
-                if not isinstance(tag, list) or not tag:
-                    continue
-                if tag[0] == 'p' and len(tag) >= 3:
-                    reported_pubkey = tag[1]
-                    report_type = tag[2] if len(tag) > 2 else 'other'
-                elif tag[0] == 'e' and len(tag) >= 3:
-                    reported_event_id = tag[1]
-            
-            if reported_pubkey:
-                existing = scan_events({'authors': [reported_pubkey], 'limit': 1}, limit=1)
-                if not existing:
-                    continue
-            
-            if reported_event_id:
-                existing = scan_events({'ids': [reported_event_id], 'limit': 1}, limit=1)
-                if not existing:
-                    continue
-            
-            new_report = ModerationReport(
-                event_id=event_id,
-                reporter_pubkey=report.get('pubkey'),
-                reported_pubkey=reported_pubkey,
-                reported_event_id=reported_event_id,
-                report_type=report_type,
-                content=report.get('content', ''),
-                created_at=datetime.fromtimestamp(
-                    report.get('created_at', 0), UTC
-                ).replace(tzinfo=None)
-            )
-            db.session.add(new_report)
-            added += 1
-
-        db.session.commit()
-        return added
-    except (IndexError, TypeError, ValueError, StrfryError, SQLAlchemyError):
-        db.session.rollback()
-        app.logger.exception('Could not synchronize moderation reports')
-        return None
-
-
-def _sync_reports_if_due(force=False):
-    global _report_sync_last
-    now = time.monotonic()
-    if (not force and now - _report_sync_last < 300) or not _report_sync_lock.acquire(blocking=False):
-        return
-    try:
-        _report_sync_last = now
-        sync_moderation_reports()
-    finally:
-        _report_sync_lock.release()
-
-
 @app.route('/moderation', methods=['GET', 'POST'])
 @moderator_required
 def moderation():
-    _sync_reports_if_due(force=True)
-    
     report_type_filter = request.args.get('report_type', '')
     reporter_filter = request.args.get('reporter', '')
     reported_filter = request.args.get('reported', '')
@@ -1692,8 +1625,11 @@ def moderation():
     form = EmptyForm()
     domain_form = BannedDomainForm()
     
-    sort_column = ModerationReport.created_at.desc() if sort_order == 'desc' else ModerationReport.created_at.asc()
-    reports = query.order_by(sort_column).offset(offset).limit(limit).all()
+    if sort_order == 'desc':
+        sort_columns = (ModerationReport.created_at.desc(), ModerationReport.id.desc())
+    else:
+        sort_columns = (ModerationReport.created_at.asc(), ModerationReport.id.asc())
+    reports = query.order_by(*sort_columns).offset(offset).limit(limit).all()
     total_count = query.count()
     has_more = (offset + len(reports)) < total_count
     pending_purges = EventPurge.query.filter_by(status='pending').order_by(EventPurge.created_at.desc()).all()
@@ -2163,6 +2099,7 @@ def init_db():
                 'CREATE INDEX IF NOT EXISTS ix_pubkey_ban_source_domain_id '
                 'ON pubkey_ban_sources (banned_domain_id, id)'
             ))
+            ensure_moderation_report_indexes(conn)
             conn.commit()
             
             try:
