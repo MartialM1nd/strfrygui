@@ -1,6 +1,6 @@
 from functools import wraps
-from flask import abort, redirect, url_for, flash
-from flask_login import current_user
+from flask import redirect, url_for, flash
+from flask_login import current_user, logout_user
 from config import Security
 
 
@@ -9,6 +9,11 @@ def role_required(*roles):
         @wraps(f)
         def decorated_function(*args, **kwargs):
             if not current_user.is_authenticated:
+                return redirect(url_for('login'))
+
+            if not current_user.is_active:
+                logout_user()
+                flash('Your account has been deactivated.', 'danger')
                 return redirect(url_for('login'))
             
             if current_user.role not in roles:
@@ -25,6 +30,11 @@ def permission_required(permission):
         @wraps(f)
         def decorated_function(*args, **kwargs):
             if not current_user.is_authenticated:
+                return redirect(url_for('login'))
+
+            if not current_user.is_active:
+                logout_user()
+                flash('Your account has been deactivated.', 'danger')
                 return redirect(url_for('login'))
             
             if not Security.has_permission(current_user.role, permission):

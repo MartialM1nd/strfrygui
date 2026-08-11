@@ -3,63 +3,55 @@
 {% block title %}Register - StrfryGUI{% endblock %}
 
 {% block content %}
-<div class="row justify-content-center">
-    <div class="col-md-5">
-        <div class="card shadow">
-            <div class="card-header bg-success text-white">
-                <h4 class="mb-0"><i class="bi bi-person-plus"></i> Register First Admin</h4>
-            </div>
-            <div class="card-body">
-                <form method="POST">
+<div class="legacy-shell auth-shell auth-shell-wide">
+    <section class="legacy-panel" aria-labelledby="registerTitle">
+        <header class="legacy-panel-header">
+            <span class="dashboard-section-label">Initial setup</span>
+            <h1 id="registerTitle">Register first operator</h1>
+            <p>Create the first account for this relay.</p>
+        </header>
+        <div class="legacy-panel-body">
+                <form method="POST" novalidate>
                     {{ form.hidden_tag() }}
+                    {% if form.form_errors or (form.csrf_token is defined and form.csrf_token.errors) %}<div class="alert alert-danger" role="alert">{% for error in form.form_errors %}<div>{{ error }}</div>{% endfor %}{% if form.csrf_token is defined %}{% for error in form.csrf_token.errors %}<div>{{ error }}</div>{% endfor %}{% endif %}</div>{% endif %}
                     <div class="mb-3">
                         {{ form.username.label(class="form-label") }}
-                        {{ form.username(class="form-control", autofocus=true) }}
+                        {{ form.username(class="form-control" + (" is-invalid" if form.username.errors else ""), autofocus=true, autocomplete="username", aria_describedby="username-errors" if form.username.errors else false) }}
                         {% if form.username.errors %}
-                            <div class="text-danger">
-                                {% for error in form.username.errors %}{{ error }}{% endfor %}
-                            </div>
+                            <div id="username-errors" class="invalid-feedback">{% for error in form.username.errors %}<div>{{ error }}</div>{% endfor %}</div>
                         {% endif %}
                     </div>
                     <div class="mb-3">
                         {{ form.password.label(class="form-label") }}
-                        {{ form.password(class="form-control") }}
+                        {{ form.password(class="form-control" + (" is-invalid" if form.password.errors else ""), autocomplete="new-password", aria_describedby="password-help password-errors" if form.password.errors else "password-help") }}
                         {% if form.password.errors %}
-                            <div class="text-danger">
-                                {% for error in form.password.errors %}{{ error }}{% endfor %}
-                            </div>
+                            <div id="password-errors" class="invalid-feedback">{% for error in form.password.errors %}<div>{{ error }}</div>{% endfor %}</div>
                         {% endif %}
-                        <small class="text-muted">Min 21 chars: uppercase, lowercase, digit, special char (@$!%*?&)</small>
+                        <small id="password-help" class="form-text">Min 21 chars: uppercase, lowercase, digit, special char (@$!%*?&amp;)</small>
                     </div>
                     <div class="mb-3">
                         {{ form.confirm_password.label(class="form-label") }}
-                        {{ form.confirm_password(class="form-control") }}
+                        {{ form.confirm_password(class="form-control" + (" is-invalid" if form.confirm_password.errors else ""), autocomplete="new-password", aria_describedby="confirm_password-errors" if form.confirm_password.errors else false) }}
                         {% if form.confirm_password.errors %}
-                            <div class="text-danger">
-                                {% for error in form.confirm_password.errors %}{{ error }}{% endfor %}
-                            </div>
+                            <div id="confirm_password-errors" class="invalid-feedback">{% for error in form.confirm_password.errors %}<div>{{ error }}</div>{% endfor %}</div>
                         {% endif %}
                     </div>
                     <div class="mb-3">
                         {{ form.role.label(class="form-label") }}
-                        {{ form.role(class="form-select") }}
+                        {{ form.role(class="form-select" + (" is-invalid" if form.role.errors else ""), autocomplete="off", aria_describedby="role-errors" if form.role.errors else false) }}
+                        {% if form.role.errors %}<div id="role-errors" class="invalid-feedback">{% for error in form.role.errors %}<div>{{ error }}</div>{% endfor %}</div>{% endif %}
                     </div>
                     <div class="mb-3">
                         {{ form.registration_token.label(class="form-label") }}
-                        {{ form.registration_token(class="form-control") }}
+                        {{ form.registration_token(class="form-control" + (" is-invalid" if form.registration_token.errors else ""), autocomplete="off", aria_describedby="registration_token-errors" if form.registration_token.errors else false) }}
                         {% if form.registration_token.errors %}
-                            <div class="text-danger">
-                                {% for error in form.registration_token.errors %}{{ error }}{% endfor %}
-                            </div>
+                            <div id="registration_token-errors" class="invalid-feedback">{% for error in form.registration_token.errors %}<div>{{ error }}</div>{% endfor %}</div>
                         {% endif %}
                     </div>
-                    <button type="submit" class="btn btn-success w-100">Create Account</button>
+                    <button type="submit" class="btn btn-primary w-100">Create account</button>
                 </form>
-            </div>
-            <div class="card-footer text-center">
-                <a href="{{ url_for('login') }}" class="text-muted">Already have an account? Login</a>
-            </div>
         </div>
-    </div>
+        <footer class="legacy-panel-footer"><a href="{{ url_for('login') }}">Already have an account? Sign in</a></footer>
+    </section>
 </div>
 {% endblock %}

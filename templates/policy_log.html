@@ -3,42 +3,57 @@
 {% block title %}Policy Log{% if relay_name %} - {{ relay_name }}{% endif %} - StrfryGUI{% endblock %}
 
 {% block content %}
-<div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-4">
-    <div>
-        <div class="text-uppercase text-muted small fw-semibold mb-1">Write Policy</div>
-        <h2 class="mb-1"><i class="bi bi-activity"></i> Live Event Decisions</h2>
-        <p class="text-muted mb-0">Accepted and rejected events from the relay write-policy plugin.</p>
-    </div>
-    <div class="d-flex align-items-center gap-2">
-        <span id="feedStatus" class="badge bg-secondary">Connecting</span>
-        <button id="pauseButton" class="btn btn-sm btn-outline-secondary" type="button">Pause</button>
-        <button id="clearButton" class="btn btn-sm btn-outline-secondary" type="button">Clear View</button>
-    </div>
-</div>
+<div class="dashboard-shell policy-log-shell" id="policyLogApp"
+     data-api-url="{{ url_for('api_write_policy_events') }}"
+     data-events-url="{{ url_for('events') }}">
+    <header class="dashboard-header mb-4">
+        <div>
+            <div class="dashboard-kicker">WRITE POLICY OPERATIONS</div>
+            <h1 class="dashboard-title mb-1">Decision console</h1>
+            <div class="text-body-secondary small" id="feedFreshness" aria-live="polite">Waiting for the policy log</div>
+        </div>
+        <div class="policy-log-header-actions">
+            <div class="dashboard-status" id="feedStatus" data-status="offline" role="status">
+                <span class="dashboard-status-dot"></span>
+                <span id="feedStatusText">Connecting</span>
+            </div>
+            <button id="pauseButton" class="btn btn-sm btn-outline-secondary" type="button" aria-pressed="false">
+                <i class="bi bi-pause-fill" aria-hidden="true"></i> <span>Pause feed</span>
+            </button>
+        </div>
+    </header>
 
-<div class="card mb-4">
-    <div class="card-header"><h5 class="mb-0">Filters</h5></div>
-    <div class="card-body">
-        <div class="row g-3">
-            <div class="col-sm-6 col-lg-2">
-                <label for="actionFilter" class="form-label">Actual action</label>
+    <section class="dashboard-panel policy-filter-panel mb-4" aria-labelledby="policyFiltersTitle">
+        <div class="dashboard-panel-header policy-filter-heading">
+            <div>
+                <div class="dashboard-section-label" id="policyFiltersTitle">Decision filters</div>
+                <div class="text-body-secondary small">Narrow the retained browser view without changing the live feed.</div>
+            </div>
+            <button id="clearFiltersButton" class="btn btn-sm btn-outline-secondary" type="button">
+                <i class="bi bi-x-lg" aria-hidden="true"></i> Clear filters
+            </button>
+        </div>
+
+        <div class="policy-filter-primary">
+            <div>
+                <label for="actionFilter" class="form-label">Actual outcome</label>
                 <select id="actionFilter" class="form-select">
-                    <option value="">All</option>
+                    <option value="">All outcomes</option>
                     <option value="accept">Accepted</option>
                     <option value="reject">Rejected</option>
                 </select>
             </div>
-            <div class="col-sm-6 col-lg-2">
+            <div>
                 <label for="simulatedFilter" class="form-label">Monitor outcome</label>
                 <select id="simulatedFilter" class="form-select">
-                    <option value="">All</option>
+                    <option value="">All monitor outcomes</option>
                     <option value="accept">Would accept</option>
                     <option value="reject">Would reject</option>
                     <option value="none">Not simulated</option>
                 </select>
             </div>
-            <div class="col-sm-6 col-lg-2">
-                <label for="reasonFilter" class="form-label">Reason</label>
+            <div>
+                <label for="reasonFilter" class="form-label">Policy reason</label>
                 <select id="reasonFilter" class="form-select">
                     <option value="">All reasons</option>
                     <option value="banned">Banned</option>
@@ -53,237 +68,62 @@
                     <option value="malformed">Malformed</option>
                 </select>
             </div>
-            <div class="col-sm-6 col-lg-2">
-                <label for="kindFilter" class="form-label">Event kind</label>
-                <input id="kindFilter" class="form-control" type="number" min="0" placeholder="Any">
-            </div>
-            <div class="col-sm-6 col-lg-2">
-                <label for="sourceTypeFilter" class="form-label">Source type</label>
-                <input id="sourceTypeFilter" class="form-control" placeholder="IP4, Sync...">
-            </div>
-            <div class="col-sm-6 col-lg-2">
-                <label for="sourceIpFilter" class="form-label">Source IP</label>
-                <input id="sourceIpFilter" class="form-control font-monospace" placeholder="Address contains...">
-            </div>
-            <div class="col-md-6">
-                <label for="eventIdFilter" class="form-label">Event ID</label>
-                <input id="eventIdFilter" class="form-control font-monospace" placeholder="Event ID contains...">
-            </div>
-            <div class="col-md-6">
-                <label for="pubkeyFilter" class="form-label">Pubkey</label>
-                <input id="pubkeyFilter" class="form-control font-monospace" placeholder="Pubkey contains...">
-            </div>
         </div>
-    </div>
-</div>
 
-<div id="feedWarning" class="alert alert-warning d-none"></div>
+        <details class="policy-filter-more mt-3">
+            <summary>Advanced filters</summary>
+            <div class="policy-filter-advanced">
+                <div>
+                    <label for="kindFilter" class="form-label">Event kind</label>
+                    <input id="kindFilter" class="form-control" type="number" min="0" placeholder="Any kind">
+                </div>
+                <div>
+                    <label for="sourceTypeFilter" class="form-label">Source type</label>
+                    <input id="sourceTypeFilter" class="form-control" placeholder="IP4, Sync...">
+                </div>
+                <div>
+                    <label for="sourceIpFilter" class="form-label">Source IP</label>
+                    <input id="sourceIpFilter" class="form-control font-monospace" placeholder="Address contains...">
+                </div>
+                <div class="policy-filter-wide">
+                    <label for="eventIdFilter" class="form-label">Event ID</label>
+                    <input id="eventIdFilter" class="form-control font-monospace" placeholder="Event ID contains...">
+                </div>
+                <div class="policy-filter-wide">
+                    <label for="pubkeyFilter" class="form-label">Pubkey</label>
+                    <input id="pubkeyFilter" class="form-control font-monospace" placeholder="Pubkey contains...">
+                </div>
+            </div>
+        </details>
+    </section>
 
-<div class="card">
-    <div class="card-header d-flex justify-content-between align-items-center">
-        <h5 class="mb-0">Recent Decisions</h5>
-        <span id="visibleCount" class="text-muted small">0 visible</span>
+    <div id="feedWarning" class="alert alert-warning d-none" role="alert" aria-live="assertive"></div>
+    <div id="resetNotice" class="policy-reset-notice d-none" role="status">
+        <i class="bi bi-arrow-repeat" aria-hidden="true"></i>
+        <span>The policy log changed on disk. The browser view was reset to the latest decisions.</span>
     </div>
-    <div class="table-responsive">
-        <table class="table table-hover align-middle mb-0">
-            <thead>
-                <tr>
-                    <th>Time</th>
-                    <th>Actual</th>
-                    <th>Monitor</th>
-                    <th>Actual reason</th>
-                    <th>Monitor reason</th>
-                    <th>Kind</th>
-                    <th>Event / Author</th>
-                    <th>Source</th>
-                </tr>
-            </thead>
-            <tbody id="decisionRows"></tbody>
-        </table>
-    </div>
-    <div id="emptyState" class="card-body text-center text-muted">Waiting for policy decisions...</div>
+
+    <section class="dashboard-panel policy-results-panel" aria-labelledby="policyResultsTitle">
+        <div class="dashboard-panel-header policy-results-heading">
+            <div>
+                <div class="dashboard-section-label" id="policyResultsTitle">Recent decisions</div>
+                <div id="visibleCount" class="text-body-secondary small" aria-live="polite">0 visible · 0 retained in browser</div>
+            </div>
+            <button id="clearViewButton" class="btn btn-sm btn-outline-danger" type="button">
+                <i class="bi bi-trash3" aria-hidden="true"></i> Clear browser view
+            </button>
+        </div>
+
+        <div id="decisionList" class="policy-decision-list" aria-live="polite"></div>
+        <div id="policyState" class="policy-log-state" data-state="empty">
+            <i id="policyStateIcon" class="bi bi-hourglass-split" aria-hidden="true"></i>
+            <strong id="policyStateTitle">Waiting for decisions</strong>
+            <span id="policyStateMessage">New write-policy decisions will appear here.</span>
+        </div>
+    </section>
 </div>
 {% endblock %}
 
 {% block scripts %}
-<script>
-const MAX_VISIBLE_RECORDS = 1000;
-let records = [];
-let cursor = null;
-let paused = false;
-let loading = false;
-let retryDelay = 2000;
-let timer = null;
-
-const rows = document.getElementById('decisionRows');
-const emptyState = document.getElementById('emptyState');
-const feedStatus = document.getElementById('feedStatus');
-const feedWarning = document.getElementById('feedWarning');
-const visibleCount = document.getElementById('visibleCount');
-const pauseButton = document.getElementById('pauseButton');
-const filterIds = ['actionFilter', 'simulatedFilter', 'reasonFilter', 'kindFilter', 'sourceTypeFilter', 'sourceIpFilter', 'eventIdFilter', 'pubkeyFilter'];
-
-function setStatus(label, style) {
-    feedStatus.textContent = label;
-    feedStatus.className = 'badge bg-' + style;
-}
-
-function schedule(delay) {
-    clearTimeout(timer);
-    if (!paused && !document.hidden) timer = setTimeout(loadDecisions, delay);
-}
-
-function badge(value, acceptedText, rejectedText) {
-    const span = document.createElement('span');
-    const accepted = value === 'accept';
-    span.className = 'badge bg-' + (accepted ? 'success' : 'danger');
-    span.textContent = accepted ? acceptedText : rejectedText;
-    return span;
-}
-
-function textCell(value, className) {
-    const cell = document.createElement('td');
-    if (className) cell.className = className;
-    cell.textContent = value ?? '-';
-    return cell;
-}
-
-function eventSearchLine(prefix, value, searchType, parameter) {
-    const line = document.createElement('div');
-    line.appendChild(document.createTextNode(prefix + ': '));
-    if (!value) {
-        line.appendChild(document.createTextNode('-'));
-        return line;
-    }
-    const params = new URLSearchParams({ search_type: searchType });
-    params.set(parameter, value);
-    const link = document.createElement('a');
-    link.href = '/events?' + params.toString();
-    link.title = searchType === 'event_id' ? 'Search for this event' : 'Search events from this pubkey';
-    link.textContent = value;
-    line.appendChild(link);
-    return line;
-}
-
-function matchesFilters(record) {
-    const action = document.getElementById('actionFilter').value;
-    const simulated = document.getElementById('simulatedFilter').value;
-    const reason = document.getElementById('reasonFilter').value;
-    const kind = document.getElementById('kindFilter').value;
-    const sourceType = document.getElementById('sourceTypeFilter').value.trim().toLowerCase();
-    const sourceIp = document.getElementById('sourceIpFilter').value.trim().toLowerCase();
-    const eventId = document.getElementById('eventIdFilter').value.trim().toLowerCase();
-    const pubkey = document.getElementById('pubkeyFilter').value.trim().toLowerCase();
-    if (action && record.action !== action) return false;
-    if (simulated === 'none' && record.simulated_action) return false;
-    if (simulated && simulated !== 'none' && record.simulated_action !== simulated) return false;
-    if (reason && record.reason !== reason && record.simulated_reason !== reason) return false;
-    if (kind && String(record.kind) !== kind) return false;
-    if (sourceType && !String(record.source_type || '').toLowerCase().includes(sourceType)) return false;
-    if (sourceIp && !String(record.source_ip || '').toLowerCase().includes(sourceIp)) return false;
-    if (eventId && !String(record.event_id || '').toLowerCase().includes(eventId)) return false;
-    if (pubkey && !String(record.pubkey || '').toLowerCase().includes(pubkey)) return false;
-    return true;
-}
-
-function render() {
-    rows.replaceChildren();
-    const filtered = records.filter(matchesFilters).slice().reverse();
-    for (const record of filtered) {
-        const row = document.createElement('tr');
-        row.className = record.action === 'reject' ? 'table-danger' : '';
-        row.appendChild(textCell(new Date(record.timestamp_ms).toLocaleTimeString()));
-        const actual = document.createElement('td');
-        actual.appendChild(badge(record.action, 'Accepted', 'Rejected'));
-        row.appendChild(actual);
-        const simulated = document.createElement('td');
-        if (record.simulated_action) simulated.appendChild(badge(record.simulated_action, 'Would accept', 'Would reject'));
-        else simulated.textContent = '-';
-        row.appendChild(simulated);
-        row.appendChild(textCell((record.reason || '-').replaceAll('_', ' ')));
-        row.appendChild(textCell((record.simulated_reason || '-').replaceAll('_', ' ')));
-        row.appendChild(textCell(record.kind));
-        const identifiers = document.createElement('td');
-        identifiers.className = 'font-monospace small text-break';
-        const eventLine = eventSearchLine('e', record.event_id, 'event_id', 'event_id');
-        const authorLine = eventSearchLine('p', record.pubkey, 'pubkey', 'pubkey');
-        identifiers.append(eventLine, authorLine);
-        row.appendChild(identifiers);
-        const source = document.createElement('td');
-        source.className = 'font-monospace small';
-        source.textContent = [record.source_type, record.source_ip].filter(Boolean).join(' / ') || '-';
-        row.appendChild(source);
-        rows.appendChild(row);
-    }
-    emptyState.classList.toggle('d-none', filtered.length > 0);
-    visibleCount.textContent = filtered.length + ' visible / ' + records.length + ' retained in browser';
-}
-
-async function loadDecisions() {
-    if (loading || paused || document.hidden) return;
-    loading = true;
-    setStatus('Updating', 'info');
-    try {
-        const params = new URLSearchParams({ limit: '500' });
-        if (cursor) params.set('cursor', cursor);
-        const response = await fetch('/api/write-policy-events?' + params.toString(), {
-            headers: { 'Accept': 'application/json' },
-            cache: 'no-store'
-        });
-        const contentType = response.headers.get('content-type') || '';
-        if (!response.ok || response.redirected || !contentType.includes('application/json')) throw new Error('Policy log request was not authorized or returned invalid data');
-        const data = await response.json();
-        if (data.reset) records = [];
-        if (Array.isArray(data.events)) records.push(...data.events);
-        if (records.length > MAX_VISIBLE_RECORDS) records = records.slice(-MAX_VISIBLE_RECORDS);
-        cursor = data.cursor || null;
-        render();
-        retryDelay = 2000;
-        if (!data.available) {
-            setStatus('Log unavailable', 'warning');
-            feedWarning.textContent = 'The runtime log is unavailable. Verify the shared runtime directory and service group permissions.';
-            feedWarning.classList.remove('d-none');
-        } else {
-            setStatus('Live', 'success');
-            feedWarning.classList.add('d-none');
-        }
-        schedule(data.has_more ? 250 : 2000);
-    } catch (error) {
-        setStatus('Offline', 'danger');
-        feedWarning.textContent = error.message;
-        feedWarning.classList.remove('d-none');
-        retryDelay = Math.min(retryDelay * 2, 30000);
-        schedule(retryDelay);
-    } finally {
-        loading = false;
-    }
-}
-
-for (const id of filterIds) document.getElementById(id).addEventListener('input', render);
-pauseButton.addEventListener('click', function() {
-    paused = !paused;
-    pauseButton.textContent = paused ? 'Resume' : 'Pause';
-    if (paused) {
-        clearTimeout(timer);
-        setStatus('Paused', 'secondary');
-    } else {
-        loadDecisions();
-    }
-});
-document.getElementById('clearButton').addEventListener('click', function() {
-    records = [];
-    render();
-});
-document.addEventListener('visibilitychange', function() {
-    if (document.hidden) {
-        clearTimeout(timer);
-        setStatus('Paused', 'secondary');
-    } else if (!paused) {
-        loadDecisions();
-    }
-});
-
-render();
-loadDecisions();
-</script>
+<script src="{{ url_for('static', filename='policy_log.js') }}" defer></script>
 {% endblock %}

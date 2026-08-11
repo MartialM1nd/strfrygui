@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+
+{% block title %}{% block admin_page_title %}Admin{% endblock %}{% if relay_name %} - {{ relay_name }}{% endif %} - StrfryGUI{% endblock %}
+
+{% block content %}
+<div class="dashboard-shell admin-shell">
+    <header class="dashboard-header mb-3">
+        <div>
+            <div class="dashboard-kicker">CONTROL PLANE · ADMINISTRATION</div>
+            <h1 class="dashboard-title mb-1">Operations console</h1>
+            <div class="text-body-secondary small">Manage privileged access, policy records, and relay dependencies.</div>
+        </div>
+        <div class="dashboard-status" data-status="healthy"><span class="dashboard-status-dot" aria-hidden="true"></span><span>Admin access</span></div>
+    </header>
+    <nav class="admin-subnav mb-4" aria-label="Administration sections">
+        <a class="admin-subnav-link{% if request.endpoint == 'admin_operators' %} active{% endif %}" href="{{ url_for('admin_operators') }}"{% if request.endpoint == 'admin_operators' %} aria-current="page"{% endif %}><i class="bi bi-person-badge" aria-hidden="true"></i><span>Operators</span></a>
+        <a class="admin-subnav-link{% if request.endpoint == 'admin_audit' %} active{% endif %}" href="{{ url_for('admin_audit') }}"{% if request.endpoint == 'admin_audit' %} aria-current="page"{% endif %}><i class="bi bi-journal-text" aria-hidden="true"></i><span>Audit</span></a>
+        <a class="admin-subnav-link{% if request.endpoint == 'admin_relays' %} active{% endif %}" href="{{ url_for('admin_relays') }}"{% if request.endpoint == 'admin_relays' %} aria-current="page"{% endif %}><i class="bi bi-broadcast-pin" aria-hidden="true"></i><span>Metadata relays</span></a>
+        <a class="admin-subnav-link{% if request.endpoint == 'admin_bans' %} active{% endif %}" href="{{ url_for('admin_bans') }}"{% if request.endpoint == 'admin_bans' %} aria-current="page"{% endif %}><i class="bi bi-shield-slash" aria-hidden="true"></i><span>Ban registry</span></a>
+    </nav>
+    {% block admin_content %}{% endblock %}
+</div>
+{% endblock %}
+
+{% block scripts %}{% block admin_scripts %}{% endblock %}{% endblock %}

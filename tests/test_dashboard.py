@@ -1,6 +1,7 @@
 import json
 from datetime import timedelta
 
+from config import Config
 from models import BannedPubkey, DashboardSample, ModerationReport, db, utcnow
 from utils.dashboard import connection_summary, dashboard_summary, database_storage
 from utils.metrics import parse_metrics
@@ -143,6 +144,32 @@ def test_dashboard_summary_marks_policy_telemetry_unavailable(app):
     assert summary['admission']['accepted_24h'] is None
     assert summary['admission']['rejected_24h'] is None
     assert summary['admission']['reasons'] == {}
+
+
+def test_dashboard_attention_reports_configured_plugin_state(monkeypatch, tmp_path, app):
+    now = utcnow().replace(second=0, microsecond=0)
+    plugin = tmp_path / 'custom-policy'
+    plugin.write_text('#!/bin/sh\nexit 0\n')
+    plugin.chmod(0o755)
+    config_path = tmp_path / 'strfry.conf'
+    config_path.write_text(
+        'relay {\n'
+        '    writePolicy {\n'
+        f'        plugin = "{plugin}"\n'
+        '    }\n'
+        '}\n'
+    )
+    monkeypatch.setattr(Config, 'STRFRY_CONFIG', str(config_path))
+
+    with app.app_context():
+        add_sample(now)
+        db.session.commit()
+        configured = dashboard_summary(now, role='admin')
+        config_path.write_text(config_path.read_text().replace(str(plugin), ''))
+        disabled = dashboard_summary(now, role='admin')
+
+    assert not any('plugin is not executable' in item['label'] for item in configured['attention'])
+    assert any(item['label'] == 'Write-policy plugin is disabled' for item in disabled['attention'])
 
 
 def test_dashboard_admission_excludes_non_network_bypasses(app):

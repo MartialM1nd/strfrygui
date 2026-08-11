@@ -1,236 +1,168 @@
 {% extends "base.html" %}
+{% from "components/operations.html" import field_errors, page_header, panel_header %}
 
-{% block title %}Plugin Manager{% if relay_name %} - {{ relay_name }}{% endif %} - StrfryGUI{% endblock %}
+{% block title %}Plugins{% if relay_name %} - {{ relay_name }}{% endif %} - StrfryGUI{% endblock %}
 
 {% block content %}
-<h2 class="mb-4"><i class="bi bi-puzzle"></i>{% if relay_name %} Plugin Manager for {{ relay_name }}{% else %} Plugin Manager{% endif %}</h2>
+<div class="plugins-shell">
+    {{ page_header(
+        'ADMISSION CONTROL',
+        'Plugin operations',
+        'Configure write-policy publication and inspect runtime signals without assuming active enforcement.',
+        configuration_kind|title,
+        'healthy' if configured_executable else ('stale' if configured_path else 'offline')
+    ) }}
 
-{% if error %}
-<div class="alert alert-danger">
-    <h5>Error</h5>
-    <p>{{ error }}</p>
-</div>
-{% endif %}
-
-{% if success %}
-<div class="alert alert-success">
-    <h5>Success</h5>
-    <p>{{ success }}</p>
-</div>
-{% endif %}
-
-<div class="row mb-4">
-    <div class="col-md-6">
-        <div class="card h-100">
-            <div class="card-header">
-                <h5 class="mb-0"><i class="bi bi-shield-check"></i> Blocklist Plugin Status</h5>
-            </div>
-            <div class="card-body">
-                <table class="table table-sm">
-                    <tr>
-                        <td>Plugin File:</td>
-                        <td><code>{{ plugin_path }}</code></td>
-                    </tr>
-                    <tr>
-                        <td>Installed:</td>
-                        <td>
-                            {% if plugin_installed %}
-                            <span class="badge bg-success">Yes</span>
-                            {% else %}
-                            <span class="badge bg-danger">No</span>
-                            {% endif %}
-                        </td>
-                    </tr>
-                    <tr>
-                        <td>Banned Pubkeys:</td>
-                        <td><span class="badge bg-warning text-dark">{{ blocklist_count }}</span></td>
-                    </tr>
-                    <tr>
-                        <td>Blocklist File:</td>
-                        <td><code>{{ config.BANNED_PUBKEYS_FILE }}</code></td>
-                    </tr>
-                    <tr>
-                        <td>Enforcement:</td>
-                        <td>
-                            {% if projection.status == 'published' %}
-                            <span class="badge bg-success">Published revision {{ projection.published_revision }}</span>
-                            {% else %}
-                            <span class="badge bg-warning text-dark">Revision {{ projection.desired_revision }} pending</span>
-                            {% endif %}
-                        </td>
-                    </tr>
-                </table>
-                {% if projection.status == 'pending' %}
-                <p class="small text-danger">{{ projection.last_error }}</p>
-                <form method="POST" action="{{ url_for('moderation_retry_enforcement') }}">
-                    <input type="hidden" name="csrf_token" value="{{ form.csrf_token.current_token }}">
-                    <input type="hidden" name="next" value="plugins">
-                    <button type="submit" class="btn btn-sm btn-outline-warning">Retry enforcement</button>
-                </form>
-                {% endif %}
-            </div>
+    {% if attention %}
+    <section class="dashboard-attention mb-4" aria-labelledby="pluginAttentionHeading">
+        <div class="dashboard-section-label" id="pluginAttentionHeading"><i class="bi bi-exclamation-diamond"></i> Needs attention</div>
+        <div class="plugin-attention-list mt-3">
+            {% for item in attention %}<div class="plugin-attention-item"><i class="bi bi-exclamation-triangle"></i><span>{{ item }}</span></div>{% endfor %}
         </div>
-    </div>
-    <div class="col-md-6">
-        <div class="card h-100">
-            <div class="card-header">
-                <h5 class="mb-0"><i class="bi bi-info-circle"></i> How It Works</h5>
-            </div>
-            <div class="card-body">
-                <p class="mb-1">The blocklist plugin intercepts every event before it's stored and checks if the pubkey is banned.</p>
-                <ol class="mb-0 small">
-                    <li>User publishes an event</li>
-                    <li>strfry sends event to the plugin via stdin</li>
-                    <li>Plugin checks pubkey against <code>blocklist.json</code></li>
-                    <li>If banned → event rejected with error message</li>
-                    <li>If not banned → event accepted</li>
-                </ol>
-                <hr>
-                <p class="small text-muted mb-0">Changes to bans sync automatically. A strfry restart is only needed when changing the plugin path.</p>
-            </div>
-        </div>
-    </div>
-</div>
+    </section>
+    {% endif %}
 
-<div class="card mb-4">
-    <div class="card-header d-flex justify-content-between align-items-center">
-        <h5 class="mb-0"><i class="bi bi-diagram-3"></i> Web of Trust and Proof of Work</h5>
-        {% if wot_policy.mode == 'enforce' %}
-        <span class="badge bg-danger">Enforce</span>
-        {% elif wot_policy.mode == 'monitor' %}
-        <span class="badge bg-warning text-dark">Monitor</span>
-        {% else %}
-        <span class="badge bg-secondary">Off</span>
-        {% endif %}
-    </div>
-    <div class="card-body">
-        <div class="alert alert-info">
-            Pubkey bans remain active in every mode. Off accepts other authors, Monitor records policy decisions without rejecting, and Enforce requires PoW from authors below the trust threshold.
-        </div>
-        <form method="POST" action="{{ url_for('update_wot_policy') }}">
-            {{ wot_form.hidden_tag() }}
-            <div class="row g-3">
-                <div class="col-lg-4">
-                    {{ wot_form.mode.label(class="form-label") }}
-                    {{ wot_form.mode(class="form-select") }}
+    <section class="plugin-status-grid mb-4" aria-label="Write-policy status">
+        <article class="dashboard-metric">
+            <div class="dashboard-metric-label">Bundled executable</div>
+            <div class="plugin-status-value">{{ 'Installed' if bundled_installed else 'Unavailable' }}</div>
+            <code class="operations-identifier">{{ bundled_path }}</code>
+        </article>
+        <article class="dashboard-metric">
+            <div class="dashboard-metric-label">Configured source</div>
+            <div class="plugin-status-value">{{ configuration_kind|title }}</div>
+            <div class="dashboard-metric-detail">{% if configured_path %}{{ 'Executable' if configured_executable else 'Not executable' }}{% else %}No plugin configured{% endif %}</div>
+        </article>
+        <article class="dashboard-metric">
+            <div class="dashboard-metric-label">Restart state</div>
+            <div class="plugin-status-value">{{ restart_status|title }}</div>
+            <div class="dashboard-metric-detail">The GUI cannot inspect the running process configuration.</div>
+        </article>
+        <article class="dashboard-metric">
+            <div class="dashboard-metric-label">Ban projection publication</div>
+            <div class="plugin-status-value">{{ projection.status|title }}</div>
+            <div class="dashboard-metric-detail">Desired {{ projection.desired_revision }} · published {{ projection.published_revision }}</div>
+        </article>
+        <article class="dashboard-metric">
+            <div class="dashboard-metric-label">Recent telemetry</div>
+            <div class="plugin-status-value">{{ 'Recent' if telemetry_recent else ('Stale' if wot_stats.updated_at else 'Unavailable') }}</div>
+            <div class="dashboard-metric-detail">{% if wot_stats.updated_at %}Updated {{ wot_stats.updated_at|datetime }}{% else %}No runtime sample{% endif %}</div>
+        </article>
+        <article class="dashboard-metric">
+            <div class="dashboard-metric-label">Ban records</div>
+            <div class="plugin-status-value">{{ blocklist_count }}</div>
+            <div class="dashboard-metric-detail">Projection publication is shown separately and is not proof of active enforcement.</div>
+        </article>
+    </section>
+
+    <div class="plugin-console-grid mb-4">
+        <section class="dashboard-panel plugin-panel">
+            {{ panel_header('Write-policy configuration', 'Revision-protected strfry.conf update') }}
+            {% if not config_snapshot.writable %}
+            <div class="alert alert-warning" role="alert">Configuration is read-only. Reload after restoring safe write access.</div>
+            {% endif %}
+            <form method="POST" action="{{ url_for('update_write_policy') }}" novalidate>
+                {{ form.hidden_tag() }}
+                {{ field_errors(form.config_revision) }}
+                <div class="mb-3">
+                    {{ form.plugin_path.label(class="form-label") }}
+                    {{ form.plugin_path(class="form-control font-monospace" + (' is-invalid' if form.plugin_path.errors else ''), placeholder="/opt/strfrygui/utils/blocklist_plugin.py") }}
+                    {{ field_errors(form.plugin_path) }}
+                    <div class="form-text">Absolute executable path, or empty to disable. Custom executables are allowed.</div>
                 </div>
-                <div class="col-lg-4">
-                    {{ wot_form.trust_threshold.label(class="form-label") }}
-                    {{ wot_form.trust_threshold(class="form-control", min="0", max="100") }}
-                    <div class="form-text">Authors at or above this score bypass PoW.</div>
-                </div>
-                <div class="col-lg-4">
-                    {{ wot_form.pow_difficulty.label(class="form-label") }}
-                    {{ wot_form.pow_difficulty(class="form-control", min="0", max="64") }}
-                    <div class="form-text">20 is normal, 22 elevated, and 24 emergency.</div>
-                </div>
-                <div class="col-12">
-                    {{ wot_form.root_npubs.label(class="form-label") }}
-                    {{ wot_form.root_npubs(class="form-control font-monospace", rows="3") }}
-                    <div class="form-text">One npub per line. The graph uses only locally stored, signed kind-3 follow lists.</div>
-                </div>
-                <div class="col-md-4">
-                    {{ wot_form.refresh_interval_minutes.label(class="form-label") }}
-                    {{ wot_form.refresh_interval_minutes(class="form-control", min="5", max="1440") }}
-                </div>
-                <div class="col-md-4">
-                    {{ wot_form.rate_limit_per_minute.label(class="form-label") }}
-                    {{ wot_form.rate_limit_per_minute(class="form-control", min="0", max="100000") }}
-                </div>
-                <div class="col-md-4">
-                    {{ wot_form.rate_limit_burst.label(class="form-label") }}
-                    {{ wot_form.rate_limit_burst(class="form-control", min="0", max="10000") }}
-                </div>
-                <div class="col-12">
-                    <div class="form-check">
-                        {{ wot_form.require_pow_commitment(class="form-check-input") }}
-                        {{ wot_form.require_pow_commitment.label(class="form-check-label") }}
+                <div class="plugin-number-grid mb-3">
+                    <div>
+                        {{ form.timeout.label(class="form-label") }}
+                        {{ form.timeout(class="form-control" + (' is-invalid' if form.timeout.errors else ''), min="1", max="60") }}
+                        {{ field_errors(form.timeout) }}
                     </div>
-                    <div class="form-text">Reject lucky low-target events that did not commit to the relay's required difficulty.</div>
+                    <div>
+                        {{ form.lookback.label(class="form-label") }}
+                        {{ form.lookback(class="form-control" + (' is-invalid' if form.lookback.errors else ''), min="0", max="3600") }}
+                        {{ field_errors(form.lookback) }}
+                    </div>
+                </div>
+                <div class="plugin-confirmation mb-3">
+                    <div class="form-check">
+                        {{ form.confirm_plugin_change(class="form-check-input" + (' is-invalid' if form.confirm_plugin_change.errors else '')) }}
+                        {{ form.confirm_plugin_change.label(class="form-check-label") }}
+                    </div>
+                    {{ field_errors(form.confirm_plugin_change) }}
+                    <div class="form-text">Required only when the plugin path changes or is disabled. Timeout-only and lookback-only updates do not require confirmation.</div>
+                </div>
+                <div class="operations-action-bar">
+                    <span class="small text-body-secondary">A path change requires a strfry restart.</span>
+                    <button type="submit" class="btn btn-primary" {% if not config_snapshot.writable %}disabled{% endif %}><i class="bi bi-save"></i> Save write policy</button>
+                </div>
+            </form>
+        </section>
+
+        <section class="dashboard-panel plugin-panel">
+            {{ panel_header('Publication and telemetry', 'Artifacts and observations, not an enforcement claim') }}
+            <dl class="plugin-facts">
+                <div><dt>Projection updated</dt><dd>{{ projection.updated_at.strftime('%Y-%m-%d %H:%M:%S') if projection.updated_at else 'Never' }}</dd></div>
+                <div><dt>Projection published</dt><dd>{{ projection.published_at.strftime('%Y-%m-%d %H:%M:%S') if projection.published_at else 'Never' }}</dd></div>
+                <div><dt>Decision counters</dt><dd>{{ wot_stats.counters|length if wot_stats.counters else 0 }} signals</dd></div>
+                <div><dt>Runtime certainty</dt><dd>Unknown</dd></div>
+            </dl>
+            {% if projection.last_error %}<div class="alert alert-danger" role="alert"><strong>Publication error.</strong> {{ projection.last_error }}</div>{% endif %}
+            {% if wot_stats.counters %}
+            <div class="plugin-counter-list" aria-label="Runtime decision counters">
+                {% for name, count in wot_stats.counters|dictsort %}<span>{{ name|replace('_', ' ') }} <strong>{{ count }}</strong></span>{% endfor %}
+            </div>
+            {% else %}
+            <div class="operations-empty-state plugin-empty-state"><i class="bi bi-activity"></i><strong>No recent telemetry</strong><span>The plugin has not published readable runtime counters.</span></div>
+            {% endif %}
+            {% if projection.status == 'pending' %}
+            <form method="POST" action="{{ url_for('moderation_retry_enforcement') }}" class="operations-action-bar mt-3">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <input type="hidden" name="next" value="plugins">
+                <span class="small text-body-secondary">Retries artifact publication only.</span>
+                <button type="submit" class="btn btn-outline-warning">Retry publication</button>
+            </form>
+            {% endif %}
+        </section>
+    </div>
+
+    <section class="dashboard-panel plugin-panel mb-4">
+        {% call panel_header('Web of Trust and Proof of Work', 'Publish policy settings and operate the local two-hop graph') %}
+        <span class="badge bg-{% if wot_policy.mode == 'enforce' %}danger{% elif wot_policy.mode == 'monitor' %}warning text-dark{% else %}secondary{% endif %}">{{ wot_policy.mode|title }}</span>
+        {% endcall %}
+        <div class="alert alert-info" role="note">Off, Monitor, and Enforce describe the published policy artifact. Publication alone does not establish that a running plugin loaded it.</div>
+        <form method="POST" action="{{ url_for('update_wot_policy') }}" novalidate>
+            {{ wot_form.hidden_tag() }}
+            {{ field_errors(wot_form.policy_revision) }}
+            <div class="plugin-wot-grid">
+                <div>{{ wot_form.mode.label(class="form-label") }}{{ wot_form.mode(class="form-select" + (' is-invalid' if wot_form.mode.errors else '')) }}{{ field_errors(wot_form.mode) }}</div>
+                <div>{{ wot_form.trust_threshold.label(class="form-label") }}{{ wot_form.trust_threshold(class="form-control" + (' is-invalid' if wot_form.trust_threshold.errors else ''), min="0", max="100") }}{{ field_errors(wot_form.trust_threshold) }}</div>
+                <div>{{ wot_form.pow_difficulty.label(class="form-label") }}{{ wot_form.pow_difficulty(class="form-control" + (' is-invalid' if wot_form.pow_difficulty.errors else ''), min="0", max="64") }}{{ field_errors(wot_form.pow_difficulty) }}</div>
+                <div class="plugin-wide">{{ wot_form.root_npubs.label(class="form-label") }}{{ wot_form.root_npubs(class="form-control font-monospace" + (' is-invalid' if wot_form.root_npubs.errors else ''), rows="3") }}{{ field_errors(wot_form.root_npubs) }}<div class="form-text">One npub per line. Only local, signed kind-3 follow lists are used.</div></div>
+                <div>{{ wot_form.refresh_interval_minutes.label(class="form-label") }}{{ wot_form.refresh_interval_minutes(class="form-control" + (' is-invalid' if wot_form.refresh_interval_minutes.errors else ''), min="5", max="1440") }}{{ field_errors(wot_form.refresh_interval_minutes) }}</div>
+                <div>{{ wot_form.rate_limit_per_minute.label(class="form-label") }}{{ wot_form.rate_limit_per_minute(class="form-control" + (' is-invalid' if wot_form.rate_limit_per_minute.errors else ''), min="0", max="100000") }}{{ field_errors(wot_form.rate_limit_per_minute) }}</div>
+                <div>{{ wot_form.rate_limit_burst.label(class="form-label") }}{{ wot_form.rate_limit_burst(class="form-control" + (' is-invalid' if wot_form.rate_limit_burst.errors else ''), min="0", max="10000") }}{{ field_errors(wot_form.rate_limit_burst) }}</div>
+                <div class="plugin-wide plugin-checks">
+                    <div class="form-check">{{ wot_form.require_pow_commitment(class="form-check-input") }}{{ wot_form.require_pow_commitment.label(class="form-check-label") }}</div>
+                    <div class="form-check plugin-confirmation">{{ wot_form.confirm_enforce(class="form-check-input" + (' is-invalid' if wot_form.confirm_enforce.errors else '')) }}{{ wot_form.confirm_enforce.label(class="form-check-label") }}{{ field_errors(wot_form.confirm_enforce) }}</div>
                 </div>
             </div>
-            <button type="submit" class="btn btn-primary mt-3"><i class="bi bi-save"></i> Save and Publish Policy</button>
+            <div class="operations-action-bar mt-3">
+                <span class="small text-body-secondary">Confirmation is required whenever the resulting mode is Enforce.</span>
+                <button type="submit" class="btn btn-primary"><i class="bi bi-cloud-arrow-up"></i> Save and publish artifact</button>
+            </div>
         </form>
 
-        <hr>
-        <div class="row g-3 align-items-end">
-            <div class="col-md-9">
-                <table class="table table-sm mb-0">
-                    <tr><td>Build status</td><td><span class="badge bg-{% if wot_state.status == 'idle' %}success{% elif wot_state.status == 'failed' %}danger{% else %}warning text-dark{% endif %}">{{ wot_state.status }}</span></td></tr>
-                    <tr><td>Policy revision</td><td>{{ wot_state.revision }}</td></tr>
-                    <tr><td>Last generated</td><td>{{ wot_state.generated_at|datetime if wot_state.generated_at else 'Never' }}</td></tr>
-                    <tr><td>Graph</td><td>{{ wot_state.root_count }} roots, {{ wot_state.direct_count }} direct follows, {{ wot_state.identity_count }} identities, {{ wot_state.edge_count }} edges{% if wot_state.truncated %} <span class="badge bg-warning text-dark">bounded/truncated</span>{% endif %}</td></tr>
-                </table>
+        <div class="plugin-build mt-4">
+            <div>
+                <div class="dashboard-section-label">Graph build</div>
+                <div class="plugin-build-summary"><span class="badge bg-{% if wot_state.status == 'idle' %}success{% elif wot_state.status == 'failed' %}danger{% else %}warning text-dark{% endif %}">{{ wot_state.status }}</span><span>Revision {{ wot_state.revision }}</span><span>{{ wot_state.identity_count }} identities</span><span>{{ wot_state.edge_count }} edges</span></div>
+                <div class="small text-body-secondary mt-2">Last generated {{ wot_state.generated_at.strftime('%Y-%m-%d %H:%M:%S') if wot_state.generated_at else 'never' }}{% if wot_state.truncated %} · bounded/truncated{% endif %}</div>
                 {% if wot_state.last_error %}<div class="text-danger small mt-2">{{ wot_state.last_error }}</div>{% endif %}
             </div>
-            <div class="col-md-3 text-md-end">
-                <form method="POST" action="{{ url_for('rebuild_wot_policy') }}">
-                    {% if wot_form.csrf_token is defined %}{{ wot_form.csrf_token }}{% endif %}
-                    <button class="btn btn-outline-primary" type="submit" {% if wot_state.status in ['queued', 'running'] %}disabled{% endif %}>
-                        <i class="bi bi-arrow-repeat"></i> Rebuild Now
-                    </button>
-                </form>
-            </div>
+            <form method="POST" action="{{ url_for('rebuild_wot_policy') }}">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <button class="btn btn-outline-primary" type="submit" {% if wot_state.status in ['queued', 'running'] %}disabled{% endif %}><i class="bi bi-arrow-repeat"></i> Rebuild now</button>
+            </form>
         </div>
-        {% if wot_stats.counters %}
-        <h6 class="mt-4">Runtime Decisions</h6>
-        <div class="d-flex flex-wrap gap-2">
-            {% for name, count in wot_stats.counters|dictsort %}
-            <span class="badge bg-body-secondary text-body border">{{ name|replace('_', ' ') }}: {{ count }}</span>
-            {% endfor %}
-        </div>
-        <div class="small text-muted mt-2">Updated {{ wot_stats.updated_at|datetime }}</div>
-        {% endif %}
-    </div>
+    </section>
 </div>
-
-<div class="card mb-4">
-    <div class="card-header">
-        <h5 class="mb-0"><i class="bi bi-gear"></i> strfry Write Policy Configuration</h5>
-    </div>
-    <div class="card-body">
-        <form method="POST">
-            {{ form.hidden_tag() }}
-            <div class="mb-3">
-                {{ form.plugin_path.label(class="form-label") }}
-                {{ form.plugin_path(class="form-control font-monospace", placeholder="/path/to/blocklist_plugin.py") }}
-                <div class="form-text">Full path to the write-policy plugin executable. Set to empty to disable.</div>
-            </div>
-            <div class="row mb-3">
-                <div class="col-md-6">
-                    {{ form.timeout.label(class="form-label") }}
-                    {{ form.timeout(class="form-control", type="number", min="1", max="60") }}
-                    <div class="form-text">Seconds to wait for plugin response (default: 10)</div>
-                </div>
-                <div class="col-md-6">
-                    {{ form.lookback.label(class="form-label") }}
-                    {{ form.lookback(class="form-control", type="number", min="0", max="3600") }}
-                    <div class="form-text">Seconds of initial state to send to plugin (default: 0)</div>
-                </div>
-            </div>
-            <button type="submit" class="btn btn-primary">
-                <i class="bi bi-save"></i> Save Configuration
-            </button>
-        </form>
-    </div>
-</div>
-
-{% if plugin_installed %}
-<div class="card">
-    <div class="card-header">
-        <h5 class="mb-0"><i class="bi bi-terminal"></i> Example strfry.conf Entry</h5>
-    </div>
-    <div class="card-body">
-        <pre class="mb-0">relay {
-    writePolicy {
-        plugin = "{{ plugin_path }}"
-        timeoutSeconds = 10
-    }
-}</pre>
-        <p class="small text-muted mt-2 mb-0">
-            <i class="bi bi-arrow-repeat"></i> After saving, restart strfry: <code>systemctl restart strfry</code>
-        </p>
-    </div>
-</div>
-{% endif %}
 {% endblock %}

@@ -465,79 +465,27 @@ def dict_decompress(filter_json):
 
 
 def get_config():
-    config_path = Config.STRFRY_CONFIG
-    if not os.path.exists(config_path):
+    from utils.configuration import load_configuration
+
+    snapshot = load_configuration(Config.STRFRY_CONFIG)
+    if snapshot.revision is None:
         return None
-    
-    with open(config_path, 'r') as f:
-        content = f.read()
-    
-    config = {}
-    section_stack = []
-    
-    for line in content.split('\n'):
-        line = line.strip()
-        if not line or line.startswith('#'):
-            continue
-        
-        if line.endswith('{'):
-            section_stack.append(line[:-1].strip())
-        elif line == '}':
-            if section_stack:
-                section_stack.pop()
-        elif '=' in line:
-            key, value = line.split('=', 1)
-            key = key.strip()
-            value = value.strip().strip('"')
-            
-            target = config
-            for section in section_stack:
-                if section not in target:
-                    target[section] = {}
-                target = target[section]
-            target[key] = value
-    
-    return config
+
+    def legacy_values(value):
+        if isinstance(value, dict):
+            return {key: legacy_values(item) for key, item in value.items()}
+        return str(value)
+
+    return legacy_values(snapshot.values)
 
 
-def update_config(updates):
-    config_path = Config.STRFRY_CONFIG
-    if not os.path.exists(config_path):
-        raise FileNotFoundError(f"Config file not found: {config_path}")
+def update_config(updates, expected_revision=None):
+    from utils.configuration import ConfigurationError, load_configuration
 
-    with open(config_path, 'r') as f:
-        lines = f.readlines()
-
-    for dotted_key, new_value in updates.items():
-        parts = dotted_key.split('.')
-        target_key = parts[-1]
-        target_sections = parts[:-1]
-
-        section_stack = []
-        found = False
-
-        for i, line in enumerate(lines):
-            stripped = line.strip()
-            if not stripped or stripped.startswith('#'):
-                continue
-
-            if stripped.endswith('{'):
-                section_stack.append(stripped[:-1].strip())
-            elif stripped == '}':
-                if section_stack:
-                    section_stack.pop()
-            elif '=' in stripped and not stripped.startswith('#'):
-                key = stripped.split('=', 1)[0].strip()
-                if key == target_key and section_stack == target_sections:
-                    indent = line[:len(line) - len(line.lstrip())]
-                    lines[i] = f'{indent}{key} = "{new_value}"\n'
-                    found = True
-                    break
-
-        if not found:
-            raise KeyError(f"Key '{dotted_key}' not found in config")
-
-    with open(config_path, 'w') as f:
-        f.writelines(lines)
-
+    snapshot = load_configuration(Config.STRFRY_CONFIG)
+    if snapshot.revision is None:
+        if not os.path.exists(Config.STRFRY_CONFIG):
+            raise FileNotFoundError(f"Config file not found: {Config.STRFRY_CONFIG}")
+        raise ConfigurationError('; '.join(snapshot.diagnostics))
+    snapshot.write(updates, expected_revision=expected_revision)
     return True

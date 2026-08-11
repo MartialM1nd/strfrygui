@@ -1,35 +1,37 @@
 import csv
+import fcntl
+import ipaddress
 import json
 import os
 import queue
+import re
 import threading
 import time
-from datetime import datetime, timedelta
+from contextlib import contextmanager
+from datetime import datetime, time as datetime_time, timedelta
 from urllib.parse import urlsplit
-from flask import Flask, render_template, redirect, url_for, flash, request, send_file, jsonify, abort, make_response
+from flask import Flask, render_template, redirect, url_for, flash, request, jsonify, abort, make_response, g
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from flask_wtf import CSRFProtect, FlaskForm
-from wtforms import BooleanField, StringField, PasswordField, SelectField, TextAreaField, IntegerField
+from wtforms import BooleanField, StringField, PasswordField, SelectField, TextAreaField, IntegerField, HiddenField
 from wtforms.validators import DataRequired, InputRequired, Length, EqualTo, NumberRange, Optional, Regexp, ValidationError
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from sqlalchemy import and_, func, or_
-from sqlalchemy.exc import OperationalError, SQLAlchemyError
-from werkzeug.utils import secure_filename
-from werkzeug.security import generate_password_hash
-from io import StringIO, BytesIO
-import tempfile
+from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
+from sqlalchemy.orm import joinedload
+from io import StringIO
 
-from config import Config, Security
+from config import Config
 from models import (
     db, User, AuditLog, ModerationReport, BannedPubkey, BannedDomain, MetadataRelay,
-    EventPurge, PubkeyBanSource, WoTBuildState, ensure_moderation_report_indexes,
-    utcnow,
+    EventPurge, PubkeyBanSource, WoTBuildState, ensure_audit_log_indexes,
+    ensure_moderation_report_indexes, utcnow,
 )
 from utils.strfry import (
     scan_events, delete_events, export_events, import_events,
     compact_database, negentropy_list, negentropy_add, negentropy_build,
-    negentropy_delete, dict_list, get_config, update_config, StrfryError,
+    negentropy_delete, dict_list, StrfryError,
     validate_filter_json, npub_to_hex, get_strfry_process_info,
     acquire_database_maintenance_lock, release_database_maintenance_lock,
 )
@@ -47,13 +49,27 @@ from utils.nip05 import (
 from utils.domain_view import domain_identity_page, unresolved_identity_page
 from utils.decision_log import read_decision_log
 from utils.dashboard import collect_sample, connection_summary, dashboard_summary
+from utils.configuration import (
+    ConfigurationBusy,
+    ConfigurationError,
+    RevisionConflict,
+    load_configuration,
+)
 from utils.wot import (
     WoTError,
     commit_policy_settings,
     initialize_wot,
     normalize_roots,
+    policy_fingerprint,
     rebuild_policy,
     republish_policy_settings,
+)
+from utils.relay import (
+    MAX_RELAYS,
+    RelayError,
+    lookup_kind0 as safe_lookup_kind0,
+    normalize_relay_url,
+    test_relay,
 )
 
 _compaction = {
@@ -66,6 +82,8 @@ _compaction = {
 _domain_scan_queue = queue.Queue(maxsize=1)
 _wot_build_queue = queue.Queue(maxsize=1)
 _dashboard_sample_lock = threading.Lock()
+_operator_thread_lock = threading.Lock()
+_metadata_relay_thread_lock = threading.Lock()
 
 
 def _run_compaction(lock_file):
@@ -77,6 +95,32 @@ def _run_compaction(lock_file):
         release_database_maintenance_lock(lock_file)
         _compaction['finished_at'] = datetime.now()
         _compaction['running'] = False
+
+
+@contextmanager
+def _operator_mutation_lock():
+    """Serialize active-admin invariant checks across web workers."""
+    os.makedirs(Config.RUNTIME_DIR, exist_ok=True)
+    lock_path = os.path.join(Config.RUNTIME_DIR, 'operator-mutations.lock')
+    with _operator_thread_lock, open(lock_path, 'w') as lock_file:
+        fcntl.flock(lock_file, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file, fcntl.LOCK_UN)
+
+
+@contextmanager
+def _metadata_relay_mutation_lock():
+    """Serialize metadata-relay capacity checks and mutations across workers."""
+    os.makedirs(Config.RUNTIME_DIR, exist_ok=True)
+    lock_path = os.path.join(Config.RUNTIME_DIR, 'metadata-relay-mutations.lock')
+    with _metadata_relay_thread_lock, open(lock_path, 'w') as lock_file:
+        fcntl.flock(lock_file, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock_file, fcntl.LOCK_UN)
 
 
 class PubkeyMetadataCache:
@@ -135,43 +179,35 @@ pubkey_metadata_cache = PubkeyMetadataCache()
 
 
 def fetch_from_external_relays(pubkey, relays_list=None):
-    """Fetch kind 0 metadata from external relays."""
-    from models import MetadataRelay
-    import json
-    
+    """Fetch bounded, signed kind-0 metadata from configured public relays."""
     if relays_list is None:
-        enabled_relays = MetadataRelay.query.filter_by(enabled=True).all()
+        enabled_relays = MetadataRelay.query.filter_by(enabled=True).order_by(MetadataRelay.id).all()
         relays_list = [r.url for r in enabled_relays]
-    
+
+    normalized_relays = []
     for relay_url in relays_list:
         try:
-            subscription = json.dumps({
-                "kinds": [0],
-                "authors": [pubkey],
-                "limit": 1
-            })
-            ws_url = relay_url.replace('wss://', 'wss://').replace('ws://', 'ws://')
-            
-            import websocket
-            ws = websocket.create_connection(ws_url, timeout=5)
-            ws.send(json.dumps(["REQ", "metadata", subscription]))
-            
-            while True:
-                try:
-                    response = ws.recv()
-                    if not response:
-                        break
-                    msg = json.loads(response)
-                    if msg[0] == "EVENT" and msg[2].get('kind') == 0:
-                        ws.close()
-                        return json.loads(msg[2].get('content', '{}'))
-                except:
-                    break
-            
-            ws.close()
-        except Exception:
+            normalized = normalize_relay_url(relay_url)
+        except RelayError:
             continue
-    
+        if normalized not in normalized_relays:
+            normalized_relays.append(normalized)
+        if len(normalized_relays) == MAX_RELAYS:
+            break
+
+    try:
+        event = safe_lookup_kind0(pubkey, normalized_relays, timeout=5)
+    except RelayError as exc:
+        app.logger.warning('External metadata lookup rejected: %s', exc)
+        return None
+    if event is None:
+        return None
+    try:
+        metadata = json.loads(event['content'])
+    except (KeyError, TypeError, json.JSONDecodeError):
+        return None
+    if isinstance(metadata, dict):
+        return metadata
     return None
 
 
@@ -242,7 +278,7 @@ class RegisterForm(FlaskForm):
     ])
     confirm_password = PasswordField('Confirm Password', validators=[DataRequired(), EqualTo('password')])
     role = SelectField('Role', choices=[('admin', 'Admin'), ('moderator', 'Moderator'), ('viewer', 'Viewer')], validators=[DataRequired()])
-    registration_token = StringField('Registration Token', validators=[DataRequired()])
+    registration_token = PasswordField('Registration Token', validators=[DataRequired()])
 
 
 class AdminCreateUserForm(FlaskForm):
@@ -347,22 +383,91 @@ class ImportForm(FlaskForm):
             raise ValidationError('Confirm that you understand the risk of skipping verification.')
 
 
-class ConfigForm(FlaskForm):
-    relay_name = StringField('Relay Name', validators=[Optional()])
-    relay_description = StringField('Description', validators=[Optional()])
-    relay_pubkey = StringField('Pubkey', validators=[Optional()])
-    relay_contact = StringField('Contact', validators=[Optional()])
-    relay_bind = StringField('Bind Address', validators=[Optional()])
-    relay_port = StringField('Port', validators=[Optional()])
+def control_safe(form, field):
+    if field.data and any(ord(char) < 32 or ord(char) == 127 for char in field.data):
+        raise ValidationError('Control characters are not allowed.')
 
 
-class PluginForm(FlaskForm):
-    plugin_path = StringField('Plugin Path', validators=[Optional()])
-    timeout = IntegerField('Timeout (seconds)', default=10, validators=[Optional()])
-    lookback = IntegerField('Lookback (seconds)', default=0, validators=[Optional()])
+class ConfigurationRevisionForm(FlaskForm):
+    config_revision = HiddenField(validators=[
+        InputRequired(),
+        Regexp(r'^[0-9a-f]{64}$', message='Reload the page before saving.'),
+    ])
+
+
+class RelayInfoForm(ConfigurationRevisionForm):
+    relay_name = StringField('Relay Name', validators=[Optional(), Length(max=100), control_safe])
+    relay_description = TextAreaField('Description', validators=[Optional(), Length(max=1000), control_safe])
+    relay_pubkey = StringField('Operator Pubkey', validators=[Optional(), Length(max=128), control_safe])
+    relay_contact = StringField('Contact', validators=[Optional(), Length(max=320), control_safe])
+
+    def validate_relay_pubkey(self, field):
+        value = (field.data or '').strip()
+        if not value:
+            field.data = ''
+            return
+        if re.fullmatch(r'[0-9a-fA-F]{64}', value):
+            field.data = value.lower()
+            return
+        if value.startswith('NPUB1'):
+            value = value.lower()
+        if value.startswith('npub1'):
+            try:
+                field.data = npub_to_hex(value)
+                return
+            except ValueError as exc:
+                raise ValidationError('Enter a valid npub or 64-character hex pubkey.') from exc
+        raise ValidationError('Enter a valid npub or 64-character hex pubkey.')
+
+
+class RelayNetworkForm(ConfigurationRevisionForm):
+    relay_bind = StringField('Bind Address', validators=[Optional(), Length(max=45), control_safe])
+    relay_port = IntegerField('Port', validators=[InputRequired(), NumberRange(min=1, max=65535)])
+
+    def validate_relay_bind(self, field):
+        value = (field.data or '').strip()
+        if not value:
+            field.data = ''
+            return
+        try:
+            ipaddress.ip_address(value)
+        except ValueError as exc:
+            raise ValidationError('Enter a valid IPv4 or IPv6 address.') from exc
+        field.data = value
+
+
+def _executable_plugin_path(value):
+    return (
+        not value
+        or (
+            os.path.isabs(value)
+            and os.path.isfile(value)
+            and os.access(value, os.X_OK)
+        )
+    )
+
+
+class PluginForm(ConfigurationRevisionForm):
+    plugin_path = StringField('Plugin Path', validators=[Optional(), Length(max=4096), control_safe])
+    timeout = IntegerField('Timeout (seconds)', validators=[
+        InputRequired(), NumberRange(min=1, max=60),
+    ])
+    lookback = IntegerField('Lookback (seconds)', validators=[
+        InputRequired(), NumberRange(min=0, max=3600),
+    ])
+    confirm_plugin_change = BooleanField('I understand this changes or disables the configured executable')
+
+    def validate_plugin_path(self, field):
+        field.data = (field.data or '').strip()
+        if not _executable_plugin_path(field.data):
+            raise ValidationError('Enter an absolute executable file path, or leave empty to disable.')
 
 
 class WoTPolicyForm(FlaskForm):
+    policy_revision = HiddenField(validators=[
+        InputRequired(),
+        Regexp(r'^[0-9a-f]{64}$', message='Reload the page before saving.'),
+    ])
     mode = SelectField('Protection Mode', choices=[
         ('off', 'Off - blocklist only'),
         ('monitor', 'Monitor - score without rejecting'),
@@ -385,6 +490,7 @@ class WoTPolicyForm(FlaskForm):
     rate_limit_burst = IntegerField('Low-Trust Burst', validators=[
         InputRequired(), NumberRange(min=0, max=10000),
     ])
+    confirm_enforce = BooleanField('I understand Enforce mode can reject publish attempts')
 
 
 @app.context_processor
@@ -394,9 +500,7 @@ def inject_user():
 
 @app.context_processor
 def inject_relay_name():
-    config = get_config()
-    relay_name = config.get('info', {}).get('name', '') if config else ''
-    return dict(relay_name=relay_name)
+    return dict(relay_name=_relay_name())
 
 
 @app.template_filter('datetime')
@@ -406,7 +510,7 @@ def datetime_filter(ts):
         return ''
     try:
         return datetime.fromtimestamp(ts).strftime('%Y-%m-%d %H:%M:%S')
-    except:
+    except (OSError, OverflowError, TypeError, ValueError):
         return str(ts)
 
 
@@ -449,16 +553,25 @@ def format_uptime_filter(seconds):
     hours, rem = divmod(rem, 3600)
     mins = rem // 60
     parts = []
-    if days: parts.append(f'{days}d')
-    if hours: parts.append(f'{hours}h')
-    if mins or not parts: parts.append(f'{mins}m')
+    if days:
+        parts.append(f'{days}d')
+    if hours:
+        parts.append(f'{hours}h')
+    if mins or not parts:
+        parts.append(f'{mins}m')
     return ' '.join(parts)
 
 
 def get_client_ip():
     xff = request.headers.get('X-Forwarded-For')
-    if xff:
-        return xff.split(',')[0].strip()
+    if xff and Config.TRUSTED_PROXY_COUNT > 0:
+        forwarded = [part.strip() for part in xff.split(',') if part.strip()]
+        if len(forwarded) >= Config.TRUSTED_PROXY_COUNT:
+            candidate = forwarded[-Config.TRUSTED_PROXY_COUNT]
+            try:
+                return str(ipaddress.ip_address(candidate))
+            except ValueError:
+                pass
     return request.remote_addr
 
 
@@ -648,8 +761,9 @@ def flash_moderation_outcome(outcome, success_message):
         flash(warning, 'warning')
 
 
-def log_audit(action, details=None, user_id=None):
-    user_id = user_id or (current_user.id if current_user.is_authenticated else None)
+def log_audit(action, details=None, user_id=None, commit=True):
+    if user_id is None:
+        user_id = current_user.id if current_user.is_authenticated else None
     log = AuditLog(
         user_id=user_id,
         action=action,
@@ -657,7 +771,19 @@ def log_audit(action, details=None, user_id=None):
         ip_address=get_client_ip()
     )
     db.session.add(log)
-    db.session.commit()
+    if commit:
+        db.session.commit()
+    return log
+
+
+def _safe_config_snapshot():
+    if 'strfry_config_snapshot' not in g:
+        g.strfry_config_snapshot = load_configuration(Config.STRFRY_CONFIG)
+    return g.strfry_config_snapshot
+
+
+def _relay_name():
+    return _safe_config_snapshot().values.get('relay', {}).get('info', {}).get('name', '')
 
 
 def _collect_dashboard_sample():
@@ -676,10 +802,7 @@ def _collect_dashboard_sample():
 @viewer_or_higher
 def index():
     dashboard = dashboard_summary(role=current_user.role)
-    config = get_config()
-    relay_name = config.get('info', {}).get('name', '') if config else ''
-
-    return render_template('index.html', dashboard=dashboard, relay_name=relay_name)
+    return render_template('index.html', dashboard=dashboard, relay_name=_relay_name())
 
 
 @app.route('/api/dashboard')
@@ -766,83 +889,136 @@ def api_get_event(event_id):
 @app.route('/api/metadata-relays', methods=['GET'])
 @admin_required
 def api_metadata_relays_list():
-    relays = MetadataRelay.query.all()
-    return jsonify([r.to_dict() for r in relays])
+    try:
+        relays = MetadataRelay.query.order_by(MetadataRelay.id).all()
+        return jsonify([relay.to_dict() for relay in relays])
+    except SQLAlchemyError:
+        app.logger.exception('Could not load metadata relays')
+        return jsonify({'error': 'Metadata relays could not be loaded'}), 500
 
 
 @app.route('/api/metadata-relays', methods=['POST'])
 @admin_required
+@_metadata_relay_mutation_lock()
 def api_metadata_relays_add():
-    url = request.json.get('url', '').strip()
-    if not url:
-        return jsonify({'error': 'URL is required'}), 400
-    
-    if not url.startswith('wss://') and not url.startswith('ws://'):
-        return jsonify({'error': 'URL must start with wss:// or ws://'}), 400
-    
-    existing = MetadataRelay.query.filter_by(url=url).first()
-    if existing:
-        return jsonify({'error': 'Relay already exists'}), 400
-    
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({'error': 'A JSON object is required'}), 400
+    try:
+        url = normalize_relay_url(payload.get('url'))
+    except RelayError as exc:
+        return jsonify({'error': str(exc)}), 400
+
+    if _find_equivalent_metadata_relay(url) is not None:
+        return jsonify({'error': 'Relay already exists'}), 409
+    if MetadataRelay.query.filter_by(enabled=True).count() >= MAX_RELAYS:
+        return jsonify({'error': f'At most {MAX_RELAYS} metadata relays may be enabled'}), 409
+
     relay = MetadataRelay(url=url, enabled=True)
     db.session.add(relay)
-    db.session.commit()
-    
-    log_audit('metadata_relay_added', f'Added metadata relay: {url}')
+    log_audit('metadata_relay_added', f'Added metadata relay: {url}', commit=False)
+    try:
+        db.session.commit()
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({'error': 'Relay already exists'}), 409
+    except SQLAlchemyError:
+        db.session.rollback()
+        app.logger.exception('Could not add metadata relay %s', url)
+        return jsonify({'error': 'Relay could not be added'}), 500
     return jsonify(relay.to_dict())
 
 
 @app.route('/api/metadata-relays/<int:relay_id>', methods=['DELETE'])
 @admin_required
+@_metadata_relay_mutation_lock()
 def api_metadata_relays_delete(relay_id):
     relay = MetadataRelay.query.get_or_404(relay_id)
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({'error': 'A JSON object is required'}), 400
+    if payload.get('confirm_url') != relay.url:
+        return jsonify({'error': 'Relay URL confirmation does not match'}), 400
     url = relay.url
     db.session.delete(relay)
-    db.session.commit()
-    
-    log_audit('metadata_relay_deleted', f'Deleted metadata relay: {url}')
+    log_audit('metadata_relay_deleted', f'Deleted metadata relay: {url}', commit=False)
+    try:
+        db.session.commit()
+    except SQLAlchemyError:
+        db.session.rollback()
+        app.logger.exception('Could not delete metadata relay %s', url)
+        return jsonify({'error': 'Relay could not be deleted'}), 500
     return jsonify({'success': True})
 
 
 @app.route('/api/metadata-relays/<int:relay_id>/toggle', methods=['POST'])
 @admin_required
+@_metadata_relay_mutation_lock()
 def api_metadata_relays_toggle(relay_id):
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({'error': 'A JSON object is required'}), 400
     relay = MetadataRelay.query.get_or_404(relay_id)
+    if not relay.enabled and MetadataRelay.query.filter_by(enabled=True).count() >= MAX_RELAYS:
+        return jsonify({'error': f'At most {MAX_RELAYS} metadata relays may be enabled'}), 409
+    url = relay.url
     relay.enabled = not relay.enabled
-    db.session.commit()
-    
-    log_audit('metadata_relay_toggled', f'Toggled metadata relay: {relay.url} ({relay.enabled})')
+    log_audit(
+        'metadata_relay_toggled',
+        f'Toggled metadata relay: {relay.url} ({relay.enabled})',
+        commit=False,
+    )
+    try:
+        db.session.commit()
+    except SQLAlchemyError:
+        db.session.rollback()
+        app.logger.exception('Could not toggle metadata relay %s', url)
+        return jsonify({'error': 'Relay could not be updated'}), 500
     return jsonify(relay.to_dict())
 
 
 @app.route('/api/metadata-relays/<int:relay_id>/test', methods=['POST'])
 @admin_required
 def api_metadata_relays_test(relay_id):
-    import json
-    import websocket
-    from datetime import datetime
-    
+    payload = request.get_json(silent=True)
+    if not isinstance(payload, dict):
+        return jsonify({'error': 'A JSON object is required'}), 400
     relay = MetadataRelay.query.get_or_404(relay_id)
-    
+    url = relay.url
+    status_code = 200
     try:
-        ws_url = relay.url.replace('wss://', 'wss://').replace('ws://', 'ws://')
-        ws = websocket.create_connection(ws_url, timeout=5)
-        ws.send(json.dumps(["REQ", "test", {"kinds": [0], "limit": 1}]))
-        
-        response = ws.recv()
-        ws.close()
-        
+        test_relay(relay.url, timeout=5)
         relay.last_status = 'success'
-        relay.last_tested = datetime.utcnow()
-        db.session.commit()
-        
-        return jsonify({'status': 'success', 'message': 'Relay is working'})
-    except Exception as e:
+        message = 'Relay is working'
+    except RelayError as exc:
+        app.logger.warning('Metadata relay test failed for %s: %s', relay.url, exc)
         relay.last_status = 'failed'
-        relay.last_tested = datetime.utcnow()
+        message = 'Relay test failed'
+        status_code = 502
+    relay.last_tested = utcnow()
+    log_audit(
+        'metadata_relay_tested',
+        f'Tested metadata relay: {relay.url} ({relay.last_status})',
+        commit=False,
+    )
+    try:
         db.session.commit()
-        
-        return jsonify({'status': 'failed', 'message': str(e)})
+    except SQLAlchemyError:
+        db.session.rollback()
+        app.logger.exception('Could not record metadata relay test for %s', url)
+        return jsonify({'error': 'Relay test result could not be recorded'}), 500
+    return jsonify({'status': relay.last_status, 'message': message}), status_code
+
+
+def _find_equivalent_metadata_relay(normalized_url):
+    """Match canonical equivalents without requiring legacy rows to be migrated first."""
+    for relay in MetadataRelay.query.all():
+        try:
+            if normalize_relay_url(relay.url) == normalized_url:
+                return relay
+        except RelayError:
+            continue
+    return None
 
 
 @app.route('/api/moderation-reports')
@@ -868,7 +1044,7 @@ def api_moderation_reports():
     if event_id_filter:
         query = query.filter(ModerationReport.reported_event_id == event_id_filter)
     if not show_reviewed:
-        query = query.filter(ModerationReport.reviewed == False)
+        query = query.filter(ModerationReport.reviewed.is_(False))
 
     total_count = query.count()
     cursor_created_at = request.args.get('cursor_created_at', '')
@@ -956,34 +1132,134 @@ def api_moderation_reports():
     })
 
 
+def _bounded_query_int(args, name, default, minimum, maximum):
+    try:
+        value = int(args.get(name, default))
+    except (TypeError, ValueError):
+        value = default
+    return min(maximum, max(minimum, value))
+
+
+def _parse_audit_date(value, end=False):
+    if not value:
+        return None
+    try:
+        parsed = datetime.strptime(value, '%Y-%m-%d').date()
+    except (TypeError, ValueError):
+        return None
+    return datetime.combine(parsed, datetime_time.max if end else datetime_time.min)
+
+
+def _parse_audit_cursor(value):
+    if not value:
+        return None
+    try:
+        cursor = json.loads(value)
+        timestamp = datetime.fromisoformat(cursor['timestamp'])
+        identifier = int(cursor['id'])
+        if identifier < 1:
+            return None
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+    return timestamp, identifier
+
+
+def _audit_page(args):
+    limit = _bounded_query_int(args, 'limit', 25, 1, 100)
+    offset = _bounded_query_int(args, 'offset', 0, 0, 10000)
+    action = (args.get('action') or '').strip()[:100]
+    operator = (args.get('operator') or '').strip()[:80]
+    text_filter = (args.get('text') or args.get('q') or '').strip()[:200]
+    system = (args.get('system') or 'include').lower()
+    if system in ('true', '1'):
+        system = 'only'
+    elif system in ('false', '0'):
+        system = 'exclude'
+    if system not in ('include', 'only', 'exclude'):
+        system = 'include'
+    date_from_value = args.get('date_from') or args.get('start_date') or ''
+    date_to_value = args.get('date_to') or args.get('end_date') or ''
+    date_from = _parse_audit_date(date_from_value)
+    date_to = _parse_audit_date(date_to_value, end=True)
+    cursor = _parse_audit_cursor(args.get('cursor'))
+
+    query = AuditLog.query.outerjoin(User, AuditLog.user_id == User.id)
+    if action:
+        query = query.filter(AuditLog.action.contains(action, autoescape=True))
+    if operator.lower() == 'system':
+        query = query.filter(AuditLog.user_id.is_(None))
+    elif operator:
+        query = query.filter(User.username.contains(operator, autoescape=True))
+    if system == 'only':
+        query = query.filter(AuditLog.user_id.is_(None))
+    elif system == 'exclude':
+        query = query.filter(AuditLog.user_id.is_not(None))
+    if text_filter:
+        query = query.filter(or_(
+            AuditLog.action.contains(text_filter, autoescape=True),
+            AuditLog.details.contains(text_filter, autoescape=True),
+            AuditLog.ip_address.contains(text_filter, autoescape=True),
+            User.username.contains(text_filter, autoescape=True),
+        ))
+    if date_from:
+        query = query.filter(AuditLog.timestamp >= date_from)
+    if date_to:
+        query = query.filter(AuditLog.timestamp <= date_to)
+
+    total_count = query.count()
+    if cursor:
+        cursor_timestamp, cursor_id = cursor
+        query = query.filter(or_(
+            AuditLog.timestamp < cursor_timestamp,
+            and_(AuditLog.timestamp == cursor_timestamp, AuditLog.id < cursor_id),
+        ))
+    query = query.order_by(AuditLog.timestamp.desc(), AuditLog.id.desc())
+    if not cursor:
+        query = query.offset(offset)
+    results = query.limit(limit + 1).all()
+    has_more = len(results) > limit
+    logs = results[:limit]
+    next_cursor = None
+    if has_more and logs and logs[-1].timestamp:
+        next_cursor = {
+            'timestamp': logs[-1].timestamp.isoformat(),
+            'id': logs[-1].id,
+        }
+    return {
+        'logs': logs,
+        'has_more': has_more and next_cursor is not None,
+        'total_count': total_count,
+        'next_cursor': next_cursor,
+        'offset': offset,
+        'limit': limit,
+        'filters': {
+            'action': action,
+            'operator': operator,
+            'text': text_filter,
+            'system': system,
+            'date_from': date_from_value if date_from else '',
+            'date_to': date_to_value if date_to else '',
+        },
+    }
+
+
+def _secure_audit_response(response):
+    response.headers['Cache-Control'] = 'no-store, max-age=0'
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    return response
+
+
 @app.route('/api/audit-logs')
 @admin_required
 def api_audit_logs():
-    offset = int(request.args.get('offset', 0))
-    limit = int(request.args.get('limit', 25))
-    
-    query = AuditLog.query.order_by(AuditLog.timestamp.desc())
-    total_count = query.count()
-    logs = query.offset(offset).limit(limit).all()
-    has_more = (offset + len(logs)) < total_count
-    
-    logs_data = []
-    for log in logs:
-        logs_data.append({
-            'id': log.id,
-            'action': log.action,
-            'details': log.details,
-            'user_id': log.user_id,
-            'username': log.user.username if log.user else 'system',
-            'ip_address': log.ip_address,
-            'timestamp': log.timestamp.isoformat() if log.timestamp else None
-        })
-    
-    return jsonify({
-        'logs': logs_data,
-        'has_more': has_more,
-        'total_count': total_count
+    page = _audit_page(request.args)
+    response = jsonify({
+        'logs': [log.to_dict() for log in page['logs']],
+        'has_more': page['has_more'],
+        'total_count': page['total_count'],
+        'next_cursor': page['next_cursor'],
     })
+    return _secure_audit_response(response)
 
 
 @app.route('/login', methods=['GET', 'POST'])
@@ -1011,13 +1287,13 @@ def login():
                 user.update_login()
                 db.session.commit()
                 
-                log_audit('login', f'User logged in')
+                log_audit('login', 'User logged in')
                 
                 if user.must_change_password:
                     flash('Please change your password.', 'warning')
                     return redirect(url_for('change_password_route', user_id=user.id))
                 
-                next_page = request.args.get('next')
+                next_page = _safe_login_next(request.args.get('next'))
                 flash(f'Welcome back, {user.username}!', 'success')
                 return redirect(next_page) if next_page else redirect(url_for('index'))
         
@@ -1038,10 +1314,22 @@ def login():
     return render_template('login.html', form=form)
 
 
+def _safe_login_next(candidate):
+    """Return a local absolute-path redirect target, or None when unsafe."""
+    if not candidate or not candidate.startswith('/') or candidate.startswith('//'):
+        return None
+    if '\\' in candidate or any(ord(character) < 32 for character in candidate):
+        return None
+    parsed = urlsplit(candidate)
+    if parsed.scheme or parsed.netloc:
+        return None
+    return candidate
+
+
 @app.route('/logout', methods=['POST'])
 @login_required
 def logout():
-    log_audit('logout', f'User logged out')
+    log_audit('logout', 'User logged out')
     logout_user()
     flash('You have been logged out.', 'info')
     return redirect(url_for('login'))
@@ -1059,6 +1347,7 @@ def register():
     form = RegisterForm()
     if form.validate_on_submit():
         if Config.REGISTRATION_TOKEN and form.registration_token.data != Config.REGISTRATION_TOKEN:
+            form.registration_token.errors.append('Invalid registration token.')
             flash('Invalid registration token.', 'danger')
             log_audit('register_failed', f'Invalid token attempt for user {form.username.data}')
             return render_template('register.html', form=form)
@@ -1351,7 +1640,7 @@ def events_delete():
                 filter_obj = validate_filter_json(form.filter_json.data)
                 if not filter_obj:
                     raise ValueError('Empty filters are not allowed for deletion.')
-                result = delete_events(filter_obj)
+                delete_events(filter_obj)
                 success = 'Events deleted successfully'
                 log_audit('event_delete', f'Deleted events matching: {form.filter_json.data}')
             except (ValueError, StrfryError) as e:
@@ -1394,7 +1683,7 @@ def import_export():
         elif 'import_submit' in request.form and import_form.validate():
             try:
                 verify = import_form.no_verify.data != 'true'
-                result = import_events(import_form.file.data, verify=verify)
+                import_events(import_form.file.data, verify=verify)
                 import_success = 'Events imported successfully'
                 log_audit('import', f'Imported events (verify={verify})')
             except StrfryError as e:
@@ -1536,69 +1825,160 @@ def db_management():
     )
 
 
-@app.route('/config', methods=['GET', 'POST'])
+def _redacted_configuration(value, key=''):
+    sensitive_markers = ('password', 'secret', 'token', 'credential', 'private')
+    if any(marker in key.lower() for marker in sensitive_markers):
+        return '[redacted]'
+    if isinstance(value, dict):
+        return {item_key: _redacted_configuration(item, item_key) for item_key, item in value.items()}
+    return value
+
+
+def _configuration_page(info_form, network_form, status_code=200):
+    snapshot = _safe_config_snapshot()
+    if snapshot.revision is None:
+        config_status = 'error'
+    elif snapshot.writable:
+        config_status = 'writable'
+    else:
+        config_status = 'read-only'
+    return render_template(
+        'config.html',
+        info_form=info_form,
+        network_form=network_form,
+        config_status=config_status,
+        current_config=_redacted_configuration(snapshot.values),
+    ), status_code
+
+
+def _audit_config_update(outcome, section, fields):
+    details = f"section={section}; fields={','.join(sorted(fields))}"
+    log_audit(f'config_update_{outcome}', details)
+
+
+def _configuration_forms():
+    snapshot = _safe_config_snapshot()
+    relay = snapshot.values.get('relay', {})
+    relay_info = relay.get('info', {})
+    return (
+        RelayInfoForm(formdata=None, data={
+            'config_revision': snapshot.revision or '',
+            'relay_name': relay_info.get('name', ''),
+            'relay_description': relay_info.get('description', ''),
+            'relay_pubkey': relay_info.get('pubkey', ''),
+            'relay_contact': relay_info.get('contact', ''),
+        }),
+        RelayNetworkForm(formdata=None, data={
+            'config_revision': snapshot.revision or '',
+            'relay_bind': relay.get('bind', ''),
+            'relay_port': relay.get('port'),
+        }),
+    )
+
+
+@app.route('/config', methods=['GET'])
 @permission_required('config')
 def config_view():
-    form = ConfigForm()
-    error = None
-    success = None
-    
-    current_config = get_config()
-    
-    if request.method == 'POST':
-        updates = {}
-        
-        if form.relay_name.data:
-            updates['relay.info.name'] = form.relay_name.data
-        if form.relay_description.data:
-            updates['relay.info.description'] = form.relay_description.data
-        if form.relay_pubkey.data:
-            updates['relay.info.pubkey'] = form.relay_pubkey.data
-        if form.relay_contact.data:
-            updates['relay.info.contact'] = form.relay_contact.data
-        if form.relay_bind.data:
-            updates['relay.bind'] = form.relay_bind.data
-        if form.relay_port.data:
-            updates['relay.port'] = form.relay_port.data
-        
-        if updates:
-            try:
-                update_config(updates)
-                success = 'Configuration updated successfully. Some changes may require strfry restart.'
-                log_audit('config_update', f'Updated config: {list(updates.keys())}')
-                current_config = get_config()
-            except Exception as e:
-                error = str(e)
-    
-    if current_config:
-        if 'relay' in current_config and 'info' in current_config['relay']:
-            relay_info = current_config['relay'].get('info', {})
-            form.relay_name.data = relay_info.get('name', '')
-            form.relay_description.data = relay_info.get('description', '')
-            form.relay_pubkey.data = relay_info.get('pubkey', '')
-            form.relay_contact.data = relay_info.get('contact', '')
-        
-        if 'relay' in current_config:
-            relay_config = current_config['relay']
-            form.relay_bind.data = relay_config.get('bind', '')
-            form.relay_port.data = relay_config.get('port', '')
-    
-    return render_template('config.html', form=form, current_config=current_config, error=error, success=success)
+    info_form, network_form = _configuration_forms()
+    return _configuration_page(info_form, network_form)
 
 
-@app.route('/plugins', methods=['GET', 'POST'])
-@admin_required
-def plugins():
-    form = PluginForm()
-    wot_form = WoTPolicyForm()
-    error = None
-    success = None
+def _configuration_update(form, section, fields, make_updates):
+    _audit_config_update('requested', section, fields)
+    if not form.validate_on_submit():
+        _audit_config_update('failed', section, fields)
+        return False, 422
+    try:
+        _safe_config_snapshot().write(
+            make_updates(),
+            expected_revision=form.config_revision.data,
+        )
+    except RevisionConflict:
+        _audit_config_update('conflict', section, fields)
+        form.config_revision.errors.append('Configuration changed. Reload before saving.')
+        return False, 422
+    except ConfigurationBusy:
+        _audit_config_update('failed', section, fields)
+        form.config_revision.errors.append('Configuration is busy. Try again shortly.')
+        return False, 422
+    except (ConfigurationError, KeyError, OSError):
+        _audit_config_update('failed', section, fields)
+        form.config_revision.errors.append('Configuration could not be saved safely.')
+        return False, 422
+    _audit_config_update('completed', section, fields)
+    flash('Configuration updated. Some changes may require a strfry restart.', 'success')
+    return True, 303
 
-    current_config = get_config()
-    write_policy = current_config.get('relay', {}).get('writePolicy', {}) if current_config else {}
 
-    plugin_path = app.config['BLOCKLIST_PLUGIN_PATH']
-    plugin_installed = os.path.exists(plugin_path) and os.access(plugin_path, os.X_OK)
+@app.route('/config/relay-info', methods=['POST'])
+@permission_required('config')
+def update_relay_info():
+    form = RelayInfoForm()
+    fields = (
+        'relay.info.name',
+        'relay.info.description',
+        'relay.info.pubkey',
+        'relay.info.contact',
+    )
+    success, status_code = _configuration_update(form, 'relay-info', fields, lambda: {
+        'relay.info.name': form.relay_name.data or '',
+        'relay.info.description': form.relay_description.data or '',
+        'relay.info.pubkey': form.relay_pubkey.data or '',
+        'relay.info.contact': form.relay_contact.data or '',
+    })
+    if success:
+        return redirect(url_for('config_view'), code=status_code)
+    _info_form, network_form = _configuration_forms()
+    return _configuration_page(form, network_form, status_code)
+
+
+@app.route('/config/network', methods=['POST'])
+@permission_required('config')
+def update_relay_network():
+    form = RelayNetworkForm()
+    fields = ('relay.bind', 'relay.port')
+    success, status_code = _configuration_update(form, 'network', fields, lambda: {
+        'relay.bind': form.relay_bind.data or '',
+        'relay.port': form.relay_port.data,
+    })
+    if success:
+        return redirect(url_for('config_view'), code=status_code)
+    info_form, _network_form = _configuration_forms()
+    return _configuration_page(info_form, form, status_code)
+
+
+def _write_policy_updates(plugin_path, timeout, lookback):
+    """Validate write-policy values independently of the HTTP form."""
+    if not _executable_plugin_path(plugin_path):
+        raise ConfigurationError(
+            'relay.writePolicy.plugin must be empty or an absolute executable file path'
+        )
+    if isinstance(timeout, bool) or not isinstance(timeout, int) or not 1 <= timeout <= 60:
+        raise ConfigurationError('relay.writePolicy.timeoutSeconds must be between 1 and 60')
+    if isinstance(lookback, bool) or not isinstance(lookback, int) or not 0 <= lookback <= 3600:
+        raise ConfigurationError('relay.writePolicy.lookbackSeconds must be between 0 and 3600')
+    return {
+        'relay.writePolicy.plugin': plugin_path,
+        'relay.writePolicy.timeoutSeconds': timeout,
+        'relay.writePolicy.lookbackSeconds': lookback,
+    }
+
+
+def _plugins_page(plugin_form=None, wot_form=None, status_code=200):
+    snapshot = _safe_config_snapshot()
+    write_policy = snapshot.values.get('relay', {}).get('writePolicy', {})
+    configured_path = write_policy.get('plugin', '')
+    if not isinstance(configured_path, str):
+        configured_path = ''
+    bundled_path = app.config['BLOCKLIST_PLUGIN_PATH']
+    bundled_installed = _executable_plugin_path(bundled_path) and bool(bundled_path)
+    configured_executable = _executable_plugin_path(configured_path) and bool(configured_path)
+    configuration_kind = (
+        'disabled' if not configured_path
+        else 'bundled' if configured_path == bundled_path
+        else 'custom'
+    )
+
     blocklist_count = BannedPubkey.query.count()
     projection = ModerationDecisions.initialize_projection()
     wot_policy, wot_state = initialize_wot()
@@ -1609,50 +1989,128 @@ def plugins():
             wot_stats = {}
     except (OSError, json.JSONDecodeError):
         wot_stats = {}
+    stats_updated_at = wot_stats.get('updated_at')
+    telemetry_recent = (
+        isinstance(stats_updated_at, (int, float))
+        and not isinstance(stats_updated_at, bool)
+        and 0 <= time.time() - stats_updated_at <= 120
+    )
 
-    if request.method == 'POST':
-        if form.validate():
-            updates = {}
-            updates['relay.writePolicy.plugin'] = form.plugin_path.data or ''
-            if form.timeout.data is not None:
-                updates['relay.writePolicy.timeoutSeconds'] = str(form.timeout.data)
-            if form.lookback.data is not None:
-                updates['relay.writePolicy.lookbackSeconds'] = str(form.lookback.data)
+    if plugin_form is None:
+        plugin_form = PluginForm(formdata=None, data={
+            'config_revision': snapshot.revision or '',
+            'plugin_path': configured_path,
+            'timeout': write_policy.get('timeoutSeconds', 10),
+            'lookback': write_policy.get('lookbackSeconds', 0),
+        })
+    if wot_form is None:
+        wot_form = WoTPolicyForm(formdata=None, data={
+            'policy_revision': policy_fingerprint(wot_policy),
+            'mode': wot_policy.mode,
+            'root_npubs': '\n'.join(wot_policy.roots),
+            'trust_threshold': wot_policy.trust_threshold,
+            'pow_difficulty': wot_policy.pow_difficulty,
+            'require_pow_commitment': wot_policy.require_pow_commitment,
+            'refresh_interval_minutes': wot_policy.refresh_interval_minutes,
+            'rate_limit_per_minute': wot_policy.rate_limit_per_minute,
+            'rate_limit_burst': wot_policy.rate_limit_burst,
+        })
 
-            if updates:
-                try:
-                    update_config(updates)
-                    projection = ModerationDecisions.request_republication()
-                    success = 'Plugin configuration updated. Restart strfry to apply changes.'
-                    log_audit('plugin_update', f'Updated plugin config: {updates}')
-                    current_config = get_config()
-                    write_policy = current_config.get('relay', {}).get('writePolicy', {}) if current_config else {}
-                except (KeyError, OSError, ModerationError) as e:
-                    error = str(e)
+    attention = []
+    if not snapshot.writable:
+        attention.append('The strfry configuration is read-only or unavailable.')
+    if configured_path and not configured_executable:
+        attention.append('The configured plugin path is not currently executable.')
+    if projection.status == 'pending':
+        attention.append('The latest ban projection has not been published.')
+    if wot_state.status == 'failed':
+        attention.append('The latest web-of-trust graph build failed.')
+    if not telemetry_recent:
+        attention.append('Recent write-policy telemetry is unavailable or stale.')
 
-    if write_policy:
-        form.plugin_path.data = write_policy.get('plugin', '')
-        form.timeout.data = write_policy.get('timeoutSeconds', 10)
-        form.lookback.data = write_policy.get('lookbackSeconds', 0)
+    return render_template(
+        'plugins.html',
+        form=plugin_form,
+        config_snapshot=snapshot,
+        configured_path=configured_path,
+        configured_executable=configured_executable,
+        configuration_kind=configuration_kind,
+        bundled_path=bundled_path,
+        bundled_installed=bundled_installed,
+        restart_status='unknown',
+        blocklist_count=blocklist_count,
+        projection=projection,
+        wot_form=wot_form,
+        wot_policy=wot_policy,
+        wot_state=wot_state,
+        wot_stats=wot_stats,
+        telemetry_recent=telemetry_recent,
+        attention=attention,
+    ), status_code
+
+
+@app.route('/plugins', methods=['GET'])
+@admin_required
+def plugins():
+    return _plugins_page()
+
+
+@app.route('/plugins/write-policy', methods=['POST'])
+@admin_required
+def update_write_policy():
+    form = PluginForm()
+    snapshot = _safe_config_snapshot()
+    write_policy = snapshot.values.get('relay', {}).get('writePolicy', {})
+    old_path = write_policy.get('plugin', '')
+    if not isinstance(old_path, str):
+        old_path = ''
+
+    valid = form.validate_on_submit()
+    path_changed = valid and form.plugin_path.data != old_path
+    if path_changed and not form.confirm_plugin_change.data:
+        form.confirm_plugin_change.errors.append(
+            'Confirm this plugin path change before saving.'
+        )
+        valid = False
+    if not valid:
+        return _plugins_page(plugin_form=form, status_code=422)
+
+    fields = (
+        'relay.writePolicy.plugin',
+        'relay.writePolicy.timeoutSeconds',
+        'relay.writePolicy.lookbackSeconds',
+    )
+    _audit_config_update('requested', 'write-policy', fields)
+    try:
+        updates = _write_policy_updates(
+            form.plugin_path.data,
+            form.timeout.data,
+            form.lookback.data,
+        )
+        snapshot.write(updates, expected_revision=form.config_revision.data)
+    except RevisionConflict:
+        _audit_config_update('conflict', 'write-policy', fields)
+        form.config_revision.errors.append('Configuration changed. Reload before saving.')
+        return _plugins_page(plugin_form=form, status_code=422)
+    except ConfigurationBusy:
+        _audit_config_update('failed', 'write-policy', fields)
+        form.config_revision.errors.append('Configuration is busy. Try again shortly.')
+        return _plugins_page(plugin_form=form, status_code=422)
+    except (ConfigurationError, KeyError, OSError):
+        _audit_config_update('failed', 'write-policy', fields)
+        form.config_revision.errors.append('Configuration could not be saved safely.')
+        return _plugins_page(plugin_form=form, status_code=422)
+
+    _audit_config_update('completed', 'write-policy', fields)
+    try:
+        ModerationDecisions.request_republication()
+    except ModerationError:
+        flash('Configuration saved, but the ban projection could not be republished.', 'warning')
+    if path_changed:
+        flash('Write-policy configuration saved. Restart required to apply the plugin path change.', 'success')
     else:
-        form.plugin_path.data = plugin_path if plugin_installed else ''
-        form.timeout.data = 10
-        form.lookback.data = 0
-
-    wot_form.mode.data = wot_policy.mode
-    wot_form.root_npubs.data = '\n'.join(wot_policy.roots)
-    wot_form.trust_threshold.data = wot_policy.trust_threshold
-    wot_form.pow_difficulty.data = wot_policy.pow_difficulty
-    wot_form.require_pow_commitment.data = wot_policy.require_pow_commitment
-    wot_form.refresh_interval_minutes.data = wot_policy.refresh_interval_minutes
-    wot_form.rate_limit_per_minute.data = wot_policy.rate_limit_per_minute
-    wot_form.rate_limit_burst.data = wot_policy.rate_limit_burst
-
-    return render_template('plugins.html', form=form, error=error, success=success,
-                           plugin_installed=plugin_installed, blocklist_count=blocklist_count,
-                           plugin_path=plugin_path, projection=projection,
-                           wot_form=wot_form, wot_policy=wot_policy, wot_state=wot_state,
-                           wot_stats=wot_stats)
+        flash('Write-policy configuration saved. Runtime application status is unknown.', 'success')
+    return redirect(url_for('plugins'), code=303)
 
 
 @app.route('/plugins/wot', methods=['POST'])
@@ -1660,43 +2118,59 @@ def plugins():
 def update_wot_policy():
     form = WoTPolicyForm()
     if not form.validate_on_submit():
-        for errors in form.errors.values():
-            for message in errors:
-                flash(message, 'danger')
-        return redirect(url_for('plugins'))
+        return _plugins_page(wot_form=form, status_code=422)
 
     try:
         raw_roots = form.root_npubs.data.replace(',', '\n').splitlines()
         roots = normalize_roots(raw_roots)
         policy, _ = initialize_wot()
+        if form.mode.data == 'enforce' and not form.confirm_enforce.data:
+            form.confirm_enforce.errors.append(
+                'Confirm Enforce mode before publishing a policy that can reject events.'
+            )
+            return _plugins_page(wot_form=form, status_code=422)
         roots_changed = policy.roots != roots
-        policy.mode = form.mode.data
-        policy.root_npubs = json.dumps(roots)
-        policy.trust_threshold = form.trust_threshold.data
-        policy.pow_difficulty = form.pow_difficulty.data
-        policy.require_pow_commitment = form.require_pow_commitment.data
-        policy.refresh_interval_minutes = form.refresh_interval_minutes.data
-        policy.rate_limit_per_minute = form.rate_limit_per_minute.data
-        policy.rate_limit_burst = form.rate_limit_burst.data
-        commit_policy_settings(policy)
-        queued = queue_wot_rebuild() if policy.mode != 'off' else False
+        settings = {
+            'mode': form.mode.data,
+            'root_npubs': json.dumps(roots),
+            'trust_threshold': form.trust_threshold.data,
+            'pow_difficulty': form.pow_difficulty.data,
+            'require_pow_commitment': form.require_pow_commitment.data,
+            'refresh_interval_minutes': form.refresh_interval_minutes.data,
+            'rate_limit_per_minute': form.rate_limit_per_minute.data,
+            'rate_limit_burst': form.rate_limit_burst.data,
+        }
         log_audit(
             'wot_policy_updated',
-            f'Updated WoT policy mode={policy.mode}, threshold={policy.trust_threshold}, '
-            f'pow={policy.pow_difficulty}, roots={len(roots)}',
+            f'Updated WoT policy mode={settings["mode"]}, threshold={settings["trust_threshold"]}, '
+            f'pow={settings["pow_difficulty"]}, roots={len(roots)}',
+            commit=False,
+        )
+        commit_policy_settings(
+            policy,
+            expected_revision=form.policy_revision.data,
+            settings=settings,
         )
     except (OSError, SQLAlchemyError, WoTError, ValueError) as exc:
         db.session.rollback()
-        flash(str(exc), 'danger')
-        return redirect(url_for('plugins'))
+        form.root_npubs.errors.append(str(exc))
+        return _plugins_page(wot_form=form, status_code=422)
 
-    message = 'Web-of-trust policy published.'
+    queued = False
+    if settings['mode'] != 'off':
+        try:
+            queued = queue_wot_rebuild()
+        except SQLAlchemyError:
+            db.session.rollback()
+            flash('Policy saved, but the local graph rebuild could not be queued.', 'warning')
+
+    message = 'Web-of-trust policy artifact published. This does not prove active enforcement.'
     if queued:
         message += ' Local graph rebuild queued.'
     elif roots_changed:
         message += ' Roots changed; use Rebuild now after the active build finishes.'
     flash(message, 'success')
-    return redirect(url_for('plugins'))
+    return redirect(url_for('plugins'), code=303)
 
 
 @app.route('/plugins/wot/rebuild', methods=['POST'])
@@ -1716,15 +2190,10 @@ def rebuild_wot_policy():
 @app.route('/connections')
 @viewer_or_higher
 def connections():
-    config = get_config()
-    relay_name = (
-        config.get('relay', {}).get('info', {}).get('name', '')
-        if config else ''
-    )
     return render_template(
         'connections.html',
         connections=connection_summary(),
-        relay_name=relay_name,
+        relay_name=_relay_name(),
     )
 
 
@@ -1736,34 +2205,63 @@ def api_connections():
     return response
 
 
-@app.route('/admin', methods=['GET', 'POST'])
+@app.route('/admin')
 @admin_required
 def admin():
-    users = User.query.all()
-    audit_offset = int(request.args.get('audit_offset', 0))
-    audit_limit = int(request.args.get('audit_limit', 10))
-    
-    audit_query = AuditLog.query.order_by(AuditLog.timestamp.desc())
-    audit_logs = audit_query.offset(audit_offset).limit(audit_limit).all()
-    total_logs = audit_query.count()
-    audit_has_more = (audit_offset + len(audit_logs)) < total_logs
-    
-    banned_pubkeys = BannedPubkey.query.order_by(BannedPubkey.banned_at.desc()).all()
+    return redirect(url_for('admin_operators'))
+
+
+@app.route('/admin/operators')
+@admin_required
+def admin_operators():
+    users = User.query.order_by(User.username, User.id).all()
+    return render_template(
+        'admin_operators.html',
+        users=users,
+        create_user_form=AdminCreateUserForm(),
+    )
+
+
+@app.route('/admin/audit')
+@admin_required
+def admin_audit():
+    page = _audit_page(request.args)
+    response = make_response(render_template(
+        'admin_audit.html',
+        audit_logs=page['logs'],
+        audit_offset=page['offset'],
+        audit_limit=page['limit'],
+        audit_has_more=page['has_more'],
+        audit_total=page['total_count'],
+        next_cursor=page['next_cursor'],
+        audit_filters=page['filters'],
+    ))
+    return _secure_audit_response(response)
+
+
+@app.route('/admin/relays')
+@admin_required
+def admin_relays():
+    return render_template('admin_relays.html')
+
+
+@app.route('/admin/bans')
+@admin_required
+def admin_bans():
+    banned_pubkeys = (
+        BannedPubkey.query.options(
+            joinedload(BannedPubkey.sources).joinedload(PubkeyBanSource.banned_domain)
+        )
+        .order_by(BannedPubkey.banned_at.desc())
+        .all()
+    )
     banned_domains = BannedDomain.query.order_by(BannedDomain.banned_at.desc()).all()
     _attach_domain_source_counts(banned_domains)
-    
-    edit_forms = {}
-    for user in users:
-        edit_forms[user.id] = UserEditForm(
-            username=user.username,
-            role=user.role,
-            is_active='true' if user.is_active else 'false'
-        )
-    
-    create_user_form = AdminCreateUserForm()
-    change_password_form = ChangePasswordForm()
-    
-    return render_template('admin.html', users=users, audit_logs=audit_logs, edit_forms=edit_forms, create_user_form=create_user_form, change_password_form=change_password_form, banned_pubkeys=banned_pubkeys, banned_domains=banned_domains, audit_offset=audit_offset, audit_limit=audit_limit, audit_has_more=audit_has_more, audit_total=total_logs)
+    return render_template(
+        'admin_bans.html',
+        banned_pubkeys=banned_pubkeys,
+        banned_domains=banned_domains,
+    )
 
 
 @app.route('/moderation', methods=['GET', 'POST'])
@@ -1789,7 +2287,7 @@ def moderation():
     if event_id_filter:
         query = query.filter(ModerationReport.reported_event_id == event_id_filter)
     if not show_reviewed:
-        query = query.filter(ModerationReport.reviewed == False)
+        query = query.filter(ModerationReport.reviewed.is_(False))
     
     form = EmptyForm()
     domain_form = BannedDomainForm()
@@ -2004,7 +2502,7 @@ def moderation_domain_details(domain_id):
     banned_domain = db.session.get(BannedDomain, domain_id)
     if banned_domain is None:
         abort(404)
-    search = request.args.get('q', '').strip()
+    search = request.args.get('q', '').strip()[:256]
     page = max(1, request.args.get('page', 1, type=int) or 1)
     unresolved_page_number = max(
         1,
@@ -2041,7 +2539,7 @@ def moderation_domain_export(domain_id):
     banned_domain = db.session.get(BannedDomain, domain_id)
     if banned_domain is None:
         abort(404)
-    search = request.args.get('q', '').strip()
+    search = request.args.get('q', '').strip()[:256]
     identities = domain_identity_page(domain_id, search, limit=None)
     output = StringIO(newline='')
     writer = csv.writer(output)
@@ -2115,45 +2613,81 @@ def is_pubkey_banned(pubkey):
 
 @app.route('/admin/user/<int:user_id>/edit', methods=['POST'])
 @admin_required
+@_operator_mutation_lock()
 def edit_user(user_id):
     user = User.query.get_or_404(user_id)
     form = UserEditForm()
     
     if form.validate_on_submit():
+        requested_active = form.is_active.data == 'true'
+        if user.id == current_user.id and (
+            form.role.data != 'admin' or not requested_active
+        ):
+            flash('You cannot demote or deactivate your own account.', 'danger')
+            return redirect(url_for('admin_operators'))
+        removes_active_admin = (
+            user.role == 'admin'
+            and user.is_active
+            and (form.role.data != 'admin' or not requested_active)
+        )
+        if removes_active_admin and User.query.filter_by(role='admin', is_active=True).count() <= 1:
+            flash('At least one active admin account is required.', 'danger')
+            return redirect(url_for('admin_operators'))
         user.username = form.username.data
         user.role = form.role.data
-        user.is_active = form.is_active.data == 'true'
-        db.session.commit()
-        
-        log_audit('user_edit', f'Edited user {user_id}: username={user.username}, role={user.role}, active={user.is_active}')
-        flash(f'User {user.username} updated.', 'success')
+        user.is_active = requested_active
+        log_audit(
+            'user_edit',
+            f'Edited user {user_id}: username={user.username}, role={user.role}, active={user.is_active}',
+            commit=False,
+        )
+        try:
+            db.session.commit()
+            flash(f'User {user.username} updated.', 'success')
+        except IntegrityError:
+            db.session.rollback()
+            flash('Username already exists.', 'danger')
     else:
         flash('Failed to update user.', 'danger')
     
-    return redirect(url_for('admin'))
+    return redirect(url_for('admin_operators'))
 
 
 @app.route('/admin/user/<int:user_id>/delete', methods=['POST'])
 @admin_required
+@_operator_mutation_lock()
 def delete_user(user_id):
     if user_id == current_user.id:
         flash('You cannot delete your own account.', 'danger')
-        return redirect(url_for('admin'))
+        return redirect(url_for('admin_operators'))
     
     user = User.query.get_or_404(user_id)
+    if request.form.get('confirm_user_id') != str(user.id):
+        abort(400)
+    if (
+        user.role == 'admin'
+        and user.is_active
+        and User.query.filter_by(role='admin', is_active=True).count() <= 1
+    ):
+        flash('At least one active admin account is required.', 'danger')
+        return redirect(url_for('admin_operators'))
     username = user.username
     db.session.delete(user)
+    log_audit('user_delete', f'Deleted user {username}', commit=False)
     db.session.commit()
-    
-    log_audit('user_delete', f'Deleted user {username}')
     flash(f'User {username} deleted.', 'success')
     
-    return redirect(url_for('admin'))
+    return redirect(url_for('admin_operators'))
 
 
 @app.route('/admin/banned/<int:ban_id>/unban', methods=['POST'])
 @admin_required
 def unban_pubkey(ban_id):
+    ban = BannedPubkey.query.get_or_404(ban_id)
+    if not EmptyForm().validate_on_submit():
+        abort(400)
+    if request.form.get('confirm_pubkey') != ban.pubkey:
+        abort(400)
     try:
         outcome = moderation_decisions().unban(ban_id)
         message = (
@@ -2165,13 +2699,16 @@ def unban_pubkey(ban_id):
     except ModerationError as e:
         flash(str(e), 'danger')
     
-    return redirect(url_for('admin'))
+    return redirect(url_for('admin_bans'))
 
 
 @app.route('/admin/banned-domain/<int:domain_id>/delete', methods=['POST'])
 @admin_required
 def delete_banned_domain(domain_id):
+    banned_domain = BannedDomain.query.get_or_404(domain_id)
     if not EmptyForm().validate_on_submit():
+        abort(400)
+    if request.form.get('confirm_domain') != banned_domain.domain:
         abort(400)
     try:
         outcome = moderation_decisions().unban_domain(domain_id)
@@ -2186,11 +2723,12 @@ def delete_banned_domain(domain_id):
             flash(warning, 'warning')
     except ModerationError as e:
         flash(str(e), 'danger')
-    return redirect(url_for('admin'))
+    return redirect(url_for('admin_bans'))
 
 
 @app.route('/admin/user', methods=['POST'])
 @admin_required
+@_operator_mutation_lock()
 def create_user():
     form = AdminCreateUserForm()
     if form.validate_on_submit():
@@ -2202,24 +2740,25 @@ def create_user():
         user.set_password(form.password.data)
         
         db.session.add(user)
+        log_audit(
+            'user_create',
+            f'Created user {user.username} as {user.role}',
+            commit=False,
+        )
         try:
             db.session.commit()
-            log_audit('user_create', f'Created user {user.username} as {user.role}')
             flash(f'User {user.username} created.', 'success')
-        except Exception as e:
+        except IntegrityError:
             db.session.rollback()
-            if 'UNIQUE constraint' in str(e) or 'duplicate' in str(e).lower():
-                flash('Username already exists.', 'danger')
-            else:
-                flash('Failed to create user.', 'danger')
+            flash('Username already exists.', 'danger')
     else:
         flash('Failed to create user. Check username and password requirements.', 'danger')
     
-    return redirect(url_for('admin'))
+    return redirect(url_for('admin_operators'))
 
 
 @app.route('/change-password/<int:user_id>', methods=['GET', 'POST'])
-@login_required
+@viewer_or_higher
 def change_password_route(user_id):
     if current_user.id != user_id and current_user.role != 'admin':
         abort(403)
@@ -2230,39 +2769,57 @@ def change_password_route(user_id):
     if form.validate_on_submit():
         user.set_password(form.password.data)
         user.must_change_password = False
+        log_audit('password_change', f'Password changed for {user.username}', commit=False)
         db.session.commit()
-        log_audit('password_change', f'Password changed for {user.username}')
         
         if current_user.id == user_id:
             flash('Password changed successfully.', 'success')
             return redirect(url_for('index'))
         else:
             flash(f'Password for {user.username} changed.', 'success')
-            return redirect(url_for('admin'))
+            return redirect(url_for('admin_operators'))
     
+    if request.method == 'POST' and current_user.id != user_id:
+        flash('Password was not changed. Check the password requirements.', 'danger')
+        return redirect(url_for('admin_operators'))
     return render_template('change_password.html', form=form, user=user)
 
 
 @app.errorhandler(404)
 def not_found_error(error):
-    return render_template('error.html', error='404 - Page Not Found'), 404
+    return _error_response(
+        404,
+        'Page not found',
+        'The requested page does not exist or may have moved.',
+    )
 
 
 @app.errorhandler(500)
 def internal_error(error):
     db.session.rollback()
-    return render_template('error.html', error='500 - Internal Server Error'), 500
+    return _error_response(
+        500,
+        'Internal server error',
+        'The request could not be completed. Please try again.',
+    )
+
+
+def _error_response(status_code, title, message):
+    authenticated = current_user.is_authenticated
+    recovery_url = url_for('index') if authenticated else url_for('login')
+    recovery_label = 'Return to dashboard' if authenticated else 'Go to login'
+    return render_template(
+        'error.html',
+        status_code=status_code,
+        error_title=title,
+        error_message=message,
+        recovery_url=recovery_url,
+        recovery_label=recovery_label,
+    ), status_code
 
 
 def init_db():
     with app.app_context():
-        from models import (
-            ModerationReport,
-            BannedPubkey,
-            BannedDomain,
-            MetadataRelay,
-            PubkeyBanSource,
-        )
         db.create_all()
         
         from sqlalchemy import text
@@ -2294,14 +2851,9 @@ def init_db():
                 'ON pubkey_ban_sources (banned_domain_id, id)'
             ))
             ensure_moderation_report_indexes(conn)
+            ensure_audit_log_indexes(conn)
             conn.commit()
-            
-            try:
-                conn.execute(text("SELECT 1 FROM metadata_relays LIMIT 1"))
-            except:
-                conn.execute(text("CREATE TABLE IF NOT EXISTS metadata_relays (id INTEGER PRIMARY KEY, url TEXT UNIQUE NOT NULL, enabled BOOLEAN DEFAULT 1, is_default BOOLEAN DEFAULT 0, last_status TEXT DEFAULT 'unknown', last_tested TIMESTAMP)"))
-                conn.commit()
-        
+
         if MetadataRelay.query.count() == 0:
             default_relays = [
                 'wss://relay.damus.io',

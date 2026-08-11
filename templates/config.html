@@ -2,100 +2,115 @@
 
 {% block title %}Configuration{% if relay_name %} - {{ relay_name }}{% endif %} - StrfryGUI{% endblock %}
 
+{% macro errors(field) %}
+{% if field.errors %}
+<div class="invalid-feedback d-block">
+    {% for error in field.errors %}<div>{{ error }}</div>{% endfor %}
+</div>
+{% endif %}
+{% endmacro %}
+
 {% block content %}
-<h2 class="mb-4"><i class="bi bi-gear"></i>{% if relay_name %} Configuration for {{ relay_name }}{% else %} Relay Configuration{% endif %}</h2>
+<div class="configuration-shell dashboard-shell">
+    <header class="configuration-header">
+        <div>
+            <div class="dashboard-kicker">Operations console</div>
+            <h1 class="dashboard-title mb-1">Relay configuration</h1>
+            <p class="text-body-secondary mb-0">Manage public identity and listener settings with revision-safe writes.</p>
+        </div>
+        <div class="configuration-status" data-status="{{ config_status }}" role="status">
+            <span class="configuration-status-dot"></span>
+            {% if config_status == 'writable' %}Writable{% elif config_status == 'read-only' %}Read-only{% else %}Unavailable{% endif %}
+        </div>
+    </header>
 
-{% if error %}
-<div class="alert alert-danger">
-    <h5>Error</h5>
-    <p>{{ error }}</p>
-</div>
-{% endif %}
+    {% if config_status == 'read-only' %}
+    <div class="alert alert-warning mt-4" role="alert">The configuration can be inspected but cannot be safely changed.</div>
+    {% elif config_status == 'error' %}
+    <div class="alert alert-danger mt-4" role="alert">The configuration is unavailable. Check the configured file and application logs.</div>
+    {% endif %}
 
-{% if success %}
-<div class="alert alert-success">
-    <h5>Success</h5>
-    <p>{{ success }}</p>
-</div>
-{% endif %}
-
-<div class="card mb-4">
-    <div class="card-header">
-        <h5 class="mb-0">Relay Info (NIP-11)</h5>
-    </div>
-    <div class="card-body">
-        <form method="POST">
-            {{ form.hidden_tag() }}
-            <div class="row">
-                <div class="col-md-6 mb-3">
-                    {{ form.relay_name.label(class="form-label") }}
-                    {{ form.relay_name(class="form-control", placeholder="My Nostr Relay") }}
+    <div class="configuration-grid mt-4">
+        <section class="dashboard-panel configuration-panel">
+            <div class="configuration-panel-heading">
+                <div>
+                    <span class="dashboard-section-label">Public identity</span>
+                    <h2 class="h5 mb-1">Relay info</h2>
+                    <p class="text-body-secondary small mb-0">NIP-11 metadata shown to relay clients.</p>
                 </div>
-                <div class="col-md-6 mb-3">
-                    {{ form.relay_description.label(class="form-label") }}
-                    {{ form.relay_description(class="form-control", placeholder="A nostr relay") }}
-                </div>
+                <i class="bi bi-broadcast-pin"></i>
             </div>
-            <div class="row">
-                <div class="col-md-6 mb-3">
-                    {{ form.relay_pubkey.label(class="form-label") }}
-                    {{ form.relay_pubkey(class="form-control", placeholder="npub...") }}
+            <form method="post" action="{{ url_for('update_relay_info') }}" novalidate>
+                {{ info_form.hidden_tag() }}
+                {{ errors(info_form.config_revision) }}
+                <div class="configuration-fields">
+                    <div>
+                        {{ info_form.relay_name.label(class="form-label") }}
+                        {{ info_form.relay_name(class="form-control" + (" is-invalid" if info_form.relay_name.errors else ""), maxlength="100", disabled=config_status != 'writable') }}
+                        {{ errors(info_form.relay_name) }}
+                    </div>
+                    <div>
+                        {{ info_form.relay_contact.label(class="form-label") }}
+                        {{ info_form.relay_contact(class="form-control" + (" is-invalid" if info_form.relay_contact.errors else ""), maxlength="320", placeholder="mailto:admin@example.com", disabled=config_status != 'writable') }}
+                        {{ errors(info_form.relay_contact) }}
+                    </div>
+                    <div class="configuration-field-wide">
+                        {{ info_form.relay_description.label(class="form-label") }}
+                        {{ info_form.relay_description(class="form-control" + (" is-invalid" if info_form.relay_description.errors else ""), maxlength="1000", rows="4", disabled=config_status != 'writable') }}
+                        {{ errors(info_form.relay_description) }}
+                    </div>
+                    <div class="configuration-field-wide">
+                        {{ info_form.relay_pubkey.label(class="form-label") }}
+                        {{ info_form.relay_pubkey(class="form-control font-monospace" + (" is-invalid" if info_form.relay_pubkey.errors else ""), maxlength="128", placeholder="npub1... or 64-character hex", disabled=config_status != 'writable') }}
+                        {{ errors(info_form.relay_pubkey) }}
+                    </div>
                 </div>
-                <div class="col-md-6 mb-3">
-                    {{ form.relay_contact.label(class="form-label") }}
-                    {{ form.relay_contact(class="form-control", placeholder="mailto:admin@example.com") }}
+                <div class="operations-action-bar mt-4">
+                    <small class="text-body-secondary">Empty fields clear their current values.</small>
+                    <button class="btn btn-primary" type="submit" {% if config_status != 'writable' %}disabled{% endif %}><i class="bi bi-save me-1"></i> Save relay info</button>
                 </div>
+            </form>
+        </section>
+
+        <section class="dashboard-panel configuration-panel">
+            <div class="configuration-panel-heading">
+                <div>
+                    <span class="dashboard-section-label">Listener</span>
+                    <h2 class="h5 mb-1">Network</h2>
+                    <p class="text-body-secondary small mb-0">Address and port used by the relay process.</p>
+                </div>
+                <i class="bi bi-ethernet"></i>
             </div>
-            <button type="submit" class="btn btn-primary">
-                <i class="bi bi-save"></i> Save Changes
-            </button>
-        </form>
-    </div>
-</div>
-
-<div class="card mb-4">
-    <div class="card-header">
-        <h5 class="mb-0">Network Settings</h5>
-    </div>
-    <div class="card-body">
-        <form method="POST">
-            {{ form.hidden_tag() }}
-            <div class="row">
-                <div class="col-md-6 mb-3">
-                    {{ form.relay_bind.label(class="form-label") }}
-                    {{ form.relay_bind(class="form-control", placeholder="0.0.0.0") }}
-                    <div class="form-text">Use 0.0.0.0 for external connections, 127.0.0.1 for localhost only</div>
+            <form method="post" action="{{ url_for('update_relay_network') }}" novalidate>
+                {{ network_form.hidden_tag() }}
+                {{ errors(network_form.config_revision) }}
+                <div class="configuration-fields configuration-network-fields">
+                    <div>
+                        {{ network_form.relay_bind.label(class="form-label") }}
+                        {{ network_form.relay_bind(class="form-control font-monospace" + (" is-invalid" if network_form.relay_bind.errors else ""), maxlength="45", placeholder="0.0.0.0", disabled=config_status != 'writable') }}
+                        {{ errors(network_form.relay_bind) }}
+                        <div class="form-text">Use 0.0.0.0 for all IPv4 interfaces or 127.0.0.1 for localhost.</div>
+                    </div>
+                    <div>
+                        {{ network_form.relay_port.label(class="form-label") }}
+                        {{ network_form.relay_port(class="form-control font-monospace" + (" is-invalid" if network_form.relay_port.errors else ""), min="1", max="65535", disabled=config_status != 'writable') }}
+                        {{ errors(network_form.relay_port) }}
+                    </div>
                 </div>
-                <div class="col-md-6 mb-3">
-                    {{ form.relay_port.label(class="form-label") }}
-                    {{ form.relay_port(class="form-control", placeholder="7777") }}
+                <div class="operations-action-bar mt-4">
+                    <small class="text-body-secondary">A process restart may be required.</small>
+                    <button class="btn btn-primary" type="submit" {% if config_status != 'writable' %}disabled{% endif %}><i class="bi bi-save me-1"></i> Save network</button>
                 </div>
-            </div>
-            <button type="submit" class="btn btn-primary">
-                <i class="bi bi-save"></i> Save Changes
-            </button>
-        </form>
+            </form>
+        </section>
     </div>
+
+    <details class="dashboard-panel configuration-current mt-4">
+        <summary>
+            <span><span class="dashboard-section-label">Read-only view</span><strong>Current parsed configuration</strong></span>
+            <span class="text-body-secondary small">Sensitive values are redacted</span>
+        </summary>
+        <pre class="mt-3 mb-0 bg-body-tertiary"><code>{{ current_config | tojson(indent=2) }}</code></pre>
+    </details>
 </div>
-
-{%- macro section(key, config, indent) %}{{ '    ' * indent }}{{ key }} {
-{% for k, v in config.items() %}{% if v is mapping %}{{ section(k, v, indent + 1) }}{% else %}{{ '    ' * (indent + 1) }}{{ k }} = "{{ v }}"
-{% endif %}{% endfor -%}
-{{ '    ' * indent }}}
-{% endmacro -%}
-
-{%- macro render_config(config) %}{% for key, value in config.items() %}{% if value is mapping %}{{ section(key, value, 0) }}{% else %}{{ key }} = "{{ value }}"
-{% endif %}{% endfor -%}
-{% endmacro -%}
-
-{% if current_config %}
-<div class="card">
-    <div class="card-header">
-        <h5 class="mb-0">Current Configuration</h5>
-    </div>
-    <div class="card-body">
-        <pre class="p-3 bg-body-secondary">{{ render_config(current_config) }}</pre>
-    </div>
-</div>
-{% endif %}
 {% endblock %}

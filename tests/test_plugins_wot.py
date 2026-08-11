@@ -1,21 +1,26 @@
 import importlib
 import json
+import time
 from datetime import timedelta
 
 from config import Config
 from models import ModerationReport, User, WoTBuildState, WoTPolicy, db, utcnow
 from utils import moderation_reports
-from utils.wot import DEFAULT_ROOT_NPUBS
+from utils.configuration import load_configuration
+from utils.wot import DEFAULT_ROOT_NPUBS, policy_fingerprint
 
 
 def test_plugins_page_manages_and_publishes_wot_policy(monkeypatch, tmp_path):
     runtime_dir = tmp_path / 'runtime'
     runtime_dir.mkdir()
+    bundled_plugin = tmp_path / 'blocklist_plugin.py'
+    bundled_plugin.write_text('#!/bin/sh\nexit 0\n')
+    bundled_plugin.chmod(0o755)
     strfry_config = tmp_path / 'strfry.conf'
     strfry_config.write_text(
         'relay {\n'
         '    writePolicy {\n'
-        '        plugin = "/opt/strfrygui/utils/blocklist_plugin.py"\n'
+        f'        plugin = "{bundled_plugin}"\n'
         '        timeoutSeconds = "10"\n'
         '        lookbackSeconds = "0"\n'
         '    }\n'
@@ -28,6 +33,7 @@ def test_plugins_page_manages_and_publishes_wot_policy(monkeypatch, tmp_path):
     )
     monkeypatch.setattr(Config, 'STRFRY_BINARY', '/bin/true')
     monkeypatch.setattr(Config, 'STRFRY_CONFIG', str(strfry_config))
+    monkeypatch.setattr(Config, 'BLOCKLIST_PLUGIN_PATH', str(bundled_plugin))
     monkeypatch.setattr(Config, 'BANNED_PUBKEYS_FILE', str(runtime_dir / 'blocklist.json'))
     monkeypatch.setattr(Config, 'TRUST_POLICY_FILE', str(runtime_dir / 'trust_policy.json'))
     monkeypatch.setattr(Config, 'LEGACY_TRUST_POLICY_FILE', str(tmp_path / 'trust_policy.json'))
@@ -72,8 +78,21 @@ def test_plugins_page_manages_and_publishes_wot_policy(monkeypatch, tmp_path):
         session['_user_id'] = str(admin_id)
         session['_fresh'] = True
 
+    (runtime_dir / 'trust_policy_stats.json').write_text(json.dumps({
+        'updated_at': int(time.time()),
+        'counters': {'accepted_monitor': 4},
+    }))
     page = client.get('/plugins')
+    assert b'Bundled executable' in page.data
+    assert b'Configured source' in page.data
+    assert b'Ban projection publication' in page.data
+    assert b'Recent telemetry' in page.data
+    assert b'not proof of active enforcement' in page.data
+    assert b'action="/plugins/write-policy"' in page.data
+    with flask_app.app_context():
+        policy_revision = policy_fingerprint(db.session.get(WoTPolicy, 1))
     response = client.post('/plugins/wot', data={
+        'policy_revision': policy_revision,
         'mode': 'monitor',
         'root_npubs': '\n'.join(DEFAULT_ROOT_NPUBS),
         'trust_threshold': '55',
@@ -86,7 +105,7 @@ def test_plugins_page_manages_and_publishes_wot_policy(monkeypatch, tmp_path):
 
     assert page.status_code == 200
     assert b'Web of Trust and Proof of Work' in page.data
-    assert response.status_code == 302
+    assert response.status_code == 303
     with flask_app.app_context():
         policy = db.session.get(WoTPolicy, 1)
         assert (policy.mode, policy.trust_threshold, policy.pow_difficulty) == (
@@ -94,13 +113,49 @@ def test_plugins_page_manages_and_publishes_wot_policy(monkeypatch, tmp_path):
             55,
             22,
         )
+        policy_revision = policy_fingerprint(policy)
     with open(Config.TRUST_POLICY_FILE) as policy_file:
         published = json.load(policy_file)
     assert published['mode'] == 'monitor'
     assert published['trust_threshold'] == 55
     assert published['pow_difficulty'] == 22
 
+    unconfirmed_enforce = client.post('/plugins/wot', data={
+        'policy_revision': policy_revision,
+        'mode': 'enforce',
+        'root_npubs': '\n'.join(DEFAULT_ROOT_NPUBS),
+        'trust_threshold': '55',
+        'pow_difficulty': '22',
+        'refresh_interval_minutes': '45',
+        'rate_limit_per_minute': '20',
+        'rate_limit_burst': '8',
+    })
+    assert unconfirmed_enforce.status_code == 422
+    assert b'Confirm Enforce mode' in unconfirmed_enforce.data
+    assert b'<option selected value="enforce">' in unconfirmed_enforce.data
+    with flask_app.app_context():
+        policy = db.session.get(WoTPolicy, 1)
+        assert policy.mode == 'monitor'
+        policy.pow_difficulty = 23
+        db.session.commit()
+
+    stale_wot = client.post('/plugins/wot', data={
+        'policy_revision': policy_revision,
+        'mode': 'monitor',
+        'root_npubs': '\n'.join(DEFAULT_ROOT_NPUBS),
+        'trust_threshold': '55',
+        'pow_difficulty': '22',
+        'refresh_interval_minutes': '45',
+        'rate_limit_per_minute': '20',
+        'rate_limit_burst': '8',
+    })
+    assert stale_wot.status_code == 422
+    assert b'Policy changed. Reload before saving.' in stale_wot.data
+    with flask_app.app_context():
+        policy_revision = policy_fingerprint(db.session.get(WoTPolicy, 1))
+
     zero_response = client.post('/plugins/wot', data={
+        'policy_revision': policy_revision,
         'mode': 'off',
         'root_npubs': '\n'.join(DEFAULT_ROOT_NPUBS),
         'trust_threshold': '0',
@@ -109,7 +164,7 @@ def test_plugins_page_manages_and_publishes_wot_policy(monkeypatch, tmp_path):
         'rate_limit_per_minute': '0',
         'rate_limit_burst': '0',
     })
-    assert zero_response.status_code == 302
+    assert zero_response.status_code == 303
     with flask_app.app_context():
         policy = db.session.get(WoTPolicy, 1)
         assert (
@@ -128,12 +183,80 @@ def test_plugins_page_manages_and_publishes_wot_policy(monkeypatch, tmp_path):
         state.generated_at = utcnow() - timedelta(minutes=31)
         assert app_module._wot_refresh_due(policy, state) is True
 
-    disable_response = client.post('/plugins', data={
-        'plugin_path': '',
+    assert client.post('/plugins', data={}).status_code == 405
+    config_revision = load_configuration(strfry_config).revision
+    invalid_path = client.post('/plugins/write-policy', data={
+        'config_revision': config_revision,
+        'plugin_path': 'relative-plugin',
         'timeout': '10',
         'lookback': '0',
     })
-    assert disable_response.status_code == 200
+    assert invalid_path.status_code == 422
+    assert b'relative-plugin' in invalid_path.data
+    assert b'absolute executable file path' in invalid_path.data
+    invalid_timeout = client.post('/plugins/write-policy', data={
+        'config_revision': config_revision,
+        'plugin_path': str(bundled_plugin),
+        'timeout': '61',
+        'lookback': '0',
+    })
+    assert invalid_timeout.status_code == 422
+    assert b'Number must be between 1 and 60' in invalid_timeout.data
+
+    custom_plugin = tmp_path / 'custom-policy'
+    custom_plugin.write_text('#!/bin/sh\nexit 0\n')
+    custom_plugin.chmod(0o755)
+    unconfirmed_path = client.post('/plugins/write-policy', data={
+        'config_revision': config_revision,
+        'plugin_path': str(custom_plugin),
+        'timeout': '10',
+        'lookback': '0',
+    })
+    assert unconfirmed_path.status_code == 422
+    assert b'Confirm this plugin path change' in unconfirmed_path.data
+    changed_path = client.post('/plugins/write-policy', data={
+        'config_revision': config_revision,
+        'plugin_path': str(custom_plugin),
+        'timeout': '10',
+        'lookback': '0',
+        'confirm_plugin_change': 'y',
+    })
+    assert changed_path.status_code == 303
+    changed_page = client.get(changed_path.headers['Location'])
+    assert b'Restart required' in changed_page.data
+    assert b'Custom' in changed_page.data
+    assert load_configuration(strfry_config).values['relay']['writePolicy']['plugin'] == str(custom_plugin)
+
+    timeout_only = client.post('/plugins/write-policy', data={
+        'config_revision': load_configuration(strfry_config).revision,
+        'plugin_path': str(custom_plugin),
+        'timeout': '11',
+        'lookback': '0',
+    })
+    assert timeout_only.status_code == 303
+    assert load_configuration(strfry_config).values['relay']['writePolicy']['timeoutSeconds'] == 11
+
+    stale_config_revision = load_configuration(strfry_config).revision
+    strfry_config.write_text(strfry_config.read_text() + '# external update\n')
+    externally_updated = strfry_config.read_bytes()
+    stale_config = client.post('/plugins/write-policy', data={
+        'config_revision': stale_config_revision,
+        'plugin_path': str(custom_plugin),
+        'timeout': '12',
+        'lookback': '0',
+    })
+    assert stale_config.status_code == 422
+    assert b'Configuration changed. Reload before saving.' in stale_config.data
+    assert strfry_config.read_bytes() == externally_updated
+
+    disable_response = client.post('/plugins/write-policy', data={
+        'config_revision': load_configuration(strfry_config).revision,
+        'plugin_path': '',
+        'timeout': '10',
+        'lookback': '0',
+        'confirm_plugin_change': 'y',
+    })
+    assert disable_response.status_code == 303
     assert 'plugin = ""' in strfry_config.read_text()
 
     decision_log_path.write_text(json.dumps({
@@ -152,12 +275,11 @@ def test_plugins_page_manages_and_publishes_wot_policy(monkeypatch, tmp_path):
     assert policy_log_page.status_code == 200
     assert b'id="eventIdFilter"' in policy_log_page.data
     assert b'id="pubkeyFilter"' in policy_log_page.data
-    assert b'Actual reason' in policy_log_page.data
-    assert b'Monitor reason' in policy_log_page.data
-    assert b"document.hidden" in policy_log_page.data
-    assert b"eventSearchLine('e', record.event_id, 'event_id', 'event_id')" in policy_log_page.data
-    assert b"eventSearchLine('p', record.pubkey, 'pubkey', 'pubkey')" in policy_log_page.data
-    assert b"link.textContent = value" in policy_log_page.data
+    assert b'/static/policy_log.js' in policy_log_page.data
+    assert b'<table' not in policy_log_page.data
+    policy_log_script = client.get('/static/policy_log.js')
+    assert b'Actual reason' in policy_log_script.data
+    assert b'Monitor reason' in policy_log_script.data
     api_response = client.get('/api/write-policy-events?limit=99999')
     assert api_response.status_code == 200
     assert api_response.headers['Cache-Control'] == 'no-store, max-age=0'

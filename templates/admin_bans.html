@@ -1,0 +1,28 @@
+{% extends "admin_base.html" %}
+{% from "components/operations.html" import empty_state %}
+{% block admin_page_title %}Ban Registry{% endblock %}
+
+{% block admin_content %}
+<section aria-labelledby="bansHeading">
+    <div class="admin-section-heading mb-3"><div><div class="dashboard-section-label">WRITE POLICY</div><h2 id="bansHeading" class="h3 mb-1">Ban registry</h2><p class="text-body-secondary small mb-0">Inspect direct pubkey bans and domain-derived policy decisions separately.</p></div><span class="admin-count">{{ banned_pubkeys|length + banned_domains|length }} entries</span></div>
+    <div class="admin-ban-grid">
+        <div class="dashboard-panel">
+            <div class="dashboard-panel-header"><div><div class="dashboard-section-label">PUBKEYS</div><div class="text-body-secondary small">Direct and domain-derived write bans.</div></div><span class="admin-count">{{ banned_pubkeys|length }}</span></div>
+            {% if banned_pubkeys %}<div class="admin-registry-list">{% for ban in banned_pubkeys %}<article class="admin-registry-item">
+                <div class="admin-registry-heading"><code class="operations-identifier" title="{{ ban.pubkey }}">{{ ban.pubkey }}</code><span class="badge text-bg-danger">Banned</span></div>
+                <div class="d-flex flex-wrap gap-1 my-2">{% for source in ban.sources %}<span class="badge text-bg-{% if source.source_type == 'direct' %}secondary{% else %}danger{% endif %}">{% if source.source_type == 'domain' %}{{ source.banned_domain.domain }}{% else %}direct{% endif %}</span>{% endfor %}</div>
+                <dl class="admin-facts"><div><dt>Reason</dt><dd>{{ ban.active_reason or 'Not recorded' }}</dd></div><div><dt>Banned</dt><dd>{{ ban.active_banned_at|datetime if ban.active_banned_at else '-' }}</dd></div></dl>
+                {% if ban.has_direct_source %}<details class="admin-disclosure admin-confirmation"><summary>Remove direct ban</summary><form method="POST" action="{{ url_for('unban_pubkey', ban_id=ban.id) }}" class="mt-3"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><div class="mb-3"><label class="form-label" for="confirm-unban-pubkey-{{ ban.id }}">Type the exact pubkey to remove its direct ban. Domain rules may keep it banned.</label><input class="form-control font-monospace" id="confirm-unban-pubkey-{{ ban.id }}" name="confirm_pubkey" type="text" autocomplete="off" spellcheck="false" required></div><button class="btn btn-sm btn-outline-success" type="submit">Remove direct ban</button></form></details>{% endif %}
+            </article>{% endfor %}</div>{% else %}{{ empty_state('bi-person-check', 'No banned pubkeys', 'No pubkey write restrictions are currently active.') }}{% endif %}
+        </div>
+        <div class="dashboard-panel">
+            <div class="dashboard-panel-header"><div><div class="dashboard-section-label">NIP-05 DOMAINS</div><div class="text-body-secondary small">Exact-host rules and their sourced pubkeys.</div></div><span class="admin-count">{{ banned_domains|length }}</span></div>
+            {% if banned_domains %}<div class="admin-registry-list">{% for domain_ban in banned_domains %}<article class="admin-registry-item">
+                <div class="admin-registry-heading"><a class="operations-identifier" href="{{ url_for('moderation_domain_details', domain_id=domain_ban.id) }}">{{ domain_ban.domain }}</a><span class="badge text-bg-danger">{{ domain_ban.source_count }} pubkeys</span></div>
+                <dl class="admin-facts"><div><dt>Reason</dt><dd>{{ domain_ban.reason or 'Not recorded' }}</dd></div><div><dt>Banned</dt><dd>{{ domain_ban.banned_at|datetime if domain_ban.banned_at else '-' }}</dd></div></dl>
+                <details class="admin-disclosure admin-confirmation"><summary>Unban domain</summary><form method="POST" action="{{ url_for('delete_banned_domain', domain_id=domain_ban.id) }}" class="mt-3"><input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><div class="mb-2"><label class="form-label" for="confirm-unban-domain-{{ domain_ban.id }}">Type <strong>{{ domain_ban.domain }}</strong> exactly to confirm</label><input class="form-control font-monospace" id="confirm-unban-domain-{{ domain_ban.id }}" name="confirm_domain" type="text" autocomplete="off" spellcheck="false" required></div><p class="small text-body-secondary">Domain-only pubkeys may write again. Previously purged notes cannot be restored.</p><button class="btn btn-sm btn-outline-success" type="submit">Unban {{ domain_ban.domain }}</button></form></details>
+            </article>{% endfor %}</div>{% else %}{{ empty_state('bi-globe2', 'No banned domains', 'No NIP-05 domain restrictions are currently active.') }}{% endif %}
+        </div>
+    </div>
+</section>
+{% endblock %}

@@ -13,7 +13,7 @@ A web-based management portal for [strfry](https://github.com/hoytech/strfry), a
 - **Operational Dashboard** - Persistent 24-hour relay health, database storage, WebSocket connections, write-policy outcomes, moderation workload, and role-aware alerts
 - **Event Management** - Combined search and delete UI with dropdown selectors for pubkey (supports npub), kind, time range, tag, event ID search, or advanced filters
 - **Moderation** - Handle NIP-56 reports (kind 1984) with lazy-loaded event content, clickable reporter/reported columns to search, reviewed checkbox, ban user with reason, delete reported event, auto-mark as reviewed when action taken
-- **Metadata Relay Management** - Add/remove metadata relays (for fetching user profile data)
+- **Metadata Relay Management** - Add and test public metadata relays using pinned, SSRF-safe connections
 - **Dark Mode** - Toggle between light and dark themes, with automatic system preference detection
 - **Data Import/Export** - Import and export events in JSONL format, with fried export support for faster re-imports
 - **Negentropy Trees** - Create, build, and manage negentropy sync trees
@@ -22,7 +22,7 @@ A web-based management portal for [strfry](https://github.com/hoytech/strfry), a
 - **Pubkey Banning** - Ban pubkeys from posting with automatic strfry write-policy plugin integration — bans sync in real-time without restart
 - **Plugin Manager** - Configure strfry write-policy plugin path, timeout, and lookback settings
 - **Image Rendering** - Inline image display in event content with NSFW blur (click to unblur, NIP-36 content-warning support)
-- **Configuration Editor** - Edit relay configuration (name, description, pubkey, contact, bind address, port)
+- **Configuration Editor** - Atomically edit supported relay settings with stale-write protection and a safe read-only mode
 - **Connection Monitoring** - View real-time connection and message statistics
 - **Multi-user Authentication** - Role-based access control (admin, moderator, viewer)
 - **Audit Logging** - Track user actions in scrollable log with timestamps
@@ -44,6 +44,8 @@ A web-based management portal for [strfry](https://github.com/hoytech/strfry), a
 - All strfry commands use validated arguments (no shell injection)
 - Audit logging for all admin actions
 - Sessions configured with secure cookies (HTTPS required in production)
+- Configuration changes use revision checks, advisory locking, and atomic replacement
+- Metadata relay connections reject private, loopback, link-local, and mixed public/private DNS results
 
 ## Requirements
 
@@ -131,7 +133,32 @@ STRFRY_CONFIG=/etc/strfry.conf
 STRFRY_DB_PATH=/var/lib/strfry
 STRFRY_METRICS_URL=http://localhost:7777/metrics
 DASHBOARD_SAMPLE_INTERVAL=60
+TRUSTED_PROXY_COUNT=1
+
+# Public metadata relays, one per line
+EXTERNAL_RELAYS="wss://relay.damus.io
+wss://nos.lol"
 ```
+
+### Safe Configuration Editing
+
+StrfryGUI never truncates `strfry.conf` in place. It preserves the supported source structure, checks that the file has not changed since the page was loaded, writes and syncs a temporary file, and atomically replaces the target. If the syntax is ambiguous or the service account cannot create and rename files in the containing directory, the Configuration and Plugins pages remain readable but disable writes.
+
+Do not grant `www-data` write access to all of `/etc`. To enable web-based configuration safely, place the relay configuration in a dedicated directory shared only by strfry and StrfryGUI, then set `STRFRY_CONFIG` to that path. For example:
+
+```bash
+sudo groupadd -f -r strfry-config
+sudo usermod -aG strfry-config nostr
+sudo usermod -aG strfry-config www-data
+sudo install -d -o root -g strfry-config -m 2770 /etc/strfrygui
+sudo install -o root -g strfry-config -m 0660 /etc/strfry.conf /etc/strfrygui/strfry.conf
+```
+
+Update both strfry and `/opt/strfrygui/.env` to use `/etc/strfrygui/strfry.conf`, then restart both services. The editor intentionally remains read-only rather than falling back to a non-atomic write when these permissions are absent. Avoid editing the file manually while saving through the GUI. Symlink targets are retained, but hard-linked configuration files are not recommended because atomic replacement changes file identity.
+
+Metadata relay URLs are limited to `ws://` and `wss://` destinations that resolve entirely to globally routable addresses. Private or local relay access is intentionally unsupported by the web UI.
+
+`TRUSTED_PROXY_COUNT` controls whether audit logging trusts `X-Forwarded-For`. Keep it at `0` when Flask is directly exposed. Set it to the exact number of trusted reverse proxies between clients and Flask; the bundled nginx deployment uses `1`. Values supplied by untrusted proxies are otherwise ignored.
 
 Generate secure tokens:
 ```bash
@@ -210,7 +237,7 @@ Graph construction is limited to two hops, 5,000 direct identities, 100,000 tota
 
 ### Live Policy Log
 
-Admins and moderators can open **Policy Log** to watch actual accepted and rejected events with Monitor-mode simulated outcomes. The page refreshes every two seconds, pauses in hidden browser tabs, and provides filters for action, simulated result, reason, kind, event ID, pubkey, source type, and source IP.
+Admins and moderators can open **Policy Log** to watch actual accepted and rejected events with Monitor-mode simulated outcomes. The page refreshes every 2.5 seconds, pauses in hidden browser tabs, and provides filters for action, simulated result, reason, kind, event ID, pubkey, source type, and source IP.
 
 The plugin records only decision metadata after sending its response to strfry. It never logs event content, tags, signatures, or raw requests. Logging is best effort and cannot change an event decision. The current JSONL file rotates at 5 MiB with one 5 MiB backup, keeping disk usage near 10 MiB.
 

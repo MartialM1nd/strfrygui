@@ -23,10 +23,25 @@ MODERATION_REPORT_INDEXES = (
     'ON moderation_reports (created_at)',
 )
 
+AUDIT_LOG_INDEXES = (
+    'CREATE INDEX IF NOT EXISTS ix_audit_log_timestamp_id '
+    'ON audit_log (timestamp, id)',
+    'CREATE INDEX IF NOT EXISTS ix_audit_log_action_timestamp_id '
+    'ON audit_log (action, timestamp, id)',
+    'CREATE INDEX IF NOT EXISTS ix_audit_log_user_timestamp_id '
+    'ON audit_log (user_id, timestamp, id)',
+)
+
 
 def ensure_moderation_report_indexes(connection):
     """Create moderation report indexes for databases predating the models."""
     for statement in MODERATION_REPORT_INDEXES:
+        connection.execute(text(statement))
+
+
+def ensure_audit_log_indexes(connection):
+    """Create audit indexes for databases predating the focused admin pages."""
+    for statement in AUDIT_LOG_INDEXES:
         connection.execute(text(statement))
 
 
@@ -70,6 +85,11 @@ class User(UserMixin, db.Model):
 
 class AuditLog(db.Model):
     __tablename__ = 'audit_log'
+    __table_args__ = (
+        db.Index('ix_audit_log_timestamp_id', 'timestamp', 'id'),
+        db.Index('ix_audit_log_action_timestamp_id', 'action', 'timestamp', 'id'),
+        db.Index('ix_audit_log_user_timestamp_id', 'user_id', 'timestamp', 'id'),
+    )
     
     id = db.Column(db.Integer, primary_key=True)
     user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
@@ -83,6 +103,7 @@ class AuditLog(db.Model):
     def to_dict(self):
         return {
             'id': self.id,
+            'user_id': self.user_id,
             'username': self.user.username if self.user else 'system',
             'action': self.action,
             'details': self.details,

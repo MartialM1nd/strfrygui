@@ -18,6 +18,7 @@ from models import (
     utcnow,
 )
 from utils.metrics import MetricsError, get_metrics
+from utils.configuration import load_configuration
 from utils.strfry import get_strfry_process_info
 
 
@@ -262,7 +263,11 @@ def _attention_items(latest, now, role):
             })
         projection = db.session.get(WritePolicyProjection, 1)
         if projection and projection.status == 'pending':
-            items.append({'severity': 'danger', 'label': 'Ban enforcement is pending', 'url': '/moderation'})
+            items.append({
+                'severity': 'danger',
+                'label': 'Ban projection publication is pending',
+                'url': '/moderation',
+            })
         pending_purges = EventPurge.query.filter_by(status='pending').count()
         if pending_purges:
             items.append({'severity': 'warning', 'label': f'{pending_purges} event purges pending', 'url': '/moderation'})
@@ -273,10 +278,33 @@ def _attention_items(latest, now, role):
         if failed_domains:
             items.append({'severity': 'warning', 'label': f'{failed_domains} domain scans need review', 'url': '/moderation'})
     if role == 'admin':
-        if not os.path.isfile(Config.BLOCKLIST_PLUGIN_PATH) or not os.access(
-            Config.BLOCKLIST_PLUGIN_PATH, os.X_OK
+        snapshot = load_configuration(Config.STRFRY_CONFIG)
+        configured_path = (
+            snapshot.values.get('relay', {}).get('writePolicy', {}).get('plugin', '')
+        )
+        if snapshot.revision is None:
+            items.append({
+                'severity': 'warning',
+                'label': 'Write-policy configuration is unavailable',
+                'url': '/plugins',
+            })
+        elif not configured_path:
+            items.append({
+                'severity': 'warning',
+                'label': 'Write-policy plugin is disabled',
+                'url': '/plugins',
+            })
+        elif (
+            not isinstance(configured_path, str)
+            or not os.path.isabs(configured_path)
+            or not os.path.isfile(configured_path)
+            or not os.access(configured_path, os.X_OK)
         ):
-            items.append({'severity': 'danger', 'label': 'Write-policy plugin is not executable', 'url': '/plugins'})
+            items.append({
+                'severity': 'danger',
+                'label': 'Configured write-policy plugin is not executable',
+                'url': '/plugins',
+            })
         wot_state = db.session.get(WoTBuildState, 1)
         if wot_state and wot_state.status == 'failed':
             items.append({'severity': 'warning', 'label': 'Web-of-trust build failed', 'url': '/plugins'})

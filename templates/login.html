@@ -3,44 +3,52 @@
 {% block title %}Login - StrfryGUI{% endblock %}
 
 {% block content %}
-<div class="row justify-content-center">
-    <div class="col-md-4">
-        <div class="card shadow">
-            <div class="card-header bg-primary text-white">
-                <h4 class="mb-0"><i class="bi bi-box-arrow-in-right"></i> Login</h4>
-            </div>
-            <div class="card-body">
-                <form method="POST">
+<div class="legacy-shell auth-shell">
+    <section class="legacy-panel" aria-labelledby="loginTitle">
+        <header class="legacy-panel-header">
+            <span class="dashboard-section-label">Relay operations</span>
+            <h1 id="loginTitle">Sign in</h1>
+            <p>Access relay monitoring and moderation tools.</p>
+        </header>
+        <div class="legacy-panel-body">
+                <form method="POST" novalidate>
                     {{ form.hidden_tag() }}
+                    {% if form.form_errors or (form.csrf_token is defined and form.csrf_token.errors) %}
+                    <div class="alert alert-danger" role="alert">
+                        {% for error in form.form_errors %}<div>{{ error }}</div>{% endfor %}
+                        {% if form.csrf_token is defined %}{% for error in form.csrf_token.errors %}<div>{{ error }}</div>{% endfor %}{% endif %}
+                    </div>
+                    {% endif %}
                     <div class="mb-3">
                         {{ form.username.label(class="form-label") }}
-                        {{ form.username(class="form-control", autofocus=true) }}
+                        {{ form.username(class="form-control" + (" is-invalid" if form.username.errors else ""), autofocus=true, autocomplete="username", aria_describedby="username-errors" if form.username.errors else false) }}
                         {% if form.username.errors %}
-                            <div class="text-danger">
-                                {% for error in form.username.errors %}{{ error }}{% endfor %}
+                            <div id="username-errors" class="invalid-feedback">
+                                {% for error in form.username.errors %}<div>{{ error }}</div>{% endfor %}
                             </div>
                         {% endif %}
                     </div>
                     <div class="mb-3">
                         {{ form.password.label(class="form-label") }}
-                        {{ form.password(class="form-control") }}
+                        {{ form.password(class="form-control" + (" is-invalid" if form.password.errors else ""), autocomplete="current-password", aria_describedby="password-errors" if form.password.errors else false) }}
                         {% if form.password.errors %}
-                            <div class="text-danger">
-                                {% for error in form.password.errors %}{{ error }}{% endfor %}
+                            <div id="password-errors" class="invalid-feedback">
+                                {% for error in form.password.errors %}<div>{{ error }}</div>{% endfor %}
                             </div>
                         {% endif %}
                     </div>
-                    <button type="submit" class="btn btn-primary w-100">Login</button>
+                    <button type="submit" class="btn btn-primary w-100">Sign in</button>
                 </form>
-            </div>
-            <div class="card-footer text-center">
+        </div>
+        {% if User.query.count() == 0 %}
+        <footer class="legacy-panel-footer">
                 {% if User.query.count() == 0 %}
                 <a href="{{ url_for('register') }}" class="btn btn-outline-primary btn-sm">
                     <i class="bi bi-person-plus"></i> Register First User
                 </a>
                 {% endif %}
-            </div>
-        </div>
-    </div>
+        </footer>
+        {% endif %}
+    </section>
 </div>
 {% endblock %}

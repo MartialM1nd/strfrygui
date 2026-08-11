@@ -1,0 +1,58 @@
+{% extends "admin_base.html" %}
+{% from "components/operations.html" import panel_header, empty_state, field_errors %}
+{% block admin_page_title %}Operators{% endblock %}
+
+{% block admin_content %}
+<section aria-labelledby="operatorHeading">
+    <div class="admin-section-heading mb-3">
+        <div><div class="dashboard-section-label">ACCESS CONTROL</div><h2 id="operatorHeading" class="h3 mb-1">Operators</h2><p class="text-body-secondary small mb-0">Create accounts and keep privileges limited to operational need.</p></div>
+        <span class="admin-count">{{ users|length }} account{% if users|length != 1 %}s{% endif %}</span>
+    </div>
+    <div class="dashboard-panel mb-4">
+        {{ panel_header('Create operator', 'Temporary passwords require 8+ characters and must be replaced at first login.') }}
+        <form method="POST" action="{{ url_for('create_user') }}" class="admin-create-grid">
+            {{ create_user_form.hidden_tag() }}
+            <div><label class="form-label" for="newOperatorUsername">Username</label><input class="form-control" id="newOperatorUsername" name="username" type="text" autocomplete="off" required>{{ field_errors(create_user_form.username) }}</div>
+            <div><label class="form-label" for="newOperatorPassword">Temporary password</label><input class="form-control" id="newOperatorPassword" name="password" type="password" autocomplete="new-password" minlength="8" required>{{ field_errors(create_user_form.password) }}</div>
+            <div><label class="form-label" for="newOperatorRole">Role</label><select class="form-select" id="newOperatorRole" name="role"><option value="viewer" selected>Viewer</option><option value="moderator">Moderator</option><option value="admin">Admin</option></select>{{ field_errors(create_user_form.role) }}</div>
+            <button class="btn btn-primary align-self-end" type="submit"><i class="bi bi-person-plus" aria-hidden="true"></i> Create operator</button>
+        </form>
+    </div>
+    {% if users %}
+    <div class="admin-operator-list">
+        {% for user in users %}
+        <article class="dashboard-panel admin-operator-card" aria-labelledby="operator-{{ user.id }}">
+            <div class="admin-operator-identity">
+                <div><h3 class="h5 mb-1" id="operator-{{ user.id }}">{{ user.username }}</h3><div class="text-body-secondary small">Created {{ user.created_at.strftime('%Y-%m-%d %H:%M') if user.created_at else 'at an unknown time' }}</div></div>
+                <div class="d-flex flex-wrap gap-2">{% if user.id == current_user.id %}<span class="badge text-bg-info">Current account</span>{% endif %}<span class="badge text-bg-{% if user.role == 'admin' %}danger{% elif user.role == 'moderator' %}warning{% else %}secondary{% endif %}">{{ user.role|title }}</span><span class="badge text-bg-{% if user.is_active %}success{% else %}secondary{% endif %}">{{ 'Active' if user.is_active else 'Inactive' }}</span></div>
+            </div>
+            <dl class="admin-facts"><div><dt>Last login</dt><dd>{{ user.last_login.strftime('%Y-%m-%d %H:%M') if user.last_login else 'Never' }}</dd></div><div><dt>Operator ID</dt><dd>#{{ user.id }}</dd></div></dl>
+            <details class="admin-disclosure"><summary>Edit access</summary>
+                <form method="POST" action="{{ url_for('edit_user', user_id=user.id) }}" class="admin-inline-form mt-3">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="username" value="{{ user.username }}">
+                    <div><label class="form-label" for="role-{{ user.id }}">Role</label><select class="form-select form-select-sm" id="role-{{ user.id }}" name="role"><option value="viewer"{% if user.role == 'viewer' %} selected{% endif %}>Viewer</option><option value="moderator"{% if user.role == 'moderator' %} selected{% endif %}>Moderator</option><option value="admin"{% if user.role == 'admin' %} selected{% endif %}>Admin</option></select></div>
+                    <div><label class="form-label" for="status-{{ user.id }}">Status</label><select class="form-select form-select-sm" id="status-{{ user.id }}" name="is_active"><option value="true"{% if user.is_active %} selected{% endif %}>Active</option><option value="false"{% if not user.is_active %} selected{% endif %}>Inactive</option></select></div>
+                    <button class="btn btn-sm btn-outline-primary align-self-end" type="submit">Save access</button>
+                </form>
+            </details>
+            <details class="admin-disclosure"><summary>Set password</summary>
+                <form method="POST" action="{{ url_for('change_password_route', user_id=user.id) }}" class="admin-inline-form mt-3">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <div><label class="form-label" for="password-{{ user.id }}">New password</label><input class="form-control form-control-sm" id="password-{{ user.id }}" name="password" type="password" autocomplete="new-password" minlength="21" required></div>
+                    <div><label class="form-label" for="confirm-password-{{ user.id }}">Confirm password</label><input class="form-control form-control-sm" id="confirm-password-{{ user.id }}" name="confirm_password" type="password" autocomplete="new-password" minlength="21" required></div>
+                    <button class="btn btn-sm btn-outline-warning align-self-end" type="submit">Set password</button>
+                </form>
+            </details>
+            {% if user.id != current_user.id %}<details class="admin-disclosure admin-confirmation"><summary>Delete operator</summary>
+                <form method="POST" action="{{ url_for('delete_user', user_id=user.id) }}" class="mt-3">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                    <div class="form-check mb-3"><input class="form-check-input" id="confirm-delete-operator-{{ user.id }}" name="confirm_user_id" type="checkbox" value="{{ user.id }}" required><label class="form-check-label" for="confirm-delete-operator-{{ user.id }}">Delete <strong>{{ user.username }}</strong> (operator #{{ user.id }}) permanently.</label></div>
+                    <button class="btn btn-sm btn-danger" type="submit">Delete {{ user.username }}</button>
+                </form>
+            </details>{% endif %}
+        </article>
+        {% endfor %}
+    </div>
+    {% else %}<div class="dashboard-panel">{{ empty_state('bi-people', 'No operators found', 'Create the first operator account above.') }}</div>{% endif %}
+</section>
+{% endblock %}

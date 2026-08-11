@@ -1,0 +1,22 @@
+{% extends "admin_base.html" %}
+{% block admin_page_title %}Metadata Relays{% endblock %}
+
+{% block admin_content %}
+<section aria-labelledby="relaysHeading">
+    <div class="admin-section-heading mb-3"><div><div class="dashboard-section-label">EXTERNAL DEPENDENCIES</div><h2 id="relaysHeading" class="h3 mb-1">Metadata relays</h2><p class="text-body-secondary small mb-0">Control which external relays are used for profile metadata lookup.</p></div><span class="admin-count" id="relayStatus" aria-live="polite">Loading</span></div>
+    <div class="dashboard-panel mb-4">
+        <form class="admin-relay-form" id="relayAddForm"><div><label class="form-label" for="newRelayUrl">Relay URL</label><input class="form-control" id="newRelayUrl" name="url" type="url" inputmode="url" autocomplete="url" placeholder="wss://relay.example.com" pattern="wss?://.*" required><div class="form-text">Secure <code>wss://</code> endpoints are recommended.</div></div><button class="btn btn-primary align-self-start admin-relay-add" type="submit"><i class="bi bi-plus-circle" aria-hidden="true"></i> Add relay</button></form>
+        <div class="admin-state admin-state-error d-none mt-3" id="relayMutationError" role="alert"></div>
+    </div>
+    <div class="dashboard-panel admin-relay-panel" id="relayManager" aria-busy="true">
+        <div class="admin-state" id="relayLoading" role="status"><span class="spinner-border spinner-border-sm" aria-hidden="true"></span><span>Loading metadata relays...</span></div>
+        <div class="admin-state admin-state-error d-none" id="relayError" role="alert"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i><span>Metadata relays could not be loaded.</span><button class="btn btn-sm btn-outline-danger" id="relayRetry" type="button">Retry</button></div>
+        <div class="operations-empty-state d-none" id="relayEmpty"><i class="bi bi-broadcast" aria-hidden="true"></i><strong>No metadata relays</strong><span>Add a relay above to enable external profile lookup.</span></div>
+        <div class="table-responsive admin-table-wrap d-none" id="relayTableWrap"><table class="table table-sm align-middle admin-table mb-0"><thead><tr><th scope="col">Health</th><th scope="col">Relay</th><th scope="col">Last tested</th><th scope="col" class="text-end">Controls</th></tr></thead><tbody id="relaysBody"></tbody></table></div>
+    </div>
+</section>
+<dialog class="admin-dialog" id="relayDeleteDialog" aria-labelledby="relayDeleteTitle">
+    <form method="dialog"><div class="dashboard-section-label text-danger mb-2">DESTRUCTIVE ACTION</div><h2 class="h4" id="relayDeleteTitle">Delete metadata relay?</h2><p class="text-body-secondary">Profile lookup will stop using <strong class="operations-identifier" id="relayDeleteTarget"></strong>.</p><div class="admin-confirmation mb-3"><label class="form-label" for="relayDeleteConfirm">Type the exact relay URL to confirm</label><input class="form-control font-monospace" id="relayDeleteConfirm" type="text" autocomplete="off" spellcheck="false" required></div><div class="d-flex flex-wrap justify-content-end gap-2"><button class="btn btn-outline-secondary" value="cancel">Cancel</button><button class="btn btn-danger" id="relayDeleteSubmit" value="default" disabled>Delete relay</button></div></form>
+</dialog>
+{% endblock %}
+{% block admin_scripts %}<script src="{{ url_for('static', filename='admin_relays.js') }}"></script>{% endblock %}

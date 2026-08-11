@@ -1,22 +1,18 @@
 {% extends "base.html" %}
 
-{% block title %}Error - StrfryGUI{% endblock %}
+{% block title %}{{ status_code }} {{ error_title }} - StrfryGUI{% endblock %}
 
 {% block content %}
-<div class="row justify-content-center">
-    <div class="col-md-6">
-        <div class="card border-danger">
-            <div class="card-header bg-danger text-white">
-                <h4 class="mb-0"><i class="bi bi-exclamation-triangle"></i> Error</h4>
-            </div>
-            <div class="card-body">
-                <p class="lead">{{ error }}</p>
-                <hr>
-                <a href="{{ url_for('index') }}" class="btn btn-primary">
-                    <i class="bi bi-house"></i> Go to Dashboard
-                </a>
-            </div>
+<div class="legacy-shell error-shell">
+    <section class="legacy-panel" aria-labelledby="errorTitle">
+        <header class="legacy-panel-header">
+            <span class="error-code">{{ status_code }}</span>
+            <h1 id="errorTitle">{{ error_title }}</h1>
+            <p>{{ error_message }}</p>
+        </header>
+        <div class="legacy-panel-body">
+            <a href="{{ recovery_url }}" class="btn btn-primary">{{ recovery_label }}</a>
         </div>
-    </div>
+    </section>
 </div>
 {% endblock %}

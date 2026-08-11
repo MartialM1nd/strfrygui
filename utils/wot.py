@@ -1,4 +1,5 @@
 import fcntl
+import hashlib
 import json
 import os
 import tempfile
@@ -52,6 +53,22 @@ class WoTSnapshot:
     direct_count: int
     edge_count: int
     truncated: bool
+
+
+def policy_fingerprint(policy):
+    """Return a stable concurrency token for operator-controlled policy fields."""
+    document = {
+        'mode': policy.mode,
+        'roots': policy.roots,
+        'trust_threshold': policy.trust_threshold,
+        'pow_difficulty': policy.pow_difficulty,
+        'require_pow_commitment': bool(policy.require_pow_commitment),
+        'refresh_interval_minutes': policy.refresh_interval_minutes,
+        'rate_limit_per_minute': policy.rate_limit_per_minute,
+        'rate_limit_burst': policy.rate_limit_burst,
+    }
+    encoded = json.dumps(document, separators=(',', ':'), sort_keys=True).encode()
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def initialize_wot():
@@ -345,11 +362,31 @@ def _compatible_policy_snapshot(candidate, roots):
     )
 
 
-def commit_policy_settings(policy):
+def commit_policy_settings(policy, expected_revision=None, settings=None):
     """Publish and commit settings as one compensated application transition."""
+    candidate = settings or {
+        'mode': policy.mode,
+        'root_npubs': policy.root_npubs,
+        'trust_threshold': policy.trust_threshold,
+        'pow_difficulty': policy.pow_difficulty,
+        'require_pow_commitment': policy.require_pow_commitment,
+        'refresh_interval_minutes': policy.refresh_interval_minutes,
+        'rate_limit_per_minute': policy.rate_limit_per_minute,
+        'rate_limit_burst': policy.rate_limit_burst,
+    }
     with _publication_lock():
+        db.session.expire(policy)
+        current = db.session.get(WoTPolicy, 1)
+        if current is None:
+            db.session.rollback()
+            raise WoTError('Web-of-trust policy is unavailable')
+        if expected_revision is not None and policy_fingerprint(current) != expected_revision:
+            db.session.rollback()
+            raise WoTError('Policy changed. Reload before saving.')
+        for name, value in candidate.items():
+            setattr(current, name, value)
         try:
-            published = republish_policy_settings(policy)
+            published = republish_policy_settings(current)
         except WoTError:
             db.session.rollback()
             raise

@@ -3,16 +3,21 @@ import os
 import stat
 from datetime import datetime
 
+import pytest
+from sqlalchemy.exc import SQLAlchemyError
+
 from config import Config
-from models import WoTBuildState, db
+from models import WoTBuildState, WoTPolicy, db
 from utils import wot
 from utils.strfry import npub_to_hex
 from utils.wot import (
     DEFAULT_ROOT_NPUBS,
     WoTError,
     build_snapshot,
+    commit_policy_settings,
     initialize_wot,
     normalize_roots,
+    policy_fingerprint,
     publish_policy,
     republish_policy_settings,
     rebuild_policy,
@@ -144,6 +149,43 @@ def test_first_runtime_publication_preserves_compatible_legacy_scores(app):
     with open(Config.TRUST_POLICY_FILE) as policy_file:
         published = json.load(policy_file)
     assert published['scores']['a' * 64] == 45
+
+
+def test_policy_fingerprint_changes_with_operator_settings(app):
+    policy, _ = initialize_wot()
+    original = policy_fingerprint(policy)
+
+    policy.rate_limit_burst = 0
+
+    assert policy_fingerprint(policy) != original
+    assert len(policy_fingerprint(policy)) == 64
+
+
+def test_commit_policy_settings_restores_publication_after_database_failure(monkeypatch, app):
+    policy, _ = initialize_wot()
+    publish_policy(policy)
+    with open(Config.TRUST_POLICY_FILE) as policy_file:
+        original = json.load(policy_file)
+    policy.mode = 'monitor'
+    original_commit = db.session.commit
+    calls = 0
+
+    def fail_once():
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            raise SQLAlchemyError('commit failed')
+        return original_commit()
+
+    monkeypatch.setattr(db.session, 'commit', fail_once)
+
+    with pytest.raises(SQLAlchemyError):
+        commit_policy_settings(policy)
+
+    with open(Config.TRUST_POLICY_FILE) as policy_file:
+        restored = json.load(policy_file)
+    assert restored['mode'] == original['mode']
+    assert db.session.get(WoTPolicy, 1).mode == original['mode']
 
 
 def test_rebuild_policy_records_success_and_publishes_snapshot(app):

@@ -1,126 +1,151 @@
 {% extends "base.html" %}
 
-{% block title %}Banned Identities - {{ domain_ban.domain }} - StrfryGUI{% endblock %}
+{% block title %}Domain Operations - {{ domain_ban.domain }} - StrfryGUI{% endblock %}
 
 {% block content %}
-<div class="d-flex flex-wrap justify-content-between align-items-start gap-3 mb-4">
-    <div>
-        <a href="{{ url_for('moderation') }}" class="small text-decoration-none"><i class="bi bi-arrow-left"></i> Moderation</a>
-        <h2 class="mt-2 mb-1"><i class="bi bi-globe2"></i> {{ domain_ban.domain }}</h2>
-        <p class="text-muted mb-0">Complete active pubkey list sourced by this exact NIP-05 domain.</p>
-    </div>
-    <a class="btn btn-outline-secondary" href="{{ url_for('moderation_domain_export', domain_id=domain_ban.id, q=search) }}">
-        <i class="bi bi-download"></i> Export CSV
-    </a>
-</div>
+{% set scan_state = domain_ban.scan_status if domain_ban.scan_status in ['queued', 'running'] else ('error' if domain_ban.last_scan_error else 'idle') %}
+<div class="dashboard-shell domain-operations-shell">
+    <header class="dashboard-header domain-operations-header mb-4">
+        <div>
+            <a href="{{ url_for('moderation') }}" class="small text-decoration-none"><i class="bi bi-arrow-left" aria-hidden="true"></i> Moderation</a>
+            <div class="dashboard-kicker mt-3">Domain ban operations</div>
+            <h1 class="dashboard-title mb-1">{{ domain_ban.domain }}</h1>
+            <p class="text-body-secondary mb-0">Verified and unresolved identities for this exact NIP-05 domain.</p>
+        </div>
+        <div class="domain-header-actions">
+            <span class="dashboard-status" data-status="{{ scan_state }}">
+                <span class="dashboard-status-dot" aria-hidden="true"></span>
+                <span>Reconciliation {{ scan_state }}</span>
+            </span>
+            <a class="btn btn-outline-secondary" href="{{ url_for('moderation_domain_export', domain_id=domain_ban.id, q=search) }}">
+                <i class="bi bi-download" aria-hidden="true"></i> Export filtered CSV
+            </a>
+        </div>
+    </header>
 
-{% if domain_ban.last_scan_error %}
-<div class="alert alert-danger"><strong>Last reconciliation error:</strong> {{ domain_ban.last_scan_error }}</div>
-{% endif %}
+    {% if domain_ban.last_scan_error %}
+    <div class="alert alert-danger" role="alert"><strong>Last reconciliation error:</strong> {{ domain_ban.last_scan_error }}</div>
+    {% endif %}
 
-<div class="row g-3 mb-4">
-    <div class="col-sm-4">
-        <div class="card h-100"><div class="card-body"><div class="text-muted small">Verified and banned</div><div class="display-6">{{ identities.total }}</div></div></div>
-    </div>
-    <div class="col-sm-4">
-        <div class="card h-100"><div class="card-body"><div class="text-muted small">Unresolved in latest scan</div><div class="display-6">{{ unresolved.total if search else unresolved.reported_total }}</div></div></div>
-    </div>
-    <div class="col-sm-4">
-        <div class="card h-100"><div class="card-body"><div class="text-muted small">Last reconciled</div><div class="mt-2">{{ domain_ban.last_scanned_at|datetime if domain_ban.last_scanned_at else 'Never' }}</div></div></div>
-    </div>
-</div>
+    <section class="domain-summary-grid mb-4" aria-label="Domain summary">
+        <div class="moderation-summary-item moderation-summary-primary">
+            <div class="moderation-summary-value">{{ identities.total }}</div>
+            <div class="text-body-secondary small">Verified and banned</div>
+        </div>
+        <div class="moderation-summary-item">
+            <div class="moderation-summary-value">{{ unresolved.total if search else unresolved.reported_total }}</div>
+            <div class="text-body-secondary small">Unresolved in latest scan</div>
+        </div>
+        <div class="moderation-summary-item">
+            <div class="moderation-summary-value">{{ domain_ban.last_scan_new_bans }}</div>
+            <div class="text-body-secondary small">New bans in latest scan</div>
+        </div>
+        <div class="moderation-summary-item">
+            <div class="domain-summary-time">{{ domain_ban.last_scanned_at|datetime if domain_ban.last_scanned_at else 'Never' }}</div>
+            <div class="text-body-secondary small">Last reconciled</div>
+        </div>
+    </section>
 
-<div class="card mb-4">
-    <div class="card-body">
-        <form method="GET" class="row g-2 align-items-end">
-            <div class="col-md-8">
+    <section class="dashboard-panel domain-filter-panel mb-4" aria-labelledby="domainFilterTitle">
+        <div class="domain-panel-heading">
+            <div><span class="dashboard-section-label">Filter</span><h2 id="domainFilterTitle" class="h5 mb-0">Find identities</h2></div>
+            {% if search %}<a href="{{ url_for('moderation_domain_details', domain_id=domain_ban.id, per_page=per_page) }}" class="btn btn-sm btn-outline-secondary">Clear search</a>{% endif %}
+        </div>
+        <form method="GET" class="domain-filter-grid">
+            <div>
                 <label for="identitySearch" class="form-label">Search identities</label>
-                <input id="identitySearch" name="q" class="form-control" value="{{ search }}" placeholder="NIP-05 name, npub, or hex pubkey">
+                <input id="identitySearch" name="q" type="search" class="form-control" value="{{ search }}" maxlength="256" autocomplete="off" placeholder="NIP-05 name, npub, or hex pubkey">
             </div>
-            <div class="col-md-2">
+            <div>
                 <label for="perPage" class="form-label">Per page</label>
                 <select id="perPage" name="per_page" class="form-select">
                     {% for size in [25, 50, 100] %}<option value="{{ size }}"{% if per_page == size %} selected{% endif %}>{{ size }}</option>{% endfor %}
                 </select>
             </div>
-            <div class="col-md-2 d-grid"><button class="btn btn-primary" type="submit"><i class="bi bi-search"></i> Search</button></div>
+            <button class="btn btn-primary" type="submit"><i class="bi bi-search" aria-hidden="true"></i> Search</button>
         </form>
-    </div>
-</div>
+    </section>
 
-<div class="card mb-4">
-    <div class="card-header d-flex justify-content-between align-items-center">
-        <h5 class="mb-0">Verified Banned Pubkeys</h5>
-        <span class="badge bg-danger">{{ identities.total }}</span>
-    </div>
-    {% if identities.rows %}
-    <div class="table-responsive">
-        <table class="table table-sm table-hover align-middle mb-0">
-            <thead><tr><th>NIP-05</th><th>npub</th><th>Hex Pubkey</th><th>Other Sources</th><th>Discovered</th><th>Purge</th></tr></thead>
-            <tbody>
-                {% for row in identities.rows %}
-                {% set source = row.source %}
-                <tr>
-                    <td>{% if source.local_name %}<code>{{ source.local_name }}@{{ domain_ban.domain }}</code>{% else %}<span class="text-muted">Unknown local name</span>{% endif %}</td>
-                    <td>
-                        <code class="text-truncate d-inline-block" style="max-width: 190px;" title="{{ row.npub }}">{{ row.npub }}</code>
-                        <button class="btn btn-sm btn-link p-0 ms-1 copy-value" data-copy="{{ row.npub }}" title="Copy npub"><i class="bi bi-copy"></i></button>
-                    </td>
-                    <td>
-                        <code class="text-truncate d-inline-block" style="max-width: 150px;" title="{{ source.banned_pubkey.pubkey }}">{{ source.banned_pubkey.pubkey }}</code>
-                        <button class="btn btn-sm btn-link p-0 ms-1 copy-value" data-copy="{{ source.banned_pubkey.pubkey }}" title="Copy hex pubkey"><i class="bi bi-copy"></i></button>
-                    </td>
-                    <td>{% if row.other_sources %}{% for label in row.other_sources %}<span class="badge bg-secondary me-1">{{ label }}</span>{% endfor %}{% else %}<span class="text-muted">None</span>{% endif %}</td>
-                    <td><small>{{ source.banned_at|datetime if source.banned_at else '-' }}<br><span class="text-muted">Seen {{ source.last_seen_at|datetime if source.last_seen_at else '-' }}</span></small></td>
-                    <td>
-                        {% if not row.purge %}<span class="badge bg-secondary">Not recorded</span>
-                        {% elif row.purge.was_cancelled %}<span class="badge bg-secondary">Cancelled</span>
-                        {% elif row.purge.status == 'completed' %}<span class="badge bg-success">Completed</span>
-                        {% else %}<span class="badge bg-warning text-dark">Pending</span>{% endif %}
-                        {% if row.purge and row.purge.last_error %}<div class="small {% if row.purge.was_cancelled %}text-muted{% else %}text-danger{% endif %}">{{ row.purge.last_error }}</div>{% endif %}
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
-    {% else %}<div class="card-body text-muted">No verified banned pubkeys match this search.</div>{% endif %}
-    {% if page > 1 or page * per_page < identities.total %}
-    <div class="card-footer d-flex justify-content-between">
-        {% if page > 1 %}<a class="btn btn-sm btn-outline-secondary" href="{{ url_for('moderation_domain_details', domain_id=domain_ban.id, q=search, per_page=per_page, page=page-1, unresolved_page=unresolved_page) }}">Previous</a>{% else %}<span></span>{% endif %}
-        <span class="small text-muted align-self-center">Page {{ page }}</span>
-        {% if page * per_page < identities.total %}<a class="btn btn-sm btn-outline-secondary" href="{{ url_for('moderation_domain_details', domain_id=domain_ban.id, q=search, per_page=per_page, page=page+1, unresolved_page=unresolved_page) }}">Next</a>{% else %}<span></span>{% endif %}
-    </div>
-    {% endif %}
-</div>
+    <section class="dashboard-panel domain-results-panel mb-4" aria-labelledby="verifiedTitle">
+        <div class="domain-panel-heading">
+            <div><span class="dashboard-section-label">Verified identities</span><h2 id="verifiedTitle" class="h5 mb-0">Banned pubkeys</h2></div>
+            <span class="admin-count" data-tone="danger">{{ identities.total }} total</span>
+        </div>
+        {% if identities.rows %}
+        <div class="table-responsive domain-table-wrap">
+            <table class="table table-sm table-hover align-middle mb-0">
+                <caption class="visually-hidden">Verified identities banned through {{ domain_ban.domain }}</caption>
+                <thead><tr><th scope="col">NIP-05</th><th scope="col">npub</th><th scope="col">Hex pubkey</th><th scope="col">Other sources</th><th scope="col">Discovered</th><th scope="col">Purge</th></tr></thead>
+                <tbody>
+                    {% for row in identities.rows %}
+                    {% set source = row.source %}
+                    <tr>
+                        <th scope="row">{% if source.local_name %}<code>{{ source.local_name }}@{{ domain_ban.domain }}</code>{% else %}<span class="text-body-secondary fw-normal">Unknown local name</span>{% endif %}</th>
+                        <td><span class="domain-copy-cell"><code title="{{ row.npub }}">{{ row.npub }}</code><button type="button" class="btn btn-sm btn-link copy-value" data-copy="{{ row.npub }}" aria-label="Copy npub for {{ source.local_name or 'identity' }}"><i class="bi bi-copy" aria-hidden="true"></i></button></span></td>
+                        <td><span class="domain-copy-cell"><code title="{{ source.banned_pubkey.pubkey }}">{{ source.banned_pubkey.pubkey }}</code><button type="button" class="btn btn-sm btn-link copy-value" data-copy="{{ source.banned_pubkey.pubkey }}" aria-label="Copy hex pubkey for {{ source.local_name or 'identity' }}"><i class="bi bi-copy" aria-hidden="true"></i></button></span></td>
+                        <td>{% if row.other_sources %}{% for label in row.other_sources %}<span class="badge text-bg-secondary me-1">{{ label }}</span>{% endfor %}{% else %}<span class="text-body-secondary">None</span>{% endif %}</td>
+                        <td><small>{{ source.banned_at|datetime if source.banned_at else '-' }}<br><span class="text-body-secondary">Seen {{ source.last_seen_at|datetime if source.last_seen_at else '-' }}</span></small></td>
+                        <td>
+                            {% if not row.purge %}<span class="badge text-bg-secondary">Not recorded</span>
+                            {% elif row.purge.was_cancelled %}<span class="badge text-bg-secondary">Cancelled</span>
+                            {% elif row.purge.status == 'completed' %}<span class="badge text-bg-success">Completed</span>
+                            {% else %}<span class="badge text-bg-warning">Pending</span>{% endif %}
+                            {% if row.purge and row.purge.last_error %}<div class="small {% if row.purge.was_cancelled %}text-body-secondary{% else %}text-danger{% endif %}">{{ row.purge.last_error }}</div>{% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% else %}<div class="operations-empty-state"><i class="bi bi-person-x" aria-hidden="true"></i><strong>No verified identities</strong><span>No verified banned pubkeys match this search.</span></div>{% endif %}
+        {% if page > 1 or page * per_page < identities.total %}
+        <nav class="domain-pagination" aria-label="Verified identities pages">
+            {% if page > 1 %}<a class="btn btn-sm btn-outline-secondary" rel="prev" href="{{ url_for('moderation_domain_details', domain_id=domain_ban.id, q=search, per_page=per_page, page=page-1, unresolved_page=unresolved_page) }}">Previous</a>{% else %}<span></span>{% endif %}
+            <span class="small text-body-secondary">Page {{ page }}</span>
+            {% if page * per_page < identities.total %}<a class="btn btn-sm btn-outline-secondary" rel="next" href="{{ url_for('moderation_domain_details', domain_id=domain_ban.id, q=search, per_page=per_page, page=page+1, unresolved_page=unresolved_page) }}">Next</a>{% else %}<span></span>{% endif %}
+        </nav>
+        {% endif %}
+    </section>
 
-<div class="card border-warning">
-    <div class="card-header d-flex justify-content-between align-items-center bg-warning-subtle">
-        <h5 class="mb-0">Unresolved Identities</h5>
-        <span class="badge bg-warning text-dark">{{ unresolved.total if search else unresolved.reported_total }}</span>
-    </div>
-    {% if unresolved.incomplete %}<div class="alert alert-warning rounded-0 mb-0">Legacy feedback is truncated. Reconcile this domain to populate the complete unresolved list.</div>{% endif %}
-    {% if unresolved.rows %}
-    <div class="table-responsive"><table class="table table-sm mb-0">
-        <thead><tr><th>NIP-05</th><th>Hex Pubkey</th><th>Error</th></tr></thead>
-        <tbody>{% for entry in unresolved.rows %}<tr><td><code>{{ entry.name }}@{{ domain_ban.domain }}</code></td><td><code>{{ entry.pubkey }}</code></td><td class="text-danger">{{ entry.error }}</td></tr>{% endfor %}</tbody>
-    </table></div>
-    {% else %}<div class="card-body text-muted">No unresolved identities match this search.</div>{% endif %}
-    {% if unresolved_page > 1 or unresolved_page * per_page < unresolved.total %}
-    <div class="card-footer d-flex justify-content-between">
-        {% if unresolved_page > 1 %}<a class="btn btn-sm btn-outline-secondary" href="{{ url_for('moderation_domain_details', domain_id=domain_ban.id, q=search, per_page=per_page, page=page, unresolved_page=unresolved_page-1) }}">Previous</a>{% else %}<span></span>{% endif %}
-        <span class="small text-muted align-self-center">Page {{ unresolved_page }}</span>
-        {% if unresolved_page * per_page < unresolved.total %}<a class="btn btn-sm btn-outline-secondary" href="{{ url_for('moderation_domain_details', domain_id=domain_ban.id, q=search, per_page=per_page, page=page, unresolved_page=unresolved_page+1) }}">Next</a>{% else %}<span></span>{% endif %}
-    </div>
-    {% endif %}
+    <section class="dashboard-panel domain-results-panel domain-unresolved-panel" aria-labelledby="unresolvedTitle">
+        <div class="domain-panel-heading">
+            <div><span class="dashboard-section-label">Review required</span><h2 id="unresolvedTitle" class="h5 mb-0">Unresolved identities</h2></div>
+            <span class="admin-count">{{ unresolved.total if search else unresolved.reported_total }} total</span>
+        </div>
+        {% if unresolved.incomplete %}<div class="alert alert-warning">Legacy feedback is truncated. Reconcile this domain to populate the complete unresolved list.</div>{% endif %}
+        {% if unresolved.rows %}
+        <div class="table-responsive domain-table-wrap"><table class="table table-sm align-middle mb-0">
+            <caption class="visually-hidden">Unresolved identities reported for {{ domain_ban.domain }}</caption>
+            <thead><tr><th scope="col">NIP-05</th><th scope="col">Hex pubkey</th><th scope="col">Error</th></tr></thead>
+            <tbody>{% for entry in unresolved.rows %}<tr><th scope="row"><code>{{ entry.name }}@{{ domain_ban.domain }}</code></th><td><code class="operations-identifier">{{ entry.pubkey }}</code></td><td class="text-danger">{{ entry.error }}</td></tr>{% endfor %}</tbody>
+        </table></div>
+        {% else %}<div class="operations-empty-state"><i class="bi bi-check2-circle" aria-hidden="true"></i><strong>No unresolved identities</strong><span>No unresolved identities match this search.</span></div>{% endif %}
+        {% if unresolved_page > 1 or unresolved_page * per_page < unresolved.total %}
+        <nav class="domain-pagination" aria-label="Unresolved identities pages">
+            {% if unresolved_page > 1 %}<a class="btn btn-sm btn-outline-secondary" rel="prev" href="{{ url_for('moderation_domain_details', domain_id=domain_ban.id, q=search, per_page=per_page, page=page, unresolved_page=unresolved_page-1) }}">Previous</a>{% else %}<span></span>{% endif %}
+            <span class="small text-body-secondary">Page {{ unresolved_page }}</span>
+            {% if unresolved_page * per_page < unresolved.total %}<a class="btn btn-sm btn-outline-secondary" rel="next" href="{{ url_for('moderation_domain_details', domain_id=domain_ban.id, q=search, per_page=per_page, page=page, unresolved_page=unresolved_page+1) }}">Next</a>{% else %}<span></span>{% endif %}
+        </nav>
+        {% endif %}
+    </section>
+    <p id="clipboardStatus" class="visually-hidden" role="status" aria-live="polite"></p>
 </div>
 {% endblock %}
 
 {% block scripts %}
 <script>
+const clipboardStatus = document.getElementById('clipboardStatus');
 document.querySelectorAll('.copy-value').forEach(function(button) {
-    button.addEventListener('click', function() {
-        navigator.clipboard.writeText(this.dataset.copy);
+    button.addEventListener('click', async function() {
+        try {
+            if (!navigator.clipboard || !navigator.clipboard.writeText) {
+                throw new Error('Clipboard API unavailable');
+            }
+            await navigator.clipboard.writeText(button.dataset.copy || '');
+            clipboardStatus.textContent = 'Copied to clipboard.';
+        } catch (error) {
+            clipboardStatus.textContent = 'Could not copy to clipboard. Select and copy the value manually.';
+        }
     });
 });
 </script>
