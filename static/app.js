@@ -41,4 +41,59 @@
             updateTheme(next);
         });
     }
+
+    const responsiveDisclosures = Array.from(document.querySelectorAll('[data-responsive-disclosure]'));
+    if (!responsiveDisclosures.length) return;
+
+    const mobileDisclosures = window.matchMedia('(max-width: 991px)');
+    const desktopDefaults = new Map(responsiveDisclosures.map(function(disclosure) {
+        return [disclosure, disclosure.tagName === 'DETAILS' ? disclosure.open : disclosure.classList.contains('show')];
+    }));
+    let mobileState = null;
+
+    function collapseControls(disclosure) {
+        if (!disclosure.id) return [];
+        return Array.from(document.querySelectorAll('[data-bs-toggle="collapse"]')).filter(function(control) {
+            return control.getAttribute('data-bs-target') === '#' + disclosure.id;
+        });
+    }
+
+    function setDisclosureOpen(disclosure, open) {
+        if (disclosure.tagName === 'DETAILS') {
+            disclosure.open = open;
+            return;
+        }
+        disclosure.classList.remove('collapsing');
+        disclosure.classList.toggle('show', open);
+        collapseControls(disclosure).forEach(function(control) {
+            control.setAttribute('aria-expanded', String(open));
+            control.classList.toggle('collapsed', !open);
+        });
+    }
+
+    function updateResponsiveDisclosures() {
+        if (mobileState === mobileDisclosures.matches) return;
+        mobileState = mobileDisclosures.matches;
+        responsiveDisclosures.forEach(function(disclosure) {
+            setDisclosureOpen(disclosure, mobileState || desktopDefaults.get(disclosure));
+        });
+    }
+
+    document.addEventListener('click', function(event) {
+        const summary = typeof event.target.closest === 'function' ? event.target.closest('summary') : null;
+        if (mobileDisclosures.matches && summary && summary.parentElement.matches('details[data-responsive-disclosure]')) {
+            event.preventDefault();
+        }
+    });
+    document.addEventListener('hide.bs.collapse', function(event) {
+        if (mobileDisclosures.matches && typeof event.target.matches === 'function' && event.target.matches('[data-responsive-disclosure]')) {
+            event.preventDefault();
+        }
+    });
+    if (typeof mobileDisclosures.addEventListener === 'function') {
+        mobileDisclosures.addEventListener('change', updateResponsiveDisclosures);
+    } else {
+        mobileDisclosures.addListener(updateResponsiveDisclosures);
+    }
+    updateResponsiveDisclosures();
 })();

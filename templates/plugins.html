@@ -22,36 +22,36 @@
     </section>
     {% endif %}
 
-    <section class="plugin-status-grid mb-4" aria-label="Write-policy status">
-        <article class="dashboard-metric">
+    <section class="plugin-status-grid compact-kpi-grid compact-kpi-strip mb-4" aria-label="Write-policy status">
+        <article class="dashboard-metric compact-kpi compact-kpi-small">
             <div class="dashboard-metric-label">Bundled executable</div>
-            <div class="plugin-status-value">{{ 'Installed' if bundled_installed else 'Unavailable' }}</div>
-            <code class="operations-identifier">{{ bundled_path }}</code>
+            <div class="plugin-status-value" title="{{ 'Installed' if bundled_installed else 'Unavailable' }}">{{ 'Installed' if bundled_installed else 'Unavailable' }}</div>
+            <code class="operations-identifier compact-kpi-detail" title="{{ bundled_path }}">{{ bundled_path }}</code>
         </article>
-        <article class="dashboard-metric">
+        <article class="dashboard-metric compact-kpi compact-kpi-small">
             <div class="dashboard-metric-label">Configured source</div>
-            <div class="plugin-status-value">{{ configuration_kind|title }}</div>
-            <div class="dashboard-metric-detail">{% if configured_path %}{{ 'Executable' if configured_executable else 'Not executable' }}{% else %}No plugin configured{% endif %}</div>
+            <div class="plugin-status-value" title="{{ configuration_kind|title }}">{{ configuration_kind|title }}</div>
+            <div class="dashboard-metric-detail compact-kpi-detail" title="{% if configured_path %}{{ 'Executable' if configured_executable else 'Not executable' }}{% else %}No plugin configured{% endif %}">{% if configured_path %}{{ 'Executable' if configured_executable else 'Not executable' }}{% else %}No plugin configured{% endif %}</div>
         </article>
-        <article class="dashboard-metric">
+        <article class="dashboard-metric compact-kpi compact-kpi-small">
             <div class="dashboard-metric-label">Restart state</div>
-            <div class="plugin-status-value">{{ restart_status|title }}</div>
-            <div class="dashboard-metric-detail">The GUI cannot inspect the running process configuration.</div>
+            <div class="plugin-status-value" title="{{ restart_status|title }}">{{ restart_status|title }}</div>
+            <div class="dashboard-metric-detail compact-kpi-detail" title="The GUI cannot inspect the running process configuration.">The GUI cannot inspect the running process configuration.</div>
         </article>
-        <article class="dashboard-metric">
+        <article class="dashboard-metric compact-kpi compact-kpi-small">
             <div class="dashboard-metric-label">Ban projection publication</div>
-            <div class="plugin-status-value">{{ projection.status|title }}</div>
-            <div class="dashboard-metric-detail">Desired {{ projection.desired_revision }} · published {{ projection.published_revision }}</div>
+            <div class="plugin-status-value" title="{{ projection.status|title }}">{{ projection.status|title }}</div>
+            <div class="dashboard-metric-detail compact-kpi-detail" title="Desired {{ projection.desired_revision }} · published {{ projection.published_revision }}">Desired {{ projection.desired_revision }} · published {{ projection.published_revision }}</div>
         </article>
-        <article class="dashboard-metric">
+        <article class="dashboard-metric compact-kpi compact-kpi-small">
             <div class="dashboard-metric-label">Recent telemetry</div>
-            <div class="plugin-status-value">{{ 'Recent' if telemetry_recent else ('Stale' if wot_stats.updated_at else 'Unavailable') }}</div>
-            <div class="dashboard-metric-detail">{% if wot_stats.updated_at %}Updated {{ wot_stats.updated_at|datetime }}{% else %}No runtime sample{% endif %}</div>
+            <div class="plugin-status-value" title="{{ 'Recent' if telemetry_recent else ('Stale' if wot_stats.updated_at else 'Unavailable') }}">{{ 'Recent' if telemetry_recent else ('Stale' if wot_stats.updated_at else 'Unavailable') }}</div>
+            <div class="dashboard-metric-detail compact-kpi-detail" title="{% if wot_stats.updated_at %}Updated {{ wot_stats.updated_at|datetime }}{% else %}No runtime sample{% endif %}">{% if wot_stats.updated_at %}Updated {{ wot_stats.updated_at|datetime }}{% else %}No runtime sample{% endif %}</div>
         </article>
-        <article class="dashboard-metric">
+        <article class="dashboard-metric compact-kpi compact-kpi-small">
             <div class="dashboard-metric-label">Ban records</div>
-            <div class="plugin-status-value">{{ blocklist_count }}</div>
-            <div class="dashboard-metric-detail">Projection publication is shown separately and is not proof of active enforcement.</div>
+            <div class="plugin-status-value" title="{{ blocklist_count }}">{{ blocklist_count }}</div>
+            <div class="dashboard-metric-detail compact-kpi-detail" title="Projection publication is shown separately and is not proof of active enforcement.">Projection publication is shown separately and is not proof of active enforcement.</div>
         </article>
     </section>
 
@@ -128,8 +128,11 @@
         {% call panel_header('Web of Trust and Proof of Work', 'Publish policy settings and operate the local two-hop graph') %}
         <span class="badge bg-{% if wot_policy.mode == 'enforce' %}danger{% elif wot_policy.mode == 'monitor' %}warning text-dark{% else %}secondary{% endif %}">{{ wot_policy.mode|title }}</span>
         {% endcall %}
-        <div class="alert alert-info" role="note">Off, Monitor, and Enforce describe the published policy artifact. Publication alone does not establish that a running plugin loaded it.</div>
-        <form method="POST" action="{{ url_for('update_wot_policy') }}" novalidate>
+        <details class="plugin-wot-disclosure" data-responsive-disclosure{% if wot_policy.mode in ['monitor', 'enforce'] or wot_form.errors or wot_state.last_error %} open{% endif %}>
+            <summary><span>Policy controls</span><span class="text-body-secondary">{{ 'Expanded for active policy or errors' if wot_policy.mode in ['monitor', 'enforce'] or wot_form.errors or wot_state.last_error else 'Review and edit the off policy' }}</span></summary>
+            <div class="plugin-wot-controls">
+            <div class="alert alert-info" role="note">Off, Monitor, and Enforce describe the published policy artifact. Publication alone does not establish that a running plugin loaded it.</div>
+            <form method="POST" action="{{ url_for('update_wot_policy') }}" novalidate>
             {{ wot_form.hidden_tag() }}
             {{ field_errors(wot_form.policy_revision) }}
             <div class="plugin-wot-grid">
@@ -149,7 +152,9 @@
                 <span class="small text-body-secondary">Confirmation is required whenever the resulting mode is Enforce.</span>
                 <button type="submit" class="btn btn-primary"><i class="bi bi-cloud-arrow-up"></i> Save and publish artifact</button>
             </div>
-        </form>
+            </form>
+            </div>
+        </details>
 
         <div class="plugin-build mt-4">
             <div>

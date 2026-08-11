@@ -54,6 +54,7 @@
     }
     function relayRow(relay) {
         const row = document.createElement('tr');
+        row.className = 'compact-record';
         const healthCell = document.createElement('td');
         const relayCell = document.createElement('td');
         const testedCell = document.createElement('td');
@@ -73,6 +74,7 @@
         relayCell.dataset.label = 'Relay';
         url.className = 'operations-identifier';
         url.textContent = relayUrl;
+        url.title = relayUrl;
         relayCell.appendChild(url);
         if (!relay.enabled) {
             const disabled = document.createElement('span');

@@ -6,7 +6,7 @@
 <div class="dashboard-shell policy-log-shell" id="policyLogApp"
      data-api-url="{{ url_for('api_write_policy_events') }}"
      data-events-url="{{ url_for('events') }}">
-    <header class="dashboard-header mb-4">
+    <header class="dashboard-header compact-page-header mb-4">
         <div>
             <div class="dashboard-kicker">WRITE POLICY OPERATIONS</div>
             <h1 class="dashboard-title mb-1">Decision console</h1>
@@ -23,7 +23,7 @@
         </div>
     </header>
 
-    <section class="dashboard-panel policy-filter-panel mb-4" aria-labelledby="policyFiltersTitle">
+    <section class="dashboard-panel compact-panel policy-filter-panel mb-4" aria-labelledby="policyFiltersTitle">
         <div class="dashboard-panel-header policy-filter-heading">
             <div>
                 <div class="dashboard-section-label" id="policyFiltersTitle">Decision filters</div>
@@ -34,7 +34,7 @@
             </button>
         </div>
 
-        <div class="policy-filter-primary">
+        <div class="policy-filter-primary compact-toolbar">
             <div>
                 <label for="actionFilter" class="form-label">Actual outcome</label>
                 <select id="actionFilter" class="form-select">
@@ -103,9 +103,9 @@
         <span>The policy log changed on disk. The browser view was reset to the latest decisions.</span>
     </div>
 
-    <section class="dashboard-panel policy-results-panel" aria-labelledby="policyResultsTitle">
+    <section class="dashboard-panel compact-panel policy-results-panel" aria-labelledby="policyResultsTitle">
         <div class="dashboard-panel-header policy-results-heading">
-            <div>
+            <div class="policy-results-summary">
                 <div class="dashboard-section-label" id="policyResultsTitle">Recent decisions</div>
                 <div id="visibleCount" class="text-body-secondary small" aria-live="polite">0 visible · 0 retained in browser</div>
             </div>

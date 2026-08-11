@@ -4,7 +4,7 @@
 {% block title %}Database{% if relay_name %} - {{ relay_name }}{% endif %} - StrfryGUI{% endblock %}
 
 {% block content %}
-<div class="dashboard-shell">
+<div class="dashboard-shell database-shell compact-workflow-shell">
     {{ page_header(
         'DATA PLANE · STORAGE',
         'Database operations',
@@ -23,20 +23,25 @@
         </form>
         {% endcall %}
 
-        {% if negentropy_error %}
-        <div class="alert alert-danger" role="alert">
-            <strong>Negentropy trees could not be loaded.</strong> {{ negentropy_error }}
-        </div>
-        {% endif %}
+        <details class="workflow-disclosure" data-responsive-disclosure open>
+            <summary>
+                <span><span class="dashboard-section-label">Tree inventory</span><span class="text-body-secondary small">{{ trees|length }} configured</span></span>
+            </summary>
+            <div class="workflow-disclosure-body">
+                {% if negentropy_error %}
+                <div class="alert alert-danger" role="alert">
+                    <strong>Negentropy trees could not be loaded.</strong> {{ negentropy_error }}
+                </div>
+                {% endif %}
 
-        {% if negentropy_success %}
-        <div class="alert alert-success" role="status">
-            <strong>Negentropy operation completed.</strong> {{ negentropy_success }}
-        </div>
-        {% endif %}
+                {% if negentropy_success %}
+                <div class="alert alert-success" role="status">
+                    <strong>Negentropy operation completed.</strong> {{ negentropy_success }}
+                </div>
+                {% endif %}
 
-        {% if trees %}
-        <div class="table-responsive mb-4">
+                {% if trees %}
+                <div class="table-responsive database-tree-table">
             <table class="table table-sm align-middle mb-0">
                 <caption class="visually-hidden">Configured negentropy trees and available actions</caption>
                 <thead>
@@ -78,27 +83,32 @@
                     {% endfor %}
                 </tbody>
             </table>
-        </div>
-        {% elif not negentropy_error %}
-        {{ empty_state('bi-diagram-3', 'No negentropy trees available', 'Refresh to check for configured trees, or add a tree below.') }}
-        {% endif %}
-
-        <div class="border-top pt-4">
-            <div class="dashboard-section-label mb-1" id="addTreeTitle">Add a negentropy tree</div>
-            <p class="small text-body-secondary">Define the Nostr filter this reconciliation index should cover.</p>
-            <form method="POST" aria-labelledby="addTreeTitle">
-                {{ negentropy_add_form.hidden_tag() }}
-                <div class="mb-3">
-                    {{ negentropy_add_form.filter_json.label(class="form-label") }}
-                    {{ negentropy_add_form.filter_json(class="form-control font-monospace", rows="3", placeholder='{"kinds":[0]}', aria_describedby="negentropyFilterHelp") }}
-                    <div class="form-text" id="negentropyFilterHelp">Enter a valid JSON Nostr filter, for example <code>{"kinds":[0]}</code>.</div>
-                    {{ field_errors(negentropy_add_form.filter_json) }}
                 </div>
-                <button type="submit" name="negentropy_add" class="btn btn-primary">
-                    <i class="bi bi-plus-lg" aria-hidden="true"></i> Add negentropy tree
-                </button>
-            </form>
-        </div>
+                {% elif not negentropy_error %}
+                {{ empty_state('bi-diagram-3', 'No negentropy trees available', 'Refresh to check for configured trees, or add a tree below.') }}
+                {% endif %}
+            </div>
+        </details>
+
+        <details class="workflow-disclosure workflow-subdisclosure mt-3" data-responsive-disclosure{% if negentropy_add_form.errors %} open{% endif %}>
+            <summary>
+                <span><span class="dashboard-section-label" id="addTreeTitle">Add a negentropy tree</span><span class="text-body-secondary small">Define a Nostr filter</span></span>
+            </summary>
+            <div class="workflow-disclosure-body">
+                <form method="POST" aria-labelledby="addTreeTitle">
+                    {{ negentropy_add_form.hidden_tag() }}
+                    <div class="mb-3">
+                        {{ negentropy_add_form.filter_json.label(class="form-label") }}
+                        {{ negentropy_add_form.filter_json(class="form-control font-monospace", rows="3", placeholder='{"kinds":[0]}', aria_describedby="negentropyFilterHelp") }}
+                        <div class="form-text" id="negentropyFilterHelp">Enter a valid JSON Nostr filter, for example <code>{"kinds":[0]}</code>.</div>
+                        {{ field_errors(negentropy_add_form.filter_json) }}
+                    </div>
+                    <button type="submit" name="negentropy_add" class="btn btn-primary">
+                        <i class="bi bi-plus-lg" aria-hidden="true"></i> Add negentropy tree
+                    </button>
+                </form>
+            </div>
+        </details>
     </section>
 
     <section class="dashboard-panel mb-4" aria-label="Compression dictionaries">
@@ -115,29 +125,50 @@
         <div class="alert alert-danger mb-0" role="alert">
             <strong>Compression dictionaries could not be loaded.</strong> {{ dict_error }}
         </div>
-        {% elif dict_output %}
-        <pre class="p-3 mb-0 bg-body-secondary border rounded overflow-auto" aria-label="Compression dictionary output"><code>{{ dict_output }}</code></pre>
-        {% elif dict_output is none %}
-        {{ empty_state('bi-file-zip', 'Dictionaries not loaded', 'Refresh to inspect the compression dictionaries available to this relay.') }}
+        {% elif dict_output is not none %}
+        <details class="workflow-disclosure dictionary-output-disclosure" data-responsive-disclosure>
+            <summary>
+                <span><span class="dashboard-section-label">Dictionary output</span><span class="text-body-secondary small">Loaded from strfry</span></span>
+            </summary>
+            <div class="workflow-disclosure-body">
+                {% if dict_output %}
+                <pre class="p-3 mb-0 bg-body-secondary border rounded overflow-auto" aria-label="Compression dictionary output"><code>{{ dict_output }}</code></pre>
+                {% else %}
+                {{ empty_state('bi-file-zip', 'No compression dictionaries found', 'strfry returned no configured compression dictionaries.') }}
+                {% endif %}
+            </div>
+        </details>
         {% else %}
-        {{ empty_state('bi-file-zip', 'No compression dictionaries found', 'strfry returned no configured compression dictionaries.') }}
+        {{ empty_state('bi-file-zip', 'Dictionaries not loaded', 'Refresh to inspect the compression dictionaries available to this relay.') }}
         {% endif %}
     </section>
 
-    <section class="dashboard-panel operations-danger-zone" aria-labelledby="compactionTitle">
-        <div class="dashboard-panel-header">
-            <div>
-                <div class="dashboard-section-label text-danger" id="compactionTitle">Database compaction</div>
-                <div class="text-body-secondary small">Reclaim fragmented disk space with a direct database maintenance operation.</div>
-            </div>
+    <details class="dashboard-panel operations-danger-zone compaction-disclosure" data-responsive-disclosure aria-labelledby="compactionTitle">
+        <summary>
+            <span class="compaction-summary-title">
+                <span class="dashboard-section-label text-danger" id="compactionTitle">Database compaction</span>
+                <strong>Relay must be stopped</strong>
+            </span>
+            <span class="compaction-summary-outcome small">
+                {% if compaction_status.running %}
+                Status: in progress since {{ compaction_status.started_at.strftime('%Y-%m-%d %H:%M:%S') }}; Last outcome: pending
+                {% elif compaction_status.finished_at and compaction_status.error %}
+                Status: ready; Last outcome: failed at {{ compaction_status.finished_at.strftime('%Y-%m-%d %H:%M:%S') }}
+                {% elif compaction_status.finished_at %}
+                Status: ready; Last outcome: completed at {{ compaction_status.finished_at.strftime('%Y-%m-%d %H:%M:%S') }}
+                {% else %}
+                Status: ready; Last outcome: not run in this session
+                {% endif %}
+            </span>
             <span class="badge {% if compaction_status.running %}bg-warning text-dark{% else %}bg-danger{% endif %}">
                 {{ 'In progress' if compaction_status.running else 'Danger zone' }}
             </span>
-        </div>
+        </summary>
 
-        <div class="alert alert-warning" role="note">
-            <strong>Stop the relay before compacting.</strong> Compaction acts directly on database storage and should not run while the relay is serving traffic.
-        </div>
+        <div class="workflow-disclosure-body">
+            <div class="alert alert-warning" role="note">
+                <strong>Stop the relay before compacting.</strong> Compaction acts directly on database storage and should not run while the relay is serving traffic.
+            </div>
 
         {% if compaction_status.running %}
         <div class="d-flex align-items-center gap-2 mb-3" role="status" aria-live="polite">
@@ -152,17 +183,18 @@
             {% endif %}
         {% endif %}
 
-        <form method="POST" class="operations-action-bar">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-            <label class="form-check small text-danger">
-                <input class="form-check-input" type="checkbox" name="confirm_compact" value="yes" required{% if compaction_status.running %} disabled{% endif %}>
-                I confirm all strfry relay processes are stopped.
-            </label>
-            <button type="submit" name="compact" class="btn btn-danger"{% if compaction_status.running %} disabled{% else %} onclick="return confirm('Confirm the relay is stopped and start database compaction?')"{% endif %}>
-                <i class="bi bi-hdd{% if compaction_status.running %}-stack{% endif %}" aria-hidden="true"></i>
-                {{ 'Compacting database...' if compaction_status.running else 'Compact database' }}
-            </button>
-        </form>
-    </section>
+            <form method="POST" class="operations-action-bar">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                <label class="form-check small text-danger">
+                    <input class="form-check-input" type="checkbox" name="confirm_compact" value="yes" required{% if compaction_status.running %} disabled{% endif %}>
+                    I confirm all strfry relay processes are stopped.
+                </label>
+                <button type="submit" name="compact" class="btn btn-danger"{% if compaction_status.running %} disabled{% else %} onclick="return confirm('Confirm the relay is stopped and start database compaction?')"{% endif %}>
+                    <i class="bi bi-hdd{% if compaction_status.running %}-stack{% endif %}" aria-hidden="true"></i>
+                    {{ 'Compacting database...' if compaction_status.running else 'Compact database' }}
+                </button>
+            </form>
+        </div>
+    </details>
 </div>
 {% endblock %}

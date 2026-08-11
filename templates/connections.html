@@ -3,7 +3,7 @@
 {% block title %}Connections{% if relay_name %} - {{ relay_name }}{% endif %} - StrfryGUI{% endblock %}
 
 {% block content %}
-<div class="dashboard-shell">
+<div class="dashboard-shell compact-operations-shell connections-shell">
     <header class="dashboard-header mb-4">
         <div>
             <div class="dashboard-kicker">NETWORK CONTROL</div>
@@ -16,40 +16,34 @@
         </div>
     </header>
 
-    <section class="dashboard-metric-grid mb-4">
-        <article class="dashboard-metric dashboard-metric-accent">
-            <div class="dashboard-metric-icon"><i class="bi bi-broadcast-pin"></i></div>
-            <div class="dashboard-metric-label">Live connections</div>
+    <section class="dashboard-metric-grid compact-kpi-grid mb-4">
+        <article class="dashboard-metric compact-kpi dashboard-metric-accent">
+            <div class="compact-kpi-heading"><div class="dashboard-metric-icon"><i class="bi bi-broadcast-pin"></i></div><div class="dashboard-metric-label">Live connections</div></div>
             <div class="dashboard-metric-value" id="connectionTotal">Unavailable</div>
             <div class="dashboard-metric-detail">Current WebSocket gauge</div>
         </article>
-        <article class="dashboard-metric">
-            <div class="dashboard-metric-icon"><i class="bi bi-person-check"></i></div>
-            <div class="dashboard-metric-label">Authenticated</div>
+        <article class="dashboard-metric compact-kpi">
+            <div class="compact-kpi-heading"><div class="dashboard-metric-icon"><i class="bi bi-person-check"></i></div><div class="dashboard-metric-label">Authenticated</div></div>
             <div class="dashboard-metric-value" id="connectionAuthenticated">Unavailable</div>
             <div class="dashboard-metric-detail">Current NIP-42 sessions</div>
         </article>
-        <article class="dashboard-metric">
-            <div class="dashboard-metric-icon"><i class="bi bi-person-dash"></i></div>
-            <div class="dashboard-metric-label">Anonymous</div>
+        <article class="dashboard-metric compact-kpi">
+            <div class="compact-kpi-heading"><div class="dashboard-metric-icon"><i class="bi bi-person-dash"></i></div><div class="dashboard-metric-label">Anonymous</div></div>
             <div class="dashboard-metric-value" id="connectionAnonymous">Unavailable</div>
             <div class="dashboard-metric-detail">Total minus authenticated</div>
         </article>
-        <article class="dashboard-metric">
-            <div class="dashboard-metric-icon"><i class="bi bi-activity"></i></div>
-            <div class="dashboard-metric-label">Average · <span id="connectionWindow">24 hours</span></div>
+        <article class="dashboard-metric compact-kpi">
+            <div class="compact-kpi-heading"><div class="dashboard-metric-icon"><i class="bi bi-activity"></i></div><div class="dashboard-metric-label">Average · <span id="connectionWindow">24 hours</span></div></div>
             <div class="dashboard-metric-value" id="connectionAverage">Unavailable</div>
             <div class="dashboard-metric-detail">Sampled connection load</div>
         </article>
-        <article class="dashboard-metric">
-            <div class="dashboard-metric-icon"><i class="bi bi-graph-up-arrow"></i></div>
-            <div class="dashboard-metric-label">Peak · observed window</div>
+        <article class="dashboard-metric compact-kpi">
+            <div class="compact-kpi-heading"><div class="dashboard-metric-icon"><i class="bi bi-graph-up-arrow"></i></div><div class="dashboard-metric-label">Peak · observed window</div></div>
             <div class="dashboard-metric-value" id="connectionPeak">Unavailable</div>
             <div class="dashboard-metric-detail">Highest one-minute sample</div>
         </article>
-        <article class="dashboard-metric">
-            <div class="dashboard-metric-icon"><i class="bi bi-hourglass-split"></i></div>
-            <div class="dashboard-metric-label">Slow clients terminated</div>
+        <article class="dashboard-metric compact-kpi">
+            <div class="compact-kpi-heading"><div class="dashboard-metric-icon"><i class="bi bi-hourglass-split"></i></div><div class="dashboard-metric-label">Slow clients terminated</div></div>
             <div class="dashboard-metric-value" id="slowClients">Unavailable</div>
             <div class="dashboard-metric-detail">Outbound backlog protection</div>
         </article>
@@ -114,16 +108,10 @@
         </div>
     </div>
 
-    <section class="dashboard-panel connection-session-boundary">
-        <div class="d-flex gap-3 align-items-start">
-            <div class="dashboard-metric-icon mb-0"><i class="bi bi-lock"></i></div>
-            <div>
-                <div class="dashboard-section-label mb-2">Individual session inventory</div>
-                <h5>Per-connection details are not exposed by strfry yet</h5>
-                <p class="text-body-secondary mb-0">Client IP, connection age, authenticated pubkey, subscriptions, bytes, compression, and outbound backlog require a bounded strfry session snapshot interface. This page does not infer identities from reverse-proxy sockets or write-policy events.</p>
-            </div>
-        </div>
-    </section>
+    <details class="dashboard-panel connection-session-boundary" data-responsive-disclosure>
+        <summary><h2 class="connection-session-heading h5 mb-0"><i class="bi bi-lock" aria-hidden="true"></i><span><span class="dashboard-section-label">Individual session inventory</span><span>Per-connection details are not exposed by strfry yet</span></span></h2></summary>
+        <p class="text-body-secondary mb-0">Client IP, connection age, authenticated pubkey, subscriptions, bytes, compression, and outbound backlog require a bounded strfry session snapshot interface. This page does not infer identities from reverse-proxy sockets or write-policy events.</p>
+    </details>
 </div>
 {% endblock %}
 

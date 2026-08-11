@@ -150,7 +150,11 @@
         url.searchParams.set(parameter, value);
         const link = document.createElement('a');
         link.href = url.pathname + url.search;
-        link.title = searchType === 'event_id' ? 'Open this event in Event Explorer' : 'Open this author in Event Explorer';
+        link.title = value;
+        link.setAttribute(
+            'aria-label',
+            (searchType === 'event_id' ? 'Open event in Event Explorer: ' : 'Open author in Event Explorer: ') + value
+        );
         link.textContent = value;
         row.appendChild(link);
         return row;
@@ -158,7 +162,7 @@
 
     function createDecisionCard(record) {
         const card = document.createElement('article');
-        card.className = 'policy-decision-card';
+        card.className = 'policy-decision-card compact-record';
         card.dataset.outcome = record.action;
 
         const top = document.createElement('div');
@@ -174,11 +178,11 @@
         const facts = document.createElement('div');
         facts.className = 'policy-facts';
         facts.append(
-            createFact('Actual reason', formatReason(record.reason)),
-            createFact('Monitor reason', formatReason(record.simulated_reason)),
-            createFact('Event kind', record.kind === null ? 'Not recorded' : String(record.kind)),
-            createFact('Source', [record.source_type, record.source_ip].filter(Boolean).join(' · ') || 'Not recorded'),
-            createFact('Policy mode', record.policy_mode || 'Not recorded')
+            createFact('Actual reason', formatReason(record.reason), 'policy-fact-actual-reason'),
+            createFact('Monitor reason', formatReason(record.simulated_reason), 'policy-fact-monitor-reason'),
+            createFact('Event kind', record.kind === null ? 'Not recorded' : String(record.kind), 'policy-fact-kind'),
+            createFact('Source', [record.source_type, record.source_ip].filter(Boolean).join(' · ') || 'Not recorded', 'policy-fact-source'),
+            createFact('Policy mode', record.policy_mode || 'Not recorded', 'policy-fact-mode')
         );
 
         const identifiers = document.createElement('div');

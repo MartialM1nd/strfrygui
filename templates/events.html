@@ -13,17 +13,29 @@
         'degraded' if error else 'healthy'
     ) }}
 
-    <section class="dashboard-panel mb-4" aria-labelledby="eventSearchTitle">
-        <div class="dashboard-panel-header">
+    <section class="dashboard-panel event-query-panel mb-4" aria-labelledby="eventSearchTitle">
+        <div class="dashboard-panel-header event-query-heading">
             <div>
                 <div class="dashboard-section-label" id="eventSearchTitle">Query builder</div>
-                <div class="text-body-secondary small">Use a bounded Nostr filter against the local relay database.</div>
+                {% if search_performed and not error %}
+                <div class="event-query-summary" aria-label="Current query">
+                    <span class="event-filter-chip"><strong>type</strong> {{ form.search_type.data or 'all' }}</span>
+                    {% for key, value in current_filter.items() %}<span class="event-filter-chip"><strong>{{ key }}</strong> {{ value }}</span>{% endfor %}
+                </div>
+                {% else %}<div class="text-body-secondary small">Use a bounded Nostr filter against the local relay database.</div>{% endif %}
             </div>
-            {% if search_performed %}<a class="btn btn-sm btn-outline-secondary" href="{{ url_for('events') }}"><i class="bi bi-x-lg"></i> Clear</a>{% endif %}
+            {% if search_performed and not error %}
+            <div class="event-query-actions">
+                <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#eventQueryBuilder" aria-controls="eventQueryBuilder" aria-expanded="false"><i class="bi bi-pencil"></i> Edit</button>
+                <button class="btn btn-sm btn-primary" type="submit" form="searchForm"><i class="bi bi-search"></i> Run</button>
+                <a class="btn btn-sm btn-outline-secondary" href="{{ url_for('events') }}"><i class="bi bi-x-lg"></i> Clear</a>
+            </div>
+            {% endif %}
         </div>
 
         {% if error %}<div class="alert alert-danger" role="alert"><strong>Query failed.</strong> {{ error }}</div>{% endif %}
 
+        <div id="eventQueryBuilder" class="collapse{% if not search_performed or error %} show{% endif %}" data-responsive-disclosure>
         <form method="POST" id="searchForm">
             {{ form.hidden_tag() }}
             <input type="hidden" name="search" value="1">
@@ -80,14 +92,8 @@
                 <button type="submit" class="btn btn-primary"><i class="bi bi-search"></i> Run query</button>
             </div>
         </form>
+        </div>
     </section>
-
-    {% if current_filter %}
-    <section class="event-filter-summary mb-4" aria-label="Active Nostr filter">
-        <span class="dashboard-section-label">Active filter</span>
-        {% for key, value in current_filter.items() %}<span class="event-filter-chip"><strong>{{ key }}</strong> {{ value }}</span>{% endfor %}
-    </section>
-    {% endif %}
 
     {% if search_performed and not error %}
     <section class="dashboard-panel event-results-panel" aria-labelledby="eventResultsTitle">
@@ -96,13 +102,16 @@
                 <div class="dashboard-section-label" id="eventResultsTitle">Query results</div>
                 <div class="text-body-secondary small">{{ events|length }} event{% if events|length != 1 %}s{% endif %} loaded from this bounded query.</div>
             </div>
-            {% if current_user.role in ['admin', 'moderator'] %}<a class="btn btn-sm btn-outline-danger" href="{{ url_for('events_delete') }}"><i class="bi bi-exclamation-triangle"></i> Advanced delete</a>{% endif %}
+            <div class="event-results-actions">
+                {% if current_user.role in ['admin', 'moderator'] and events %}<label class="form-check mb-0"><input class="form-check-input" type="checkbox" id="selectAllEvents"> <span class="form-check-label">Select all loaded</span></label>{% endif %}
+                {% if current_user.role in ['admin', 'moderator'] %}<a class="btn btn-sm btn-outline-danger" href="{{ url_for('events_delete') }}"><i class="bi bi-exclamation-triangle"></i> Advanced delete</a>{% endif %}
+            </div>
         </div>
 
         {% if current_user.role in ['admin', 'moderator'] and events %}
-        <div class="event-selection-bar mb-3" id="eventSelectionBar">
-            <label class="form-check mb-0"><input class="form-check-input" type="checkbox" id="selectAllEvents"> <span class="form-check-label">Select all loaded events</span></label>
-            <button class="btn btn-sm btn-danger" type="button" id="deleteSelectedEvents" disabled><i class="bi bi-trash"></i> Delete selected (<span id="selectedEventCount">0</span>)</button>
+        <div class="event-selection-bar mb-3 d-none" id="eventSelectionBar" aria-live="polite">
+            <span><strong id="selectedEventCount">0</strong> event(s) selected</span>
+            <button class="btn btn-sm btn-danger" type="button" id="deleteSelectedEvents" disabled><i class="bi bi-trash"></i> Delete selected</button>
         </div>
         {% endif %}
 
@@ -112,7 +121,7 @@
             {% set event_pubkey = event.get('pubkey', '') %}
             {% set is_banned = event_pubkey in banned_pubkeys %}
             {% set is_nsfw = event.get('tags', [])|is_nsfw %}
-            <article class="event-result-card{% if is_banned %} is-banned{% endif %}" id="event-card-{{ event_id }}">
+            <article class="event-result-card compact-record{% if is_banned %} is-banned{% endif %}" id="event-card-{{ event_id }}">
                 {% if current_user.role in ['admin', 'moderator'] %}<label class="event-select"><input type="checkbox" class="form-check-input event-checkbox" value="{{ event_id }}" aria-label="Select event {{ event_id }}"></label>{% endif %}
                 <div class="event-result-main">
                     <div class="event-result-meta">
@@ -123,7 +132,7 @@
                     </div>
                     <div class="event-result-author">
                         <div class="dashboard-metric-label">Author</div>
-                        <a class="operations-identifier" href="{{ url_for('events', search_type='pubkey', pubkey=event_pubkey) }}">{{ event_pubkey }}</a>
+                        <a class="operations-identifier event-identifier" href="{{ url_for('events', search_type='pubkey', pubkey=event_pubkey) }}" title="{{ event_pubkey }}">{{ event_pubkey }}</a>
                     </div>
                     <div class="event-result-preview{% if is_nsfw %} is-sensitive{% endif %}" data-sensitive="{{ 'true' if is_nsfw else 'false' }}">
                         <div class="dashboard-metric-label">Content preview</div>
@@ -140,8 +149,8 @@
                 </div>
                 <div class="collapse event-result-detail" id="event-detail-{{ loop.index }}" data-pubkey="{{ event_pubkey }}">
                     <div class="event-detail-grid">
-                        <div><span class="dashboard-metric-label">Event ID</span><code>{{ event_id }}</code></div>
-                        <div><span class="dashboard-metric-label">Signature</span><code>{{ event.get('sig', '') }}</code></div>
+                        <div><span class="dashboard-metric-label">Event ID</span><a class="event-detail-identifier" href="{{ url_for('events', search_type='event_id', event_id=event_id) }}" title="{{ event_id }}"><code>{{ event_id }}</code></a></div>
+                        <div><span class="dashboard-metric-label">Signature</span><code class="event-detail-identifier" title="{{ event.get('sig', '') }}">{{ event.get('sig', '') }}</code></div>
                     </div>
                     <div class="event-metadata mt-3" data-event-metadata><span class="text-body-secondary small">Open details to load author metadata.</span></div>
                     <div class="dashboard-metric-label mt-3 mb-1">Tags</div>
@@ -220,8 +229,10 @@ function updateSelection() {
     const ids = selectedEventIds();
     const count = document.getElementById('selectedEventCount');
     const button = document.getElementById('deleteSelectedEvents');
+    const bar = document.getElementById('eventSelectionBar');
     if (count) count.textContent = ids.length;
     if (button) button.disabled = ids.length === 0;
+    if (bar) bar.classList.toggle('d-none', ids.length === 0);
 }
 
 document.querySelectorAll('.event-checkbox').forEach(checkbox => checkbox.addEventListener('change', updateSelection));

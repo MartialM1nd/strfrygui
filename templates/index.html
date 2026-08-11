@@ -3,7 +3,7 @@
 {% block title %}Dashboard{% if relay_name %} - {{ relay_name }}{% endif %} - StrfryGUI{% endblock %}
 
 {% block content %}
-<div class="dashboard-shell">
+<div class="dashboard-shell compact-operations-shell">
     <header class="dashboard-header mb-4">
         <div>
             <div class="dashboard-kicker">RELAY CONTROL</div>
@@ -21,10 +21,9 @@
         <div id="attentionItems" class="dashboard-attention-items"></div>
     </section>
 
-    <section class="dashboard-metric-grid mb-4">
-        <article class="dashboard-metric">
-            <div class="dashboard-metric-icon"><i class="bi bi-database"></i></div>
-            <div class="dashboard-metric-label">Database on disk</div>
+    <section class="dashboard-metric-grid compact-kpi-grid mb-4">
+        <article class="dashboard-metric compact-kpi">
+            <div class="compact-kpi-heading"><div class="dashboard-metric-icon"><i class="bi bi-database"></i></div><div class="dashboard-metric-label">Database on disk</div></div>
             <div class="dashboard-metric-value" id="databaseSize">Unavailable</div>
             <div class="dashboard-metric-detail"><span id="databaseGrowth">No 24h baseline</span> · <span id="diskFree">free unknown</span></div>
             <div class="progress dashboard-progress" role="progressbar" aria-label="Disk used">
@@ -32,52 +31,45 @@
             </div>
         </article>
 
-        <article class="dashboard-metric">
-            <div class="dashboard-metric-icon"><i class="bi bi-clock-history"></i></div>
-            <div class="dashboard-metric-label">strfry uptime</div>
+        <article class="dashboard-metric compact-kpi">
+            <div class="compact-kpi-heading"><div class="dashboard-metric-icon"><i class="bi bi-clock-history"></i></div><div class="dashboard-metric-label">strfry uptime</div></div>
             <div class="dashboard-metric-value" id="relayUptime">Unavailable</div>
             <div class="dashboard-metric-detail" id="processCount">Process visibility unavailable</div>
         </article>
 
-        <a class="dashboard-metric dashboard-metric-link" href="{{ url_for('connections') }}">
-            <div class="dashboard-metric-icon"><i class="bi bi-broadcast-pin"></i></div>
-            <div class="dashboard-metric-label">WebSocket connections</div>
+        <a class="dashboard-metric compact-kpi dashboard-metric-link" href="{{ url_for('connections') }}">
+            <div class="compact-kpi-heading"><div class="dashboard-metric-icon"><i class="bi bi-broadcast-pin"></i></div><div class="dashboard-metric-label">WebSocket connections</div></div>
             <div class="dashboard-metric-value" id="activeConnections">Unavailable</div>
             <div class="dashboard-metric-detail"><span id="peakConnections">24h peak unavailable</span> · Inspect <i class="bi bi-arrow-right"></i></div>
         </a>
 
-        <article class="dashboard-metric dashboard-metric-accent">
-            <div class="dashboard-metric-icon"><i class="bi bi-shield-check"></i></div>
-            <div class="dashboard-metric-label">Admission · <span id="admissionWindow">24 hours</span></div>
+        <article class="dashboard-metric compact-kpi dashboard-metric-accent">
+            <div class="compact-kpi-heading"><div class="dashboard-metric-icon"><i class="bi bi-shield-check"></i></div><div class="dashboard-metric-label">Admission · <span id="admissionWindow">24 hours</span></div></div>
             <div class="dashboard-metric-value" id="acceptanceRatio">No decisions</div>
             <div class="dashboard-metric-detail"><span id="acceptedCount">0 accepted</span> · <span id="rejectedCount">0 rejected</span></div>
         </article>
 
         {% if dashboard.moderation is defined %}
-        <a class="dashboard-metric dashboard-metric-link" href="{{ url_for('moderation') }}">
-            <div class="dashboard-metric-icon"><i class="bi bi-flag"></i></div>
-            <div class="dashboard-metric-label">Moderation reports</div>
+        <a class="dashboard-metric compact-kpi dashboard-metric-link" href="{{ url_for('moderation') }}">
+            <div class="compact-kpi-heading"><div class="dashboard-metric-icon"><i class="bi bi-flag"></i></div><div class="dashboard-metric-label">Moderation reports</div></div>
             <div class="dashboard-metric-value" id="unreviewedReports">0</div>
             <div class="dashboard-metric-detail" id="newReports">0 new in 24h · Open moderation</div>
         </a>
 
-        <article class="dashboard-metric">
-            <div class="dashboard-metric-icon"><i class="bi bi-slash-octagon"></i></div>
-            <div class="dashboard-metric-label">Active bans</div>
+        <article class="dashboard-metric compact-kpi">
+            <div class="compact-kpi-heading"><div class="dashboard-metric-icon"><i class="bi bi-slash-octagon"></i></div><div class="dashboard-metric-label">Active bans</div></div>
             <div class="dashboard-metric-value" id="bannedPubkeys">0</div>
             <div class="dashboard-metric-detail"><span id="bannedDomains">0 domains</span> · <span id="newBans">0 new in 24h</span></div>
         </article>
         {% else %}
-        <article class="dashboard-metric">
-            <div class="dashboard-metric-icon"><i class="bi bi-send"></i></div>
-            <div class="dashboard-metric-label">Publish attempts · 24h</div>
+        <article class="dashboard-metric compact-kpi">
+            <div class="compact-kpi-heading"><div class="dashboard-metric-icon"><i class="bi bi-send"></i></div><div class="dashboard-metric-label">Publish attempts · 24h</div></div>
             <div class="dashboard-metric-value" id="publishAttempts">0</div>
             <div class="dashboard-metric-detail">Incoming EVENT messages</div>
         </article>
 
-        <article class="dashboard-metric">
-            <div class="dashboard-metric-icon"><i class="bi bi-inboxes"></i></div>
-            <div class="dashboard-metric-label">Subscriptions · 24h</div>
+        <article class="dashboard-metric compact-kpi">
+            <div class="compact-kpi-heading"><div class="dashboard-metric-icon"><i class="bi bi-inboxes"></i></div><div class="dashboard-metric-label">Subscriptions · 24h</div></div>
             <div class="dashboard-metric-value" id="subscriptionCount">0</div>
             <div class="dashboard-metric-detail">Incoming REQ messages</div>
         </article>

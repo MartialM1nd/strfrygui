@@ -60,6 +60,10 @@ def test_policy_log_template_renders_operations_console_contract():
     assert 'id="decisionList"' in page
     assert 'id="policyState"' in page
     assert 'id="resetNotice"' in page
+    assert 'compact-page-header' in page
+    assert 'compact-panel policy-filter-panel' in page
+    assert 'policy-filter-primary compact-toolbar' in page
+    assert 'policy-results-summary' in page
     assert '<table' not in page
 
 
@@ -110,8 +114,10 @@ def test_policy_log_validates_batch_and_event_types_before_rendering():
 
 
 def test_policy_log_cards_and_states_have_responsive_styles():
+    script = SCRIPT.read_text()
     styles = STYLES.read_text()
 
+    assert "card.className = 'policy-decision-card compact-record'" in script
     assert '.policy-decision-card' in styles
     assert '.policy-facts' in styles
     assert '.policy-log-state[data-state="offline"]' in styles
@@ -119,3 +125,44 @@ def test_policy_log_cards_and_states_have_responsive_styles():
     assert '.policy-log-state[data-state="reset"]' in styles
     assert '@media (max-width: 767px)' in styles
     assert '@media (max-width: 480px)' in styles
+    assert '@media (min-width: 992px)' in styles
+    assert 'content-visibility: auto' in styles
+    assert 'contain-intrinsic-size: auto 96px' in styles
+    assert 'min-height: 85px' in styles
+    assert '.policy-log-shell .compact-record' in styles
+    assert '.policy-log-shell .compact-toolbar' in styles
+
+
+def test_policy_log_compact_rows_keep_every_decision_field_and_full_identifiers():
+    script = SCRIPT.read_text()
+    styles = STYLES.read_text()
+
+    for rendered_field in (
+        'outcomes.append(createOutcome(record.action, false), createOutcome(record.simulated_action, true))',
+        "createFact('Actual reason', formatReason(record.reason)",
+        "createFact('Monitor reason', formatReason(record.simulated_reason)",
+        "createFact('Event kind', record.kind === null",
+        "createFact('Source', [record.source_type, record.source_ip]",
+        "createFact('Policy mode', record.policy_mode",
+        'time.dateTime = new Date(record.timestamp_ms).toISOString()',
+        "createExplorerLink('Event', record.event_id",
+        "createExplorerLink('Author', record.pubkey",
+    ):
+        assert rendered_field in script
+    assert 'link.title = value' in script
+    assert "+ value\n        );" in script
+    assert 'link.textContent = value' in script
+    assert 'text-overflow: ellipsis' in styles
+    assert 'white-space: nowrap' in styles
+
+
+def test_policy_log_compact_layout_does_not_replace_spacious_mobile_layout():
+    styles = STYLES.read_text()
+    desktop_start = styles.index('@media (min-width: 992px)')
+    desktop_styles = styles[desktop_start:]
+
+    assert '.policy-decision-top {' in styles[:desktop_start]
+    assert '.policy-facts { display: grid' in styles[:desktop_start]
+    assert '.policy-identifiers { display: grid' in styles[:desktop_start]
+    assert '.policy-log-shell .compact-record' in desktop_styles
+    assert 'grid-template-columns: minmax(205px, 0.75fr)' in desktop_styles

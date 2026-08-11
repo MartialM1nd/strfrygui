@@ -4,9 +4,18 @@
 
 {% block admin_content %}
 {% set initial_offset = audit_offset|default(0) + audit_logs|length %}
+{% set active_filters = namespace(count=0, labels=[]) %}
+{% if audit_filters.action %}{% set active_filters.count = active_filters.count + 1 %}{% set active_filters.labels = active_filters.labels + ['Action'] %}{% endif %}
+{% if audit_filters.operator %}{% set active_filters.count = active_filters.count + 1 %}{% set active_filters.labels = active_filters.labels + ['Operator'] %}{% endif %}
+{% if audit_filters.text %}{% set active_filters.count = active_filters.count + 1 %}{% set active_filters.labels = active_filters.labels + ['Text'] %}{% endif %}
+{% if audit_filters.system != 'include' %}{% set active_filters.count = active_filters.count + 1 %}{% set active_filters.labels = active_filters.labels + ['System records'] %}{% endif %}
+{% if audit_filters.date_from %}{% set active_filters.count = active_filters.count + 1 %}{% set active_filters.labels = active_filters.labels + ['From date'] %}{% endif %}
+{% if audit_filters.date_to %}{% set active_filters.count = active_filters.count + 1 %}{% set active_filters.labels = active_filters.labels + ['To date'] %}{% endif %}
 <section aria-labelledby="auditHeading">
     <div class="admin-section-heading mb-3"><div><div class="dashboard-section-label">ACCOUNTABILITY</div><h2 id="auditHeading" class="h3 mb-1">Audit log</h2><p class="text-body-secondary small mb-0">Review administrative and moderation activity in bounded pages.</p></div><span class="admin-count">{{ audit_total|default(audit_logs|length) }} records</span></div>
-    <form method="GET" action="{{ url_for('admin_audit') }}" class="dashboard-panel admin-audit-filters mb-4">
+    <details class="dashboard-panel admin-filter-disclosure compact-panel mb-4" data-responsive-disclosure{% if active_filters.count %} open{% endif %}>
+        <summary><span>Filters</span><span class="admin-filter-summary">{% if active_filters.count %}<span class="admin-count" data-tone="primary">{{ active_filters.count }} active</span><span class="text-body-secondary">{{ active_filters.labels|join(', ') }}</span>{% else %}<span class="text-body-secondary">No active filters</span>{% endif %}</span></summary>
+        <form method="GET" action="{{ url_for('admin_audit') }}" class="admin-audit-filters mt-3">
         <div><label class="form-label" for="auditAction">Action</label><input class="form-control form-control-sm" id="auditAction" name="action" value="{{ audit_filters.action }}" maxlength="100" placeholder="user_create"></div>
         <div><label class="form-label" for="auditOperator">Operator</label><input class="form-control form-control-sm" id="auditOperator" name="operator" value="{{ audit_filters.operator }}" maxlength="80" placeholder="Username or system"></div>
         <div><label class="form-label" for="auditText">Text</label><input class="form-control form-control-sm" id="auditText" name="text" value="{{ audit_filters.text }}" maxlength="200" placeholder="Details, action, IP"></div>
@@ -14,12 +23,13 @@
         <div><label class="form-label" for="auditDateFrom">From</label><input class="form-control form-control-sm" id="auditDateFrom" name="date_from" type="date" value="{{ audit_filters.date_from }}"></div>
         <div><label class="form-label" for="auditDateTo">To</label><input class="form-control form-control-sm" id="auditDateTo" name="date_to" type="date" value="{{ audit_filters.date_to }}"></div>
         <div class="admin-audit-filter-actions"><button class="btn btn-sm btn-primary" type="submit">Apply filters</button><a class="btn btn-sm btn-outline-secondary" href="{{ url_for('admin_audit') }}">Clear</a></div>
-    </form>
+        </form>
+    </details>
     <div class="dashboard-panel admin-audit-panel" id="auditLog" data-api-url="{{ url_for('api_audit_logs') }}" data-offset="{{ initial_offset }}" data-limit="{{ audit_limit|default(25) }}" data-has-more="{{ 'true' if audit_has_more else 'false' }}"{% if next_cursor is defined and next_cursor %} data-next-cursor="{{ next_cursor|tojson|forceescape }}"{% endif %}>
         <div class="admin-state admin-state-error d-none" id="auditError" role="alert"><i class="bi bi-exclamation-triangle" aria-hidden="true"></i><span>Audit records could not be loaded.</span><button class="btn btn-sm btn-outline-danger" id="auditRetry" type="button">Retry</button></div>
         <div class="table-responsive admin-table-wrap{% if not audit_logs %} d-none{% endif %}" id="auditTableWrap">
             <table class="table table-sm align-middle admin-table mb-0"><thead><tr><th scope="col">Time</th><th scope="col">Operator</th><th scope="col">Action</th><th scope="col">Details</th><th scope="col">IP address</th></tr></thead><tbody id="auditLogsBody">
-                {% for log in audit_logs %}<tr><td data-label="Time"><time class="text-nowrap"{% if log.timestamp %} datetime="{{ log.timestamp.isoformat() }}"{% endif %}>{{ log.timestamp.strftime('%Y-%m-%d %H:%M:%S') if log.timestamp else '-' }}</time></td><td data-label="Operator">{{ log.user.username if log.user else 'system' }}</td><td data-label="Action"><span class="admin-action-badge" data-tone="{% if 'login' in log.action %}success{% elif 'delete' in log.action or 'remove' in log.action %}danger{% elif 'create' in log.action or 'add' in log.action %}primary{% else %}neutral{% endif %}">{{ log.action }}</span></td><td data-label="Details" class="admin-audit-detail">{{ log.details or '-' }}</td><td data-label="IP address"><code>{{ log.ip_address or '-' }}</code></td></tr>{% endfor %}
+                {% for log in audit_logs %}<tr class="compact-record"><td data-label="Time"><time class="text-nowrap"{% if log.timestamp %} datetime="{{ log.timestamp.isoformat() }}"{% endif %}>{{ log.timestamp.strftime('%Y-%m-%d %H:%M:%S') if log.timestamp else '-' }}</time></td><td data-label="Operator">{{ log.user.username if log.user else 'system' }}</td><td data-label="Action"><span class="admin-action-badge" data-tone="{% if 'login' in log.action %}success{% elif 'delete' in log.action or 'remove' in log.action %}danger{% elif 'create' in log.action or 'add' in log.action %}primary{% else %}neutral{% endif %}">{{ log.action }}</span></td><td data-label="Details" class="admin-audit-detail" title="{{ log.details or '-' }}">{{ log.details or '-' }}</td><td data-label="IP address"><code>{{ log.ip_address or '-' }}</code></td></tr>{% endfor %}
             </tbody></table>
         </div>
         <div id="auditEmpty"{% if audit_logs %} class="d-none"{% endif %}>{{ empty_state('bi-journal-check', 'No audit records', 'Administrative activity will appear here when it occurs.') }}</div>

@@ -35,6 +35,7 @@
     function appendLog(log) {
         const item = log && typeof log === 'object' ? log : {};
         const row = document.createElement('tr');
+        row.className = 'compact-record';
         const timeCell = document.createElement('td');
         const time = document.createElement('time');
         timeCell.dataset.label = 'Time';
@@ -55,7 +56,9 @@
         ipCell.dataset.label = 'IP address';
         code.textContent = typeof item.ip_address === 'string' && item.ip_address ? item.ip_address : '-';
         ipCell.appendChild(code);
-        row.append(timeCell, textCell('Operator', typeof item.username === 'string' ? item.username : 'system'), actionCell, textCell('Details', typeof item.details === 'string' ? item.details : '-', 'admin-audit-detail'), ipCell);
+        const detailCell = textCell('Details', typeof item.details === 'string' ? item.details : '-', 'admin-audit-detail');
+        detailCell.title = detailCell.textContent;
+        row.append(timeCell, textCell('Operator', typeof item.username === 'string' ? item.username : 'system'), actionCell, detailCell, ipCell);
         body.appendChild(row);
     }
     function updateState() {

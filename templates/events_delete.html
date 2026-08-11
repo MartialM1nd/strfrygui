@@ -4,7 +4,7 @@
 {% block title %}Delete Events{% if relay_name %} - {{ relay_name }}{% endif %} - StrfryGUI{% endblock %}
 
 {% block content %}
-<div class="dashboard-shell">
+<div class="dashboard-shell event-delete-shell compact-danger-shell">
     {{ page_header('DATA PLANE · DANGER ZONE', 'Delete events', 'Permanently remove a bounded set of relay events using an explicit Nostr filter.', 'Destructive', 'offline') }}
 
     {% if error %}<div class="alert alert-danger" role="alert"><strong>Deletion blocked.</strong> {{ error }}</div>{% endif %}

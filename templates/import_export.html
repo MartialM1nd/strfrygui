@@ -1,10 +1,12 @@
 {% extends "base.html" %}
-{% from "components/operations.html" import page_header, panel_header, field_errors %}
+{% from "components/operations.html" import page_header, field_errors %}
 
 {% block title %}Import/Export{% if relay_name %} - {{ relay_name }}{% endif %} - StrfryGUI{% endblock %}
 
 {% block content %}
-<div class="dashboard-shell">
+{% set export_active = request.method == 'POST' and 'export_submit' in request.form %}
+{% set import_active = request.method == 'POST' and not export_active and 'import_submit' in request.form %}
+<div class="dashboard-shell import-export-shell compact-workflow-shell">
     {{ page_header(
         'DATA OPERATIONS',
         'Import / export',
@@ -13,9 +15,11 @@
         'degraded' if export_error or import_error else 'healthy'
     ) }}
 
-    <section class="dashboard-panel mb-4" aria-labelledby="exportEventsTitle">
-        {{ panel_header('Export events', 'Generate JSONL from the local relay database using optional timestamp bounds.') }}
-        <h2 class="visually-hidden" id="exportEventsTitle">Export events</h2>
+    <details class="dashboard-panel workflow-panel-disclosure mb-4" data-responsive-disclosure{% if not import_active %} open{% endif %}>
+        <summary>
+            <h2 class="workflow-summary-heading h5 mb-0" id="exportEventsTitle"><span class="workflow-summary-copy"><span class="dashboard-section-label">Export</span><span>Export events</span><span class="text-body-secondary small">Generate JSONL using optional timestamp bounds.</span></span><span class="badge bg-primary">Default workflow</span></h2>
+        </summary>
+        <div class="workflow-disclosure-body">
 
         {% if export_error %}
         <div class="alert alert-danger" role="alert"><strong>Export failed.</strong> {{ export_error }}</div>
@@ -62,17 +66,20 @@
         {% if export_data %}
         <div class="mt-4" aria-live="polite">
             <label class="form-label" for="exportPreview">Export preview</label>
-            <textarea id="exportPreview" class="form-control font-monospace" rows="12" readonly aria-describedby="exportPreviewHelp">{{ export_data[:10000] }}</textarea>
+            <textarea id="exportPreview" class="form-control font-monospace workflow-textarea" rows="8" readonly aria-describedby="exportPreviewHelp">{{ export_data[:10000] }}</textarea>
             <div class="form-text" id="exportPreviewHelp">
                 Showing the first {{ [export_data|length, 10000]|min }} of {{ export_data|length }} characters generated{% if export_data|length > 10000 %}; the remaining output is not shown on this page{% endif %}. This interface does not provide a file download.
             </div>
         </div>
         {% endif %}
-    </section>
+        </div>
+    </details>
 
-    <section class="dashboard-panel mb-4" aria-labelledby="importEventsTitle">
-        {{ panel_header('Import events', 'Submit one complete Nostr event object per line to the local relay database.') }}
-        <h2 class="visually-hidden" id="importEventsTitle">Import events</h2>
+    <details class="dashboard-panel workflow-panel-disclosure mb-4" data-responsive-disclosure{% if import_active %} open{% endif %}>
+        <summary>
+            <h2 class="workflow-summary-heading h5 mb-0" id="importEventsTitle"><span class="workflow-summary-copy"><span class="dashboard-section-label">Import</span><span>Import events</span><span class="text-body-secondary small">Submit one complete Nostr event object per line.</span></span><span class="badge bg-secondary">Writes to database</span></h2>
+        </summary>
+        <div class="workflow-disclosure-body">
 
         {% if import_error %}
         <div class="alert alert-danger" role="alert"><strong>Import failed.</strong> {{ import_error }}</div>
@@ -85,26 +92,32 @@
             {{ import_form.hidden_tag() }}
             <div class="mb-3">
                 {{ import_form.file.label(class="form-label") }}
-                {{ import_form.file(class="form-control font-monospace" ~ (' is-invalid' if import_form.file.errors else ''), rows="12", placeholder='{"id":"...","pubkey":"...","created_at":...,"kind":1,"tags":[],"content":"Hello","sig":"..."}', aria_describedby="importDataHelp importDataErrors", aria_invalid="true" if import_form.file.errors else "false") }}
+                {{ import_form.file(class="form-control font-monospace workflow-textarea" ~ (' is-invalid' if import_form.file.errors else ''), rows="8", placeholder='{"id":"...","pubkey":"...","created_at":...,"kind":1,"tags":[],"content":"Hello","sig":"..."}', aria_describedby="importDataHelp importDataErrors", aria_invalid="true" if import_form.file.errors else "false") }}
                 <div class="form-text" id="importDataHelp">Paste JSONL only: one complete JSON object per line, without a surrounding array.</div>
                 <div id="importDataErrors">{{ field_errors(import_form.file) }}</div>
             </div>
             <div class="mb-3">
                 {{ import_form.no_verify.label(class="form-label") }}
-                {{ import_form.no_verify(class="form-select" ~ (' is-invalid' if import_form.no_verify.errors else ''), aria_describedby="verificationWarning importVerifyErrors", aria_invalid="true" if import_form.no_verify.errors else "false") }}
+                {{ import_form.no_verify(class="form-select" ~ (' is-invalid' if import_form.no_verify.errors else ''), aria_describedby="verificationControls importVerifyErrors", aria_invalid="true" if import_form.no_verify.errors else "false") }}
                 <div id="importVerifyErrors">{{ field_errors(import_form.no_verify) }}</div>
             </div>
 
-            <div class="dashboard-attention mb-3" id="verificationWarning" role="note">
-                <div class="dashboard-section-label mb-1"><i class="bi bi-exclamation-diamond" aria-hidden="true"></i> Verification warning</div>
-                <strong>Keep signature verification enabled unless the source is fully trusted.</strong>
-                <div class="small text-body-secondary mt-1">Selecting "No verification" skips strfry's event verification and can admit malformed, forged, or tampered event records.</div>
-            </div>
-
-            <div class="form-check mb-3">
-                {{ import_form.confirm_no_verify(class="form-check-input" ~ (' is-invalid' if import_form.confirm_no_verify.errors else '')) }}
-                {{ import_form.confirm_no_verify.label(class="form-check-label") }}
-                {{ field_errors(import_form.confirm_no_verify) }}
+            <div class="verification-controls{% if import_form.no_verify.data == 'true' %} is-no-verify{% endif %}" id="verificationControls" aria-live="polite">
+                <div class="verification-safe-note small text-body-secondary mb-3" role="note">
+                    <i class="bi bi-shield-check" aria-hidden="true"></i> Signature verification is enabled.
+                </div>
+                <div class="verification-risk">
+                    <div class="dashboard-attention mb-3" role="alert">
+                        <div class="dashboard-section-label mb-1"><i class="bi bi-exclamation-diamond" aria-hidden="true"></i> Verification disabled</div>
+                        <strong>Only continue when the source is fully trusted.</strong>
+                        <div class="small text-body-secondary mt-1">No verification skips strfry's event verification and can admit malformed, forged, or tampered event records.</div>
+                    </div>
+                    <div class="form-check mb-3">
+                        {{ import_form.confirm_no_verify(class="form-check-input" ~ (' is-invalid' if import_form.confirm_no_verify.errors else '')) }}
+                        {{ import_form.confirm_no_verify.label(class="form-check-label") }}
+                        {{ field_errors(import_form.confirm_no_verify) }}
+                    </div>
+                </div>
             </div>
 
             <div class="operations-action-bar">
@@ -114,7 +127,8 @@
                 </button>
             </div>
         </form>
-    </section>
+        </div>
+    </details>
 
     <section class="dashboard-panel" aria-label="JSONL format reference">
         <details>
@@ -127,4 +141,19 @@
         </details>
     </section>
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    const verificationSelect = document.getElementById('no_verify');
+    const verificationControls = document.getElementById('verificationControls');
+
+    if (verificationSelect && verificationControls) {
+        const updateVerificationWarning = function() {
+            verificationControls.classList.toggle('is-no-verify', verificationSelect.value === 'true');
+        };
+        verificationSelect.addEventListener('change', updateVerificationWarning);
+        updateVerificationWarning();
+    }
+</script>
 {% endblock %}

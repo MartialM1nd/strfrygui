@@ -367,6 +367,21 @@ def test_audit_bounds_invalid_legacy_values_and_html_security(admin_app):
     assert b'data-next-cursor=' in page.data
 
 
+def test_audit_filter_disclosure_tracks_active_filters(admin_app):
+    _module, flask_app, users = admin_app
+    client = _client_for(flask_app, users['admin'])
+
+    default_page = client.get('/admin/audit')
+    filtered_page = client.get('/admin/audit?action=user&system=exclude')
+
+    disclosure = b'class="dashboard-panel admin-filter-disclosure compact-panel mb-4" data-responsive-disclosure'
+    assert disclosure + b'>' in default_page.data
+    assert b'No active filters' in default_page.data
+    assert disclosure + b' open>' in filtered_page.data
+    assert b'2 active' in filtered_page.data
+    assert b'Action, System records' in filtered_page.data
+
+
 def test_relay_api_rejects_malformed_json_and_canonical_duplicates(admin_app):
     _module, flask_app, users = admin_app
     client = _client_for(flask_app, users['admin'])

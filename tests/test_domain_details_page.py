@@ -85,6 +85,11 @@ def test_domain_details_requires_moderator_and_renders_operations_states(domain_
     assert b'<caption class="visually-hidden">' in response.data
     assert b'scope="col"' in response.data
     assert b'aria-live="polite"' in response.data
+    assert b'class="domain-summary-grid domain-kpi-strip mb-4"' in response.data
+    assert b'domain-results-toolbar compact-toolbar' in response.data
+    assert b'class="domain-copy-cell"' in response.data
+    assert b'class="btn btn-sm btn-link copy-value"' in response.data
+    assert b'title="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"' in response.data
     assert b'innerHTML' not in response.data
 
 

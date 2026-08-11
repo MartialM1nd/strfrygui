@@ -11,7 +11,7 @@
 {% endmacro %}
 
 {% block content %}
-<div class="configuration-shell dashboard-shell">
+<div class="configuration-shell dashboard-shell compact-workflow-shell">
     <header class="configuration-header">
         <div>
             <div class="dashboard-kicker">Operations console</div>
@@ -56,7 +56,7 @@
                     </div>
                     <div class="configuration-field-wide">
                         {{ info_form.relay_description.label(class="form-label") }}
-                        {{ info_form.relay_description(class="form-control" + (" is-invalid" if info_form.relay_description.errors else ""), maxlength="1000", rows="4", disabled=config_status != 'writable') }}
+                        {{ info_form.relay_description(class="form-control configuration-textarea" + (" is-invalid" if info_form.relay_description.errors else ""), maxlength="1000", rows="3", disabled=config_status != 'writable') }}
                         {{ errors(info_form.relay_description) }}
                     </div>
                     <div class="configuration-field-wide">

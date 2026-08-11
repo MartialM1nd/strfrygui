@@ -1,5 +1,5 @@
 {% extends "admin_base.html" %}
-{% from "components/operations.html" import panel_header, empty_state, field_errors %}
+{% from "components/operations.html" import empty_state, field_errors %}
 {% block admin_page_title %}Operators{% endblock %}
 
 {% block admin_content %}
@@ -8,22 +8,22 @@
         <div><div class="dashboard-section-label">ACCESS CONTROL</div><h2 id="operatorHeading" class="h3 mb-1">Operators</h2><p class="text-body-secondary small mb-0">Create accounts and keep privileges limited to operational need.</p></div>
         <span class="admin-count">{{ users|length }} account{% if users|length != 1 %}s{% endif %}</span>
     </div>
-    <div class="dashboard-panel mb-4">
-        {{ panel_header('Create operator', 'Temporary passwords require 8+ characters and must be replaced at first login.') }}
-        <form method="POST" action="{{ url_for('create_user') }}" class="admin-create-grid">
+    <details class="dashboard-panel admin-create-disclosure mb-4" data-responsive-disclosure{% if create_user_form.errors %} open{% endif %}>
+        <summary><span><strong>Create operator</strong><small class="text-body-secondary">Temporary passwords require 8+ characters and must be replaced at first login.</small></span></summary>
+        <form method="POST" action="{{ url_for('create_user') }}" class="admin-create-grid mt-3">
             {{ create_user_form.hidden_tag() }}
-            <div><label class="form-label" for="newOperatorUsername">Username</label><input class="form-control" id="newOperatorUsername" name="username" type="text" autocomplete="off" required>{{ field_errors(create_user_form.username) }}</div>
-            <div><label class="form-label" for="newOperatorPassword">Temporary password</label><input class="form-control" id="newOperatorPassword" name="password" type="password" autocomplete="new-password" minlength="8" required>{{ field_errors(create_user_form.password) }}</div>
-            <div><label class="form-label" for="newOperatorRole">Role</label><select class="form-select" id="newOperatorRole" name="role"><option value="viewer" selected>Viewer</option><option value="moderator">Moderator</option><option value="admin">Admin</option></select>{{ field_errors(create_user_form.role) }}</div>
-            <button class="btn btn-primary align-self-end" type="submit"><i class="bi bi-person-plus" aria-hidden="true"></i> Create operator</button>
+            <div><label class="form-label" for="newOperatorUsername">Username</label><input class="form-control form-control-sm" id="newOperatorUsername" name="username" type="text" autocomplete="off" required>{{ field_errors(create_user_form.username) }}</div>
+            <div><label class="form-label" for="newOperatorPassword">Temporary password</label><input class="form-control form-control-sm" id="newOperatorPassword" name="password" type="password" autocomplete="new-password" minlength="8" required>{{ field_errors(create_user_form.password) }}</div>
+            <div><label class="form-label" for="newOperatorRole">Role</label><select class="form-select form-select-sm" id="newOperatorRole" name="role"><option value="viewer" selected>Viewer</option><option value="moderator">Moderator</option><option value="admin">Admin</option></select>{{ field_errors(create_user_form.role) }}</div>
+            <button class="btn btn-sm btn-primary align-self-end" type="submit"><i class="bi bi-person-plus" aria-hidden="true"></i> Create operator</button>
         </form>
-    </div>
+    </details>
     {% if users %}
     <div class="admin-operator-list">
         {% for user in users %}
-        <article class="dashboard-panel admin-operator-card" aria-labelledby="operator-{{ user.id }}">
+        <article class="dashboard-panel admin-operator-card compact-record" aria-labelledby="operator-{{ user.id }}">
             <div class="admin-operator-identity">
-                <div><h3 class="h5 mb-1" id="operator-{{ user.id }}">{{ user.username }}</h3><div class="text-body-secondary small">Created {{ user.created_at.strftime('%Y-%m-%d %H:%M') if user.created_at else 'at an unknown time' }}</div></div>
+                <div><h3 class="h5 mb-1" id="operator-{{ user.id }}">{{ user.username }}</h3><div class="text-body-secondary small admin-operator-created">Created {{ user.created_at.strftime('%Y-%m-%d %H:%M') if user.created_at else 'at an unknown time' }}</div></div>
                 <div class="d-flex flex-wrap gap-2">{% if user.id == current_user.id %}<span class="badge text-bg-info">Current account</span>{% endif %}<span class="badge text-bg-{% if user.role == 'admin' %}danger{% elif user.role == 'moderator' %}warning{% else %}secondary{% endif %}">{{ user.role|title }}</span><span class="badge text-bg-{% if user.is_active %}success{% else %}secondary{% endif %}">{{ 'Active' if user.is_active else 'Inactive' }}</span></div>
             </div>
             <dl class="admin-facts"><div><dt>Last login</dt><dd>{{ user.last_login.strftime('%Y-%m-%d %H:%M') if user.last_login else 'Never' }}</dd></div><div><dt>Operator ID</dt><dd>#{{ user.id }}</dd></div></dl>

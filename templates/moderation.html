@@ -33,23 +33,23 @@
     </section>
     {% endif %}
 
-    <section class="moderation-summary-grid mb-4" aria-label="Moderation report summary">
-        <article class="moderation-summary-item moderation-summary-primary">
+    <section class="moderation-kpi-strip mb-4" aria-label="Moderation report summary">
+        <article class="moderation-kpi moderation-kpi-primary">
             <div class="dashboard-metric-label">Open reports</div>
             <div class="moderation-summary-value" id="openReportCount">{{ open_report_count }}</div>
             <div class="dashboard-metric-detail">Awaiting a decision</div>
         </article>
-        <article class="moderation-summary-item">
+        <article class="moderation-kpi">
             <div class="dashboard-metric-label">New · 24 hours</div>
             <div class="moderation-summary-value" id="newReportCount">{{ new_report_count }}</div>
             <div class="dashboard-metric-detail">Recently received</div>
         </article>
-        <article class="moderation-summary-item">
+        <article class="moderation-kpi">
             <div class="dashboard-metric-label">Current view</div>
             <div class="moderation-summary-value" id="filteredReportCount">{{ total_count }}</div>
             <div class="dashboard-metric-detail">Matching these filters</div>
         </article>
-        <article class="moderation-summary-item">
+        <article class="moderation-kpi">
             <div class="dashboard-metric-label">Pending purges</div>
             <div class="moderation-summary-value">{{ pending_purges|length }}</div>
             <div class="dashboard-metric-detail">Operational follow-up</div>
@@ -67,7 +67,7 @@
             {% endif %}
         </div>
 
-        <form method="GET" class="moderation-filter-bar mb-4">
+        <form method="GET" class="moderation-filter-bar compact-toolbar mb-4">
             <div>
                 <label for="reportTypeFilter" class="form-label">Report type</label>
                 <select id="reportTypeFilter" name="report_type" class="form-select">
@@ -113,7 +113,7 @@
 
         <div id="reportList" class="moderation-report-list" aria-busy="false">
             {% for report in reports %}
-            <article class="moderation-report-card{% if report.banned %} is-banned{% elif report.reviewed %} is-reviewed{% endif %}" id="report-card-{{ report.id }}">
+            <article class="moderation-report-card compact-record{% if report.banned %} is-banned{% elif report.reviewed %} is-reviewed{% endif %}" id="report-card-{{ report.id }}">
                 <div class="moderation-report-main">
                     <div class="moderation-report-meta">
                         <span class="moderation-type" data-type="{{ report.report_type or 'other' }}">{{ report.report_type|default('Other', true)|title }}</span>
@@ -123,9 +123,9 @@
                     <div class="moderation-report-target">
                         <div class="dashboard-metric-label">Reported target</div>
                         {% if report.reported_pubkey %}
-                        <a class="moderation-identifier" href="{{ url_for('events', search_type='pubkey', pubkey=report.reported_pubkey) }}"><code>{{ report.reported_pubkey }}</code></a>
+                        <a class="moderation-identifier" href="{{ url_for('events', search_type='pubkey', pubkey=report.reported_pubkey) }}" title="{{ report.reported_pubkey }}"><code>{{ report.reported_pubkey }}</code></a>
                         {% elif report.reported_event_id %}
-                        <a class="moderation-identifier" href="{{ url_for('events', search_type='event_id', event_id=report.reported_event_id) }}"><code>{{ report.reported_event_id }}</code></a>
+                        <a class="moderation-identifier" href="{{ url_for('events', search_type='event_id', event_id=report.reported_event_id) }}" title="{{ report.reported_event_id }}"><code>{{ report.reported_event_id }}</code></a>
                         {% else %}<span class="text-body-secondary">No target identifier</span>{% endif %}
                     </div>
                     <div class="moderation-report-reason">
@@ -134,8 +134,8 @@
                     </div>
                     <div class="moderation-report-context small text-body-secondary">
                         Reporter:
-                        {% if report.reporter_pubkey %}<a href="{{ url_for('events', search_type='pubkey', pubkey=report.reporter_pubkey) }}"><code>{{ report.reporter_pubkey }}</code></a>{% else %}unknown{% endif %}
-                        {% if report.reported_event_id %}<span>· Event: <a href="{{ url_for('events', search_type='event_id', event_id=report.reported_event_id) }}"><code>{{ report.reported_event_id }}</code></a></span>{% endif %}
+                        {% if report.reporter_pubkey %}<a class="moderation-identifier" href="{{ url_for('events', search_type='pubkey', pubkey=report.reporter_pubkey) }}" title="{{ report.reporter_pubkey }}"><code>{{ report.reporter_pubkey }}</code></a>{% else %}unknown{% endif %}
+                        {% if report.reported_event_id %}<span>· Event: <a class="moderation-identifier" href="{{ url_for('events', search_type='event_id', event_id=report.reported_event_id) }}" title="{{ report.reported_event_id }}"><code>{{ report.reported_event_id }}</code></a></span>{% endif %}
                     </div>
                 </div>
                 <div class="moderation-report-actions" aria-label="Actions for report {{ report.id }}">
@@ -150,9 +150,9 @@
                 </div>
                 <div class="collapse moderation-report-detail" id="report-detail-{{ report.id }}" data-event-id="{{ report.reported_event_id or '' }}">
                     <div class="moderation-detail-grid">
-                        <div><span class="dashboard-metric-label">Report event</span><code class="text-break">{{ report.event_id }}</code></div>
-                        <div><span class="dashboard-metric-label">Reported pubkey</span><code class="text-break">{{ report.reported_pubkey or 'N/A' }}</code></div>
-                        <div><span class="dashboard-metric-label">Reported event</span><code class="text-break">{{ report.reported_event_id or 'N/A' }}</code></div>
+                        <div><span class="dashboard-metric-label">Report event</span><code class="moderation-detail-identifier" title="{{ report.event_id }}">{{ report.event_id }}</code></div>
+                        <div><span class="dashboard-metric-label">Reported pubkey</span><code class="moderation-detail-identifier" title="{{ report.reported_pubkey or 'N/A' }}">{{ report.reported_pubkey or 'N/A' }}</code></div>
+                        <div><span class="dashboard-metric-label">Reported event</span><code class="moderation-detail-identifier" title="{{ report.reported_event_id or 'N/A' }}">{{ report.reported_event_id or 'N/A' }}</code></div>
                     </div>
                     <div class="mt-3">
                         <div class="dashboard-metric-label mb-1">Full reporter note</div>
@@ -322,6 +322,7 @@ function reportSearchLink(searchType, parameter, value) {
     const params = new URLSearchParams({ search_type: searchType });
     params.set(parameter, value);
     link.href = '/events?' + params.toString();
+    link.title = value;
     link.appendChild(node('code', '', value));
     return link;
 }
@@ -347,12 +348,14 @@ function actionButton(label, style, icon, action, report) {
 
 function detailValue(label, value) {
     const wrapper = node('div');
-    wrapper.append(node('span', 'dashboard-metric-label', label), node('code', 'text-break', value || 'N/A'));
+    const identifier = node('code', 'moderation-detail-identifier', value || 'N/A');
+    identifier.title = value || 'N/A';
+    wrapper.append(node('span', 'dashboard-metric-label', label), identifier);
     return wrapper;
 }
 
 function createReportCard(report) {
-    const card = node('article', 'moderation-report-card');
+    const card = node('article', 'moderation-report-card compact-record');
     if (report.banned) card.classList.add('is-banned');
     else if (report.reviewed) card.classList.add('is-reviewed');
     card.id = 'report-card-' + report.id;
@@ -392,6 +395,7 @@ function createReportCard(report) {
     detailsButton.type = 'button';
     detailsButton.dataset.bsToggle = 'collapse';
     detailsButton.dataset.bsTarget = '#report-detail-' + report.id;
+    detailsButton.setAttribute('aria-expanded', 'false');
     detailsButton.setAttribute('aria-controls', 'report-detail-' + report.id);
     detailsButton.append(node('i', 'bi bi-eye'), document.createTextNode(' Details'));
     actions.appendChild(detailsButton);

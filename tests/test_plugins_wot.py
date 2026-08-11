@@ -84,6 +84,7 @@ def test_plugins_page_manages_and_publishes_wot_policy(monkeypatch, tmp_path):
     }))
     page = client.get('/plugins')
     assert b'class="dashboard-shell plugins-shell"' in page.data
+    assert b'<details class="plugin-wot-disclosure" data-responsive-disclosure>' in page.data
     assert b'Bundled executable' in page.data
     assert b'Configured source' in page.data
     assert b'Ban projection publication' in page.data
@@ -132,6 +133,7 @@ def test_plugins_page_manages_and_publishes_wot_policy(monkeypatch, tmp_path):
         'rate_limit_burst': '8',
     })
     assert unconfirmed_enforce.status_code == 422
+    assert b'<details class="plugin-wot-disclosure" data-responsive-disclosure open>' in unconfirmed_enforce.data
     assert b'Confirm Enforce mode' in unconfirmed_enforce.data
     assert b'<option selected value="enforce">' in unconfirmed_enforce.data
     with flask_app.app_context():
@@ -454,6 +456,9 @@ def test_plugins_page_manages_and_publishes_wot_policy(monkeypatch, tmp_path):
         'no_verify': 'true',
     })
     assert unconfirmed_import.status_code == 200
+    assert b'class="dashboard-panel workflow-panel-disclosure mb-4" data-responsive-disclosure>' in unconfirmed_import.data
+    assert unconfirmed_import.data.count(b'class="dashboard-panel workflow-panel-disclosure mb-4" data-responsive-disclosure open>') == 1
+    assert unconfirmed_import.data.index(b'id="importEventsTitle"') > unconfirmed_import.data.index(b'data-responsive-disclosure open>')
     assert b'Confirm that you understand the risk' in unconfirmed_import.data
     assert imported == []
 
@@ -466,6 +471,17 @@ def test_plugins_page_manages_and_publishes_wot_policy(monkeypatch, tmp_path):
     assert confirmed_import.status_code == 200
     assert confirmed_import.headers['Cache-Control'] == 'no-store'
     assert imported == [('{"id":"event"}', False)]
+
+    initial_import_export = client.get('/import_export')
+    monkeypatch.setattr(app_module, 'export_events', lambda **_kwargs: '{}\n')
+    successful_export = client.post('/import_export', data={'export_submit': '1'})
+    invalid_export = client.post('/import_export', data={
+        'export_submit': '1',
+        'since': 'not-a-timestamp',
+    })
+    for response in (initial_import_export, successful_export, invalid_export):
+        assert response.data.count(b'class="dashboard-panel workflow-panel-disclosure mb-4" data-responsive-disclosure open>') == 1
+        assert response.data.index(b'data-responsive-disclosure open>') < response.data.index(b'id="exportEventsTitle"')
 
     assert client.post('/db', data={
         'negentropy_build': '1',
