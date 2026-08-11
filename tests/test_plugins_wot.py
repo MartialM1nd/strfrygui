@@ -83,6 +83,7 @@ def test_plugins_page_manages_and_publishes_wot_policy(monkeypatch, tmp_path):
         'counters': {'accepted_monitor': 4},
     }))
     page = client.get('/plugins')
+    assert b'class="dashboard-shell plugins-shell"' in page.data
     assert b'Bundled executable' in page.data
     assert b'Configured source' in page.data
     assert b'Ban projection publication' in page.data
