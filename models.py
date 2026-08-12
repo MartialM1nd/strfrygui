@@ -55,6 +55,8 @@ class User(UserMixin, db.Model):
     id = db.Column(db.Integer, primary_key=True)
     username = db.Column(db.String(80), unique=True, nullable=False, index=True)
     password_hash = db.Column(db.String(128), nullable=False)
+    nostr_pubkey = db.Column(db.String(64), unique=True, nullable=True, index=True)
+    auth_version = db.Column(db.Integer, nullable=False, default=1)
     role = db.Column(db.String(20), nullable=False, default='viewer')
     is_active = db.Column(db.Boolean, default=True)
     created_at = db.Column(db.DateTime, default=utcnow)
@@ -71,16 +73,39 @@ class User(UserMixin, db.Model):
     
     def update_login(self):
         self.last_login = utcnow()
+
+    def disable_password(self):
+        """Populate the legacy non-null column with an unusable random password."""
+        import secrets
+
+        self.set_password(secrets.token_urlsafe(48))
     
     def to_dict(self):
         return {
             'id': self.id,
             'username': self.username,
+            'nostr_pubkey': self.nostr_pubkey,
             'role': self.role,
             'is_active': self.is_active,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'last_login': self.last_login.isoformat() if self.last_login else None
         }
+
+
+class NostrAuthChallenge(db.Model):
+    __tablename__ = 'nostr_auth_challenges'
+
+    id = db.Column(db.Integer, primary_key=True)
+    nonce_hash = db.Column(db.String(64), unique=True, nullable=False, index=True)
+    session_hash = db.Column(db.String(64), nullable=False)
+    action = db.Column(db.String(20), nullable=False)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.id'), nullable=True)
+    expected_created_at = db.Column(db.Integer, nullable=False)
+    payload_hash = db.Column(db.String(64), nullable=True)
+    redirect_to = db.Column(db.Text, nullable=True)
+    created_at = db.Column(db.DateTime, default=utcnow, nullable=False)
+    expires_at = db.Column(db.DateTime, nullable=False, index=True)
+    consumed_at = db.Column(db.DateTime, nullable=True)
 
 
 class AuditLog(db.Model):

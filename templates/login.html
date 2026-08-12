@@ -4,51 +4,28 @@
 
 {% block content %}
 <div class="legacy-shell auth-shell">
-    <section class="legacy-panel" aria-labelledby="loginTitle">
+    <section class="legacy-panel" aria-labelledby="loginTitle" data-nostr-auth="login" data-next="{{ request.args.get('next', '') }}">
         <header class="legacy-panel-header">
             <span class="dashboard-section-label">Relay operations</span>
-            <h1 id="loginTitle">Sign in</h1>
-            <p>Access relay monitoring and moderation tools.</p>
+            <h1 id="loginTitle">Sign in with Nostr</h1>
+            <p>Use a NIP-07 browser extension to access relay monitoring and moderation tools.</p>
         </header>
         <div class="legacy-panel-body">
-                <form method="POST" novalidate>
-                    {{ form.hidden_tag() }}
-                    {% if form.form_errors or (form.csrf_token is defined and form.csrf_token.errors) %}
-                    <div class="alert alert-danger" role="alert">
-                        {% for error in form.form_errors %}<div>{{ error }}</div>{% endfor %}
-                        {% if form.csrf_token is defined %}{% for error in form.csrf_token.errors %}<div>{{ error }}</div>{% endfor %}{% endif %}
-                    </div>
-                    {% endif %}
-                    <div class="mb-3">
-                        {{ form.username.label(class="form-label") }}
-                        {{ form.username(class="form-control" + (" is-invalid" if form.username.errors else ""), autofocus=true, autocomplete="username", aria_describedby="username-errors" if form.username.errors else false) }}
-                        {% if form.username.errors %}
-                            <div id="username-errors" class="invalid-feedback">
-                                {% for error in form.username.errors %}<div>{{ error }}</div>{% endfor %}
-                            </div>
-                        {% endif %}
-                    </div>
-                    <div class="mb-3">
-                        {{ form.password.label(class="form-label") }}
-                        {{ form.password(class="form-control" + (" is-invalid" if form.password.errors else ""), autocomplete="current-password", aria_describedby="password-errors" if form.password.errors else false) }}
-                        {% if form.password.errors %}
-                            <div id="password-errors" class="invalid-feedback">
-                                {% for error in form.password.errors %}<div>{{ error }}</div>{% endfor %}
-                            </div>
-                        {% endif %}
-                    </div>
-                    <button type="submit" class="btn btn-primary w-100">Sign in</button>
-                </form>
+            <div id="nostrAuthStatus" class="alert alert-info" role="status">Checking for a Nostr extension...</div>
+            <button id="nostrAuthButton" type="button" class="btn btn-primary w-100" disabled>
+                <i class="bi bi-key" aria-hidden="true"></i> Sign in with Nostr
+            </button>
+            <p class="small text-body-secondary mt-3 mb-0">Your extension signs a short-lived authentication event. Your private key never leaves the extension.</p>
         </div>
-        {% if User.query.count() == 0 %}
+        {% if setup_available %}
         <footer class="legacy-panel-footer">
-                {% if User.query.count() == 0 %}
-                <a href="{{ url_for('register') }}" class="btn btn-outline-primary btn-sm">
-                    <i class="bi bi-person-plus"></i> Register First User
-                </a>
-                {% endif %}
+            <a href="{{ url_for('register') }}" class="btn btn-outline-primary btn-sm">
+                <i class="bi bi-person-plus"></i> Configure First Nostr Admin
+            </a>
         </footer>
         {% endif %}
     </section>
 </div>
 {% endblock %}
+
+{% block scripts %}<script src="{{ url_for('static', filename='nostr_auth.js') }}"></script>{% endblock %}

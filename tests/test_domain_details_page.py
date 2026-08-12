@@ -70,6 +70,7 @@ def client_for(flask_app, user_id=None):
         with client.session_transaction() as session:
             session['_user_id'] = str(user_id)
             session['_fresh'] = True
+            session['_nostr_auth_version'] = 1
     return client
 
 

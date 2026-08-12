@@ -150,12 +150,12 @@ def init_db():
 
 ## Security Requirements
 
-- **Passwords**: 21+ chars, uppercase, lowercase, digit, special char (admin-created users: 8+ chars)
-- **must_change_password**: Admin-created users must change password on first login
+- **Authentication**: NIP-07 extensions sign short-lived NIP-98 events with one-time server challenges
+- **Operator identity**: Store canonical lowercase 64-character hex pubkeys; roles remain server-controlled
 - **Auth decorators**: `@admin_required`, `@moderator_required`, `@viewer_or_higher`
 - **CSRF**: Flask-WTF handles automatically - use `form.csrf_token.current_token` for AJAX
 - **Rate limiting**: Flask-Limiter on `/login` and globally
-- **Secrets**: Never log passwords; use `.env` (never commit)
+- **Secrets**: Never log registration tokens, challenges, or signed auth events; use `.env` (never commit)
 
 ## HTML Templates
 

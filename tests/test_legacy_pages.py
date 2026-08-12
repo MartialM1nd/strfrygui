@@ -2,6 +2,7 @@ import importlib
 import sys
 
 import pytest
+from types import SimpleNamespace
 
 from config import Config
 from models import User, db
@@ -65,34 +66,18 @@ def login(client, username='operator', next_url=None):
     return client.post(path, data={'username': username, 'password': PASSWORD})
 
 
-def test_auth_forms_render_accessible_validation_and_masked_token(legacy_app):
+def test_auth_pages_render_nostr_only_controls_and_masked_token(legacy_app):
     _app_module, flask_app = legacy_app
     client = flask_app.test_client()
 
     register_page = client.get('/register')
-    invalid = client.post('/register', data={
-        'username': 'x',
-        'password': 'short',
-        'confirm_password': 'different',
-        'role': 'admin',
-        'registration_token': 'wrong',
-    })
-    bad_token = client.post('/register', data={
-        'username': 'first_admin',
-        'password': PASSWORD,
-        'confirm_password': PASSWORD,
-        'role': 'admin',
-        'registration_token': 'visible-secret',
-    })
+    login_page = client.get('/login')
 
-    assert b'name="registration_token"' in register_page.data
+    assert b'id="setupRegistrationToken"' in register_page.data
     assert b'type="password"' in register_page.data
-    assert b'autocomplete="new-password"' in register_page.data
-    assert b'is-invalid' in invalid.data
-    assert b'aria-describedby="username-errors"' in invalid.data
-    assert b'id="username-errors"' in invalid.data
-    assert b'aria-describedby="registration_token-errors"' in bad_token.data
-    assert b'visible-secret' not in bad_token.data
+    assert b'Sign and configure administrator' in register_page.data
+    assert b'Sign in with Nostr' in login_page.data
+    assert b'name="password"' not in login_page.data
 
 
 @pytest.mark.parametrize('next_url', [
@@ -100,50 +85,71 @@ def test_auth_forms_render_accessible_validation_and_masked_token(legacy_app):
     '//attacker.example/steal',
     '/\\attacker.example/steal',
 ])
-def test_login_rejects_unsafe_next_redirects(legacy_app, next_url):
+def test_login_page_does_not_embed_unsafe_next_as_redirect_logic(legacy_app, next_url):
     _app_module, flask_app = legacy_app
-    add_user(flask_app)
-
-    response = login(flask_app.test_client(), next_url=next_url)
-
-    assert response.status_code == 302
-    assert response.headers['Location'].endswith('/')
-    assert 'attacker.example' not in response.headers['Location']
+    response = flask_app.test_client().get(f'/login?next={next_url}')
+    assert response.status_code == 200
+    assert b'data-nostr-auth="login"' in response.data
 
 
-def test_login_accepts_local_next_and_preserves_forced_password_change(legacy_app):
+def test_login_page_preserves_local_next_for_challenge_request(legacy_app):
     _app_module, flask_app = legacy_app
-    add_user(flask_app)
-    local = login(flask_app.test_client(), next_url='/events?limit=25')
-    assert local.headers['Location'].endswith('/events?limit=25')
-
-    forced_id = add_user(flask_app, username='forced', role='viewer', must_change=True)
-    forced = login(flask_app.test_client(), username='forced', next_url='/events')
-    assert forced.headers['Location'].endswith(f'/change-password/{forced_id}')
+    local = flask_app.test_client().get('/login?next=/events?limit=25')
+    assert b'data-next="/events?limit=25"' in local.data
 
 
-def test_registration_and_password_change_behavior_remains_intact(legacy_app):
+def test_password_login_and_change_routes_are_removed(legacy_app):
     _app_module, flask_app = legacy_app
     client = flask_app.test_client()
-    created = client.post('/register', data={
-        'username': 'first_admin',
-        'password': PASSWORD,
-        'confirm_password': PASSWORD,
-        'role': 'admin',
-        'registration_token': 'private-registration-token',
-    })
-    assert created.status_code == 302
-    assert created.headers['Location'].endswith('/login')
+    assert client.post('/login', data={'username': 'operator', 'password': PASSWORD}).status_code == 405
+    assert client.post('/change-password/1').status_code == 404
 
-    login(client, username='first_admin')
+
+def test_nostr_login_maps_verified_pubkey_to_existing_user(legacy_app, monkeypatch):
+    app_module, flask_app = legacy_app
+    pubkey = 'a' * 64
     with flask_app.app_context():
-        user_id = User.query.filter_by(username='first_admin').one().id
-    invalid = client.post(
-        f'/change-password/{user_id}',
-        data={'password': 'short', 'confirm_password': 'short'},
+        user = User(username='nostr-admin', role='admin', nostr_pubkey=pubkey, must_change_password=False)
+        user.disable_password()
+        db.session.add(user)
+        db.session.commit()
+        user_id = user.id
+    monkeypatch.setattr(
+        app_module,
+        '_verified_auth',
+        lambda action: SimpleNamespace(pubkey=pubkey, redirect_to='/events', payload={}),
     )
-    assert invalid.status_code == 200
-    assert b'aria-describedby="password-help password-errors"' in invalid.data
+
+    response = flask_app.test_client().post('/api/auth/verify')
+
+    assert response.status_code == 200
+    assert response.get_json()['redirect'] == '/events'
+    with flask_app.app_context():
+        user = db.session.get(User, user_id)
+        assert user.last_login is not None
+
+
+def test_nostr_bootstrap_binds_existing_admin_and_closes_setup(legacy_app, monkeypatch):
+    app_module, flask_app = legacy_app
+    user_id = add_user(flask_app, username='existing_admin')
+    pubkey = 'b' * 64
+    monkeypatch.setattr(
+        app_module,
+        '_verified_auth',
+        lambda action: SimpleNamespace(
+            pubkey=pubkey,
+            redirect_to=None,
+            payload={'username': 'existing_admin', 'registration_token': 'private-registration-token'},
+        ),
+    )
+
+    response = flask_app.test_client().post('/api/auth/bootstrap')
+
+    assert response.status_code == 200
+    with flask_app.app_context():
+        user = db.session.get(User, user_id)
+        assert user.nostr_pubkey == pubkey
+        assert app_module._nostr_setup_available() is False
 
 
 def test_error_pages_have_safe_context_status_and_recovery(legacy_app):

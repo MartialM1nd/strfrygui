@@ -21,6 +21,12 @@ from utils.relay import RelayError
 
 
 PASSWORD = 'StrongPassword123456!'
+PUBKEYS = {
+    'admin': '1' * 64,
+    'moderator': '2' * 64,
+    'viewer': '3' * 64,
+    'inactive': '4' * 64,
+}
 CONFIG = '''relay {
     info {
         name = "Admin Test Relay"
@@ -58,10 +64,10 @@ def admin_app(tmp_path_factory):
     with flask_app.app_context():
         db.drop_all()
         db.create_all()
-        admin = _make_user('admin-test', 'admin')
-        moderator = _make_user('moderator-test', 'moderator')
-        viewer = _make_user('viewer-test', 'viewer')
-        inactive = _make_user('inactive-test', 'admin', is_active=False)
+        admin = _make_user('admin-test', 'admin', pubkey=PUBKEYS['admin'])
+        moderator = _make_user('moderator-test', 'moderator', pubkey=PUBKEYS['moderator'])
+        viewer = _make_user('viewer-test', 'viewer', pubkey=PUBKEYS['viewer'])
+        inactive = _make_user('inactive-test', 'admin', is_active=False, pubkey=PUBKEYS['inactive'])
         db.session.commit()
         user_ids = {
             'admin': admin.id,
@@ -94,21 +100,29 @@ def clean_admin_data(admin_app):
         admin.username = 'admin-test'
         admin.role = 'admin'
         admin.is_active = True
+        admin.nostr_pubkey = PUBKEYS['admin']
+        admin.auth_version = 1
         admin.must_change_password = False
         for role in ('moderator', 'viewer'):
             user = db.session.get(User, user_ids[role])
             user.role = role
             user.is_active = True
-        db.session.get(User, user_ids['inactive']).is_active = False
+            user.nostr_pubkey = PUBKEYS[role]
+            user.auth_version = 1
+        inactive = db.session.get(User, user_ids['inactive'])
+        inactive.is_active = False
+        inactive.nostr_pubkey = PUBKEYS['inactive']
+        inactive.auth_version = 1
         db.session.commit()
     yield
 
 
-def _make_user(username, role, is_active=True):
+def _make_user(username, role, is_active=True, pubkey=None):
     user = User(
         username=username,
         role=role,
         is_active=is_active,
+        nostr_pubkey=pubkey,
         must_change_password=False,
     )
     user.set_password(PASSWORD)
@@ -122,11 +136,12 @@ def _client_for(flask_app, user_id=None):
         with client.session_transaction() as session:
             session['_user_id'] = str(user_id)
             session['_fresh'] = True
+            session['_nostr_auth_version'] = 1
     return client
 
 
-def _edit_data(username, role='admin', is_active='true'):
-    return {'username': username, 'role': role, 'is_active': is_active}
+def _edit_data(username, role='admin', is_active='true', nostr_pubkey=PUBKEYS['admin']):
+    return {'username': username, 'role': role, 'is_active': is_active, 'nostr_pubkey': nostr_pubkey}
 
 
 def test_admin_is_get_only_redirect_to_operators(admin_app):
@@ -184,7 +199,7 @@ def test_create_and_edit_duplicates_roll_back_mutation_and_audit(admin_app):
 
     create = client.post('/admin/user', data={
         'username': 'viewer-test',
-        'password': 'temporary',
+        'nostr_pubkey': PUBKEYS['viewer'],
         'role': 'viewer',
     })
     edit = client.post(
@@ -207,7 +222,7 @@ def test_operator_mutation_and_audit_commit_together(admin_app):
 
     response = client.post('/admin/user', data={
         'username': 'created_operator',
-        'password': 'temporary',
+        'nostr_pubkey': '5' * 64,
         'role': 'moderator',
     })
 
@@ -216,7 +231,8 @@ def test_operator_mutation_and_audit_commit_together(admin_app):
     with flask_app.app_context():
         created = User.query.filter_by(username='created_operator').one()
         audit = AuditLog.query.filter_by(action='user_create').one()
-        assert created.must_change_password is True
+        assert created.nostr_pubkey == '5' * 64
+        assert created.must_change_password is False
         assert audit.user_id == users['admin']
 
 
@@ -267,32 +283,40 @@ def test_delete_confirmation_is_bound_to_target(admin_app):
     with flask_app.app_context():
         assert db.session.get(User, target_id) is None
         assert AuditLog.query.filter_by(action='user_delete').one()
-        replacement = _make_user('viewer-test', 'viewer')
+        replacement = _make_user('viewer-test', 'viewer', pubkey=PUBKEYS['viewer'])
         replacement.id = target_id
         db.session.commit()
 
 
-def test_admin_password_reset_returns_operators_and_self_change_returns_dashboard(admin_app):
+def test_password_change_route_is_removed_and_operator_page_has_no_password_controls(admin_app):
     _module, flask_app, users = admin_app
     client = _client_for(flask_app, users['admin'])
-    data = {'password': PASSWORD, 'confirm_password': PASSWORD}
+    assert client.post(f'/change-password/{users["moderator"]}').status_code == 404
+    operators = client.get('/admin/operators')
+    assert b'Set password' not in operators.data
+    assert b'Nostr pubkey' in operators.data
 
-    reset = client.post(f'/change-password/{users["moderator"]}', data=data)
-    own = client.post(f'/change-password/{users["admin"]}', data=data)
 
-    assert reset.status_code == 302
-    assert reset.headers['Location'].endswith('/admin/operators')
-    assert own.status_code == 302
-    assert own.headers['Location'].endswith('/')
-    with flask_app.app_context():
-        assert AuditLog.query.filter_by(action='password_change').count() == 2
+def test_admin_pubkey_replacement_revokes_existing_sessions(admin_app):
+    _module, flask_app, users = admin_app
+    admin_client = _client_for(flask_app, users['admin'])
+    viewer_client = _client_for(flask_app, users['viewer'])
 
-    invalid = client.post(
-        f'/change-password/{users["moderator"]}',
-        data={'password': 'short', 'confirm_password': 'short'},
+    response = admin_client.post(
+        f'/admin/user/{users["viewer"]}/edit',
+        data=_edit_data(
+            'viewer_test',
+            role='viewer',
+            nostr_pubkey='6' * 64,
+        ),
+        follow_redirects=True,
     )
-    assert invalid.status_code == 302
-    assert invalid.headers['Location'].endswith('/admin/operators')
+
+    assert response.status_code == 200
+    assert b'User viewer_test updated.' in response.data
+    with flask_app.app_context():
+        assert db.session.get(User, users['viewer']).auth_version == 2
+    assert viewer_client.get('/').headers['Location'].endswith('/login')
 
 
 def test_audit_api_filters_orders_and_uses_cursor(admin_app):

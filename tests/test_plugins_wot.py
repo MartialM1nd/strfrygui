@@ -77,6 +77,7 @@ def test_plugins_page_manages_and_publishes_wot_policy(monkeypatch, tmp_path):
     with client.session_transaction() as session:
         session['_user_id'] = str(admin_id)
         session['_fresh'] = True
+        session['_nostr_auth_version'] = 1
 
     (runtime_dir / 'trust_policy_stats.json').write_text(json.dumps({
         'updated_at': int(time.time()),
@@ -311,6 +312,7 @@ def test_plugins_page_manages_and_publishes_wot_policy(monkeypatch, tmp_path):
     with moderator_client.session_transaction() as session:
         session['_user_id'] = str(moderator_id)
         session['_fresh'] = True
+        session['_nostr_auth_version'] = 1
 
     def fail_request_sync(*args, **kwargs):
         raise AssertionError('moderation page must not synchronize reports')
@@ -511,6 +513,7 @@ def test_plugins_page_manages_and_publishes_wot_policy(monkeypatch, tmp_path):
     with viewer_client.session_transaction() as session:
         session['_user_id'] = str(viewer_id)
         session['_fresh'] = True
+        session['_nostr_auth_version'] = 1
     assert viewer_client.get('/policy-log').status_code == 302
     assert viewer_client.get('/api/write-policy-events').status_code == 302
     viewer_dashboard = viewer_client.get('/api/dashboard')

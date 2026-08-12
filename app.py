@@ -1,4 +1,5 @@
 import csv
+import hmac
 import fcntl
 import ipaddress
 import json
@@ -10,11 +11,11 @@ import time
 from contextlib import contextmanager
 from datetime import datetime, time as datetime_time, timedelta
 from urllib.parse import urlsplit
-from flask import Flask, render_template, redirect, url_for, flash, request, jsonify, abort, make_response, g
+from flask import Flask, render_template, redirect, url_for, flash, request, jsonify, abort, make_response, g, session
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from flask_wtf import CSRFProtect, FlaskForm
-from wtforms import BooleanField, StringField, PasswordField, SelectField, TextAreaField, IntegerField, HiddenField
-from wtforms.validators import DataRequired, InputRequired, Length, EqualTo, NumberRange, Optional, Regexp, ValidationError
+from wtforms import BooleanField, StringField, SelectField, TextAreaField, IntegerField, HiddenField
+from wtforms.validators import DataRequired, InputRequired, Length, NumberRange, Optional, Regexp, ValidationError
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from sqlalchemy import and_, func, or_
@@ -37,6 +38,7 @@ from utils.strfry import (
 )
 from utils.metrics import get_summary, MetricsError
 from utils.auth import admin_required, moderator_required, viewer_or_higher, permission_required
+from utils.nostr_auth import NostrAuthError, issue_challenge, normalize_pubkey, verify_request
 from utils.moderation import ModerationDecisions, ModerationError
 from utils.moderation_reports import sync_moderation_reports
 from utils.nip05 import (
@@ -256,29 +258,11 @@ limiter = Limiter(
 
 @login_manager.user_loader
 def load_user(user_id):
-    return User.query.get(int(user_id))
-
-
-class LoginForm(FlaskForm):
-    username = StringField('Username', validators=[DataRequired()])
-    password = PasswordField('Password', validators=[DataRequired()])
-
-
-class RegisterForm(FlaskForm):
-    username = StringField('Username', validators=[
-        DataRequired(),
-        Length(min=3, max=80),
-        Regexp(r'^[a-zA-Z0-9_]+$', message='Username must be alphanumeric with underscores only')
-    ])
-    password = PasswordField('Password', validators=[
-        DataRequired(),
-        Length(min=21),
-        Regexp(r'^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]',
-               message='Password must have: 21+ chars, uppercase, lowercase, digit, special char')
-    ])
-    confirm_password = PasswordField('Confirm Password', validators=[DataRequired(), EqualTo('password')])
-    role = SelectField('Role', choices=[('admin', 'Admin'), ('moderator', 'Moderator'), ('viewer', 'Viewer')], validators=[DataRequired()])
-    registration_token = PasswordField('Registration Token', validators=[DataRequired()])
+    user = db.session.get(User, int(user_id))
+    session_version = session.get('_nostr_auth_version')
+    if user and session_version != user.auth_version:
+        return None
+    return user
 
 
 class AdminCreateUserForm(FlaskForm):
@@ -287,11 +271,14 @@ class AdminCreateUserForm(FlaskForm):
         Length(min=3, max=80),
         Regexp(r'^[a-zA-Z0-9_]+$', message='Username must be alphanumeric with underscores only')
     ])
-    password = PasswordField('Password', validators=[
-        DataRequired(),
-        Length(min=8, max=128)
-    ])
+    nostr_pubkey = StringField('Nostr Pubkey', validators=[DataRequired(), Length(max=128)])
     role = SelectField('Role', choices=[('admin', 'Admin'), ('moderator', 'Moderator'), ('viewer', 'Viewer')], validators=[DataRequired()])
+
+    def validate_nostr_pubkey(self, field):
+        try:
+            field.data = normalize_pubkey(field.data)
+        except NostrAuthError as exc:
+            raise ValidationError(str(exc)) from exc
 
 
 class UserEditForm(FlaskForm):
@@ -302,16 +289,13 @@ class UserEditForm(FlaskForm):
     ])
     role = SelectField('Role', choices=[('admin', 'Admin'), ('moderator', 'Moderator'), ('viewer', 'Viewer')], validators=[DataRequired()])
     is_active = SelectField('Active', choices=[('true', 'Yes'), ('false', 'No')], validators=[DataRequired()])
+    nostr_pubkey = StringField('Nostr Pubkey', validators=[DataRequired(), Length(max=128)])
 
-
-class ChangePasswordForm(FlaskForm):
-    password = PasswordField('New Password', validators=[
-        DataRequired(),
-        Length(min=21),
-        Regexp(r'^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]',
-               message='Password must have: 21+ chars, uppercase, lowercase, digit, special char')
-    ])
-    confirm_password = PasswordField('Confirm Password', validators=[DataRequired(), EqualTo('password')])
+    def validate_nostr_pubkey(self, field):
+        try:
+            field.data = normalize_pubkey(field.data)
+        except NostrAuthError as exc:
+            raise ValidationError(str(exc)) from exc
 
 
 class DeleteForm(FlaskForm):
@@ -1262,56 +1246,11 @@ def api_audit_logs():
     return _secure_audit_response(response)
 
 
-@app.route('/login', methods=['GET', 'POST'])
+@app.route('/login')
 def login():
     if current_user.is_authenticated:
         return redirect(url_for('index'))
-    
-    form = LoginForm()
-    if form.validate_on_submit():
-        user = User.query.filter_by(username=form.username.data).first()
-        
-        if user:
-            if user.lockout_until and user.lockout_until > datetime.utcnow():
-                flash('Account temporarily locked. Try again later.', 'danger')
-                return render_template('login.html', form=form)
-            
-            if user.check_password(form.password.data):
-                if not user.is_active:
-                    flash('Your account has been deactivated.', 'danger')
-                    return render_template('login.html', form=form)
-                
-                user.failed_login_attempts = 0
-                user.lockout_until = None
-                login_user(user)
-                user.update_login()
-                db.session.commit()
-                
-                log_audit('login', 'User logged in')
-                
-                if user.must_change_password:
-                    flash('Please change your password.', 'warning')
-                    return redirect(url_for('change_password_route', user_id=user.id))
-                
-                next_page = _safe_login_next(request.args.get('next'))
-                flash(f'Welcome back, {user.username}!', 'success')
-                return redirect(next_page) if next_page else redirect(url_for('index'))
-        
-        if user:
-            user.failed_login_attempts += 1
-            if user.failed_login_attempts >= 5:
-                user.lockout_until = datetime.utcnow() + timedelta(minutes=15)
-                flash('Too many failed attempts. Account locked for 15 minutes.', 'danger')
-                log_audit('login_failed', f'Account locked after 5 failed attempts for {user.username}')
-            else:
-                flash('Invalid username or password.', 'danger')
-                log_audit('login_failed', f'Failed login attempt for {user.username}')
-            db.session.commit()
-        else:
-            flash('Invalid username or password.', 'danger')
-            log_audit('login_failed', f'Failed login attempt for unknown user {form.username.data}')
-    
-    return render_template('login.html', form=form)
+    return render_template('login.html', setup_available=_nostr_setup_available())
 
 
 def _safe_login_next(candidate):
@@ -1331,43 +1270,155 @@ def _safe_login_next(candidate):
 def logout():
     log_audit('logout', 'User logged out')
     logout_user()
+    session.pop('_nostr_rotation', None)
+    session.pop('_nostr_auth_version', None)
     flash('You have been logged out.', 'info')
     return redirect(url_for('login'))
 
 
-@app.route('/register', methods=['GET', 'POST'])
+@app.route('/register')
 def register():
     if current_user.is_authenticated:
         return redirect(url_for('index'))
-    
-    if User.query.count() > 0:
-        flash('Registration is closed. Please contact an administrator.', 'warning')
+    if not _nostr_setup_available():
+        flash('Initial setup is closed.', 'warning')
         return redirect(url_for('login'))
-    
-    form = RegisterForm()
-    if form.validate_on_submit():
-        if Config.REGISTRATION_TOKEN and form.registration_token.data != Config.REGISTRATION_TOKEN:
-            form.registration_token.errors.append('Invalid registration token.')
-            flash('Invalid registration token.', 'danger')
-            log_audit('register_failed', f'Invalid token attempt for user {form.username.data}')
-            return render_template('register.html', form=form)
-        
-        user = User(
-            username=form.username.data,
-            role=form.role.data,
-            must_change_password=False
+    return render_template('register.html', existing_install=User.query.count() > 0)
+
+
+def _nostr_setup_available():
+    return User.query.filter_by(role='admin', is_active=True).filter(User.nostr_pubkey.isnot(None)).count() == 0
+
+
+def _auth_session_token():
+    token = session.get('_nostr_auth_browser')
+    if not token:
+        import secrets
+
+        token = secrets.token_urlsafe(32)
+        session['_nostr_auth_browser'] = token
+    return token
+
+
+def _auth_verify_url(action):
+    endpoints = {
+        'login': '/api/auth/verify',
+        'bootstrap': '/api/auth/bootstrap',
+        'rotate-current': '/api/auth/rotate-current',
+        'rotate-key': '/api/auth/rotate-key',
+    }
+    if action not in endpoints:
+        raise NostrAuthError('Invalid authentication action.')
+    return f'{Config.PUBLIC_BASE_URL}{endpoints[action]}'
+
+
+@app.route('/api/auth/challenge', methods=['POST'])
+@limiter.limit(Config.RATELIMIT_LOGIN)
+def auth_challenge():
+    data = request.get_json(silent=True) or {}
+    action = data.get('action', 'login')
+    if action == 'bootstrap' and not _nostr_setup_available():
+        return jsonify({'error': 'Initial setup is closed.'}), 403
+    if action in {'rotate-current', 'rotate-key'} and not current_user.is_authenticated:
+        return jsonify({'error': 'Authentication required.'}), 401
+    if action == 'rotate-key':
+        rotation = session.get('_nostr_rotation') or {}
+        if (
+            rotation.get('user_id') != current_user.id
+            or rotation.get('auth_version') != current_user.auth_version
+            or rotation.get('expires_at', 0) < int(time.time())
+        ):
+            session.pop('_nostr_rotation', None)
+            return jsonify({'error': 'Reauthenticate with your current Nostr key first.'}), 403
+    payload = None
+    if action == 'bootstrap':
+        payload = {
+            'registration_token': data.get('registration_token', ''),
+            'username': data.get('username', ''),
+        }
+    try:
+        result = issue_challenge(
+            action,
+            _auth_session_token(),
+            _auth_verify_url(action),
+            Config.NOSTR_AUTH_CHALLENGE_TTL,
+            payload=payload,
+            redirect_to=_safe_login_next(data.get('next')),
+            user_id=current_user.id if action in {'rotate-current', 'rotate-key'} else None,
         )
-        user.set_password(form.password.data)
-        
+    except NostrAuthError as exc:
+        return jsonify({'error': str(exc)}), 400
+    return jsonify(result)
+
+
+def _verified_auth(action):
+    return verify_request(
+        request.headers.get('Authorization'),
+        action,
+        _auth_session_token(),
+        _auth_verify_url(action),
+        Config.NOSTR_AUTH_TIMESTAMP_TOLERANCE,
+        body=request.get_data(cache=True),
+        user_id=current_user.id if action in {'rotate-current', 'rotate-key'} else None,
+    )
+
+
+@app.route('/api/auth/verify', methods=['POST'])
+@limiter.limit(Config.RATELIMIT_LOGIN)
+def auth_verify():
+    try:
+        verified = _verified_auth('login')
+    except NostrAuthError:
+        return jsonify({'error': 'Nostr authentication failed.'}), 401
+    user = User.query.filter_by(nostr_pubkey=verified.pubkey, is_active=True).first()
+    if not user:
+        log_audit('login_failed', 'Failed Nostr login for an unknown or inactive pubkey')
+        return jsonify({'error': 'This Nostr identity is not authorized.'}), 401
+    session.pop('_user_id', None)
+    session.pop('_fresh', None)
+    login_user(user, fresh=True)
+    session['_nostr_auth_version'] = user.auth_version
+    user.update_login()
+    log_audit('login', 'User logged in with Nostr', commit=False)
+    db.session.commit()
+    return jsonify({'redirect': verified.redirect_to or url_for('index')})
+
+
+@app.route('/api/auth/bootstrap', methods=['POST'])
+@limiter.limit(Config.RATELIMIT_LOGIN)
+@_operator_mutation_lock()
+def auth_bootstrap():
+    if not _nostr_setup_available():
+        return jsonify({'error': 'Initial setup is closed.'}), 403
+    try:
+        verified = _verified_auth('bootstrap')
+    except NostrAuthError:
+        return jsonify({'error': 'Nostr setup verification failed.'}), 401
+    expected_token = Config.REGISTRATION_TOKEN or ''
+    supplied_token = verified.payload.get('registration_token', '')
+    username = verified.payload.get('username', '')
+    if not expected_token or not hmac.compare_digest(supplied_token, expected_token):
+        log_audit('register_failed', 'Invalid registration token during Nostr setup')
+        return jsonify({'error': 'Invalid registration token.'}), 403
+    if not re.fullmatch(r'[a-zA-Z0-9_]{3,80}', username or ''):
+        return jsonify({'error': 'Enter a valid operator username.'}), 400
+    if User.query.filter_by(nostr_pubkey=verified.pubkey).first():
+        return jsonify({'error': 'This Nostr pubkey is already assigned.'}), 409
+    if User.query.count() > 0:
+        user = User.query.filter_by(username=username, role='admin', is_active=True).first()
+        if not user or user.nostr_pubkey:
+            return jsonify({'error': 'Select an existing active, unbound administrator.'}), 400
+        user.nostr_pubkey = verified.pubkey
+        action = 'user_nostr_bootstrap'
+    else:
+        user = User(username=username, nostr_pubkey=verified.pubkey, role='admin', must_change_password=False)
+        user.disable_password()
         db.session.add(user)
-        db.session.commit()
-        
-        log_audit('register', f'User {user.username} registered as {user.role}')
-        
-        flash('Account created successfully! Please log in.', 'success')
-        return redirect(url_for('login'))
-    
-    return render_template('register.html', form=form)
+        action = 'register'
+    db.session.flush()
+    log_audit(action, f'Nostr administrator configured for {username}', commit=False)
+    db.session.commit()
+    return jsonify({'redirect': url_for('login')})
 
 
 @app.route('/events', methods=['GET', 'POST'])
@@ -2620,6 +2671,9 @@ def edit_user(user_id):
     
     if form.validate_on_submit():
         requested_active = form.is_active.data == 'true'
+        if user.id == current_user.id and form.nostr_pubkey.data != user.nostr_pubkey:
+            flash('Use signed key rotation to change your own Nostr pubkey.', 'danger')
+            return redirect(url_for('admin_operators'))
         if user.id == current_user.id and (
             form.role.data != 'admin' or not requested_active
         ):
@@ -2633,7 +2687,11 @@ def edit_user(user_id):
         if removes_active_admin and User.query.filter_by(role='admin', is_active=True).count() <= 1:
             flash('At least one active admin account is required.', 'danger')
             return redirect(url_for('admin_operators'))
+        pubkey_changed = form.nostr_pubkey.data != user.nostr_pubkey
         user.username = form.username.data
+        user.nostr_pubkey = form.nostr_pubkey.data
+        if pubkey_changed:
+            user.auth_version += 1
         user.role = form.role.data
         user.is_active = requested_active
         log_audit(
@@ -2734,10 +2792,11 @@ def create_user():
     if form.validate_on_submit():
         user = User(
             username=form.username.data,
+            nostr_pubkey=form.nostr_pubkey.data,
             role=form.role.data,
-            must_change_password=True
+            must_change_password=False,
         )
-        user.set_password(form.password.data)
+        user.disable_password()
         
         db.session.add(user)
         log_audit(
@@ -2750,39 +2809,63 @@ def create_user():
             flash(f'User {user.username} created.', 'success')
         except IntegrityError:
             db.session.rollback()
-            flash('Username already exists.', 'danger')
+            flash('Username or Nostr pubkey already exists.', 'danger')
     else:
-        flash('Failed to create user. Check username and password requirements.', 'danger')
+        flash('Failed to create user. Check the username, pubkey, and role.', 'danger')
     
     return redirect(url_for('admin_operators'))
 
 
-@app.route('/change-password/<int:user_id>', methods=['GET', 'POST'])
+@app.route('/api/auth/rotate-current', methods=['POST'])
 @viewer_or_higher
-def change_password_route(user_id):
-    if current_user.id != user_id and current_user.role != 'admin':
-        abort(403)
-    
-    user = User.query.get_or_404(user_id)
-    form = ChangePasswordForm()
-    
-    if form.validate_on_submit():
-        user.set_password(form.password.data)
-        user.must_change_password = False
-        log_audit('password_change', f'Password changed for {user.username}', commit=False)
+@limiter.limit(Config.RATELIMIT_LOGIN)
+def authorize_nostr_key_rotation():
+    try:
+        verified = _verified_auth('rotate-current')
+    except NostrAuthError:
+        return jsonify({'error': 'Current Nostr key verification failed.'}), 401
+    if verified.pubkey != current_user.nostr_pubkey:
+        return jsonify({'error': 'Sign with your currently assigned Nostr key.'}), 403
+    session['_nostr_rotation'] = {
+        'user_id': current_user.id,
+        'auth_version': current_user.auth_version,
+        'expires_at': int(time.time()) + Config.NOSTR_AUTH_CHALLENGE_TTL,
+    }
+    return jsonify({'authorized': True})
+
+
+@app.route('/api/auth/rotate-key', methods=['POST'])
+@viewer_or_higher
+@limiter.limit(Config.RATELIMIT_LOGIN)
+def rotate_nostr_key():
+    rotation = session.pop('_nostr_rotation', None) or {}
+    if (
+        rotation.get('user_id') != current_user.id
+        or rotation.get('auth_version') != current_user.auth_version
+        or rotation.get('expires_at', 0) < int(time.time())
+    ):
+        return jsonify({'error': 'Reauthenticate with your current Nostr key first.'}), 403
+    try:
+        verified = _verified_auth('rotate-key')
+    except NostrAuthError:
+        return jsonify({'error': 'Nostr key rotation failed.'}), 401
+    if User.query.filter(User.nostr_pubkey == verified.pubkey, User.id != current_user.id).first():
+        return jsonify({'error': 'This Nostr pubkey is already assigned.'}), 409
+    old_pubkey = current_user.nostr_pubkey
+    current_user.nostr_pubkey = verified.pubkey
+    current_user.auth_version += 1
+    log_audit(
+        'user_nostr_key_change',
+        f'Changed own Nostr pubkey from {(old_pubkey or "unbound")[:12]} to {verified.pubkey[:12]}',
+        commit=False,
+    )
+    try:
         db.session.commit()
-        
-        if current_user.id == user_id:
-            flash('Password changed successfully.', 'success')
-            return redirect(url_for('index'))
-        else:
-            flash(f'Password for {user.username} changed.', 'success')
-            return redirect(url_for('admin_operators'))
-    
-    if request.method == 'POST' and current_user.id != user_id:
-        flash('Password was not changed. Check the password requirements.', 'danger')
-        return redirect(url_for('admin_operators'))
-    return render_template('change_password.html', form=form, user=user)
+    except IntegrityError:
+        db.session.rollback()
+        return jsonify({'error': 'This Nostr pubkey is already assigned.'}), 409
+    logout_user()
+    return jsonify({'redirect': url_for('login')})
 
 
 @app.errorhandler(404)
@@ -2824,6 +2907,20 @@ def init_db():
         
         from sqlalchemy import text
         with db.engine.connect() as conn:
+            user_columns = {
+                row[1]
+                for row in conn.execute(text("PRAGMA table_info('users')"))
+            }
+            if 'nostr_pubkey' not in user_columns:
+                conn.execute(text('ALTER TABLE users ADD COLUMN nostr_pubkey VARCHAR(64)'))
+                conn.commit()
+            if 'auth_version' not in user_columns:
+                conn.execute(text('ALTER TABLE users ADD COLUMN auth_version INTEGER NOT NULL DEFAULT 1'))
+                conn.commit()
+            conn.execute(text(
+                'CREATE UNIQUE INDEX IF NOT EXISTS ix_users_nostr_pubkey '
+                'ON users (nostr_pubkey) WHERE nostr_pubkey IS NOT NULL'
+            ))
             result = conn.execute(text(
                 "SELECT name FROM pragma_table_info('users') WHERE name='must_change_password'"
             ))

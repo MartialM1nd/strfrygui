@@ -1,4 +1,5 @@
 import os
+from urllib.parse import urlsplit
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -12,6 +13,30 @@ class Config:
         raise ValueError("SECRET_KEY must be set in environment")
     
     REGISTRATION_TOKEN = os.getenv('REGISTRATION_TOKEN')
+    PUBLIC_BASE_URL = os.getenv('PUBLIC_BASE_URL', 'https://localhost').rstrip('/')
+    _PUBLIC_URL = urlsplit(PUBLIC_BASE_URL)
+    try:
+        _PUBLIC_PORT = _PUBLIC_URL.port
+    except ValueError as exc:
+        raise ValueError('PUBLIC_BASE_URL contains an invalid port') from exc
+    if (
+        _PUBLIC_URL.scheme != 'https'
+        or not _PUBLIC_URL.hostname
+        or _PUBLIC_URL.username is not None
+        or _PUBLIC_URL.password is not None
+        or _PUBLIC_URL.path
+        or _PUBLIC_URL.query
+        or _PUBLIC_URL.fragment
+    ):
+        raise ValueError('PUBLIC_BASE_URL must be an HTTPS origin without a path, query, or fragment')
+    _PUBLIC_HOST = _PUBLIC_URL.hostname.lower()
+    if ':' in _PUBLIC_HOST:
+        _PUBLIC_HOST = f'[{_PUBLIC_HOST}]'
+    PUBLIC_BASE_URL = f'https://{_PUBLIC_HOST}'
+    if _PUBLIC_PORT not in (None, 443):
+        PUBLIC_BASE_URL += f':{_PUBLIC_PORT}'
+    NOSTR_AUTH_CHALLENGE_TTL = max(10, int(os.getenv('NOSTR_AUTH_CHALLENGE_TTL', '60')))
+    NOSTR_AUTH_TIMESTAMP_TOLERANCE = max(10, int(os.getenv('NOSTR_AUTH_TIMESTAMP_TOLERANCE', '60')))
     
     STRFRY_BINARY = os.getenv('STRFRY_BINARY', '/usr/local/bin/strfry')
     STRFRY_CONFIG = os.getenv('STRFRY_CONFIG', '/etc/strfry.conf')

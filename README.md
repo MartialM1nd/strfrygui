@@ -59,8 +59,8 @@ the strfry event database.
 - Revision-protected, source-preserving, locked, and atomic editing of supported
   `strfry.conf` fields. Unsafe or unsupported files become read-only rather than
   falling back to direct writes.
-- Global CSRF protection, secure session cookies, password hashing, account
-  lockout after repeated failures, and validated local login return URLs.
+- Global CSRF protection, secure session cookies, NIP-07/NIP-98 authentication,
+  one-time replay-resistant challenges, and validated local login return URLs.
 - Dark and light themes with responsive desktop and mobile layouts.
 
 ## Access Model
@@ -79,8 +79,8 @@ the strfry event database.
 | Import/export and database maintenance | No | No | Yes |
 | Relay and plugin configuration | No | No | Yes |
 | Operators, audit history, metadata relays, and ban registry | No | No | Yes |
-| Change own password | Yes | Yes | Yes |
-| Change another operator's password | No | No | Yes |
+| Rotate own Nostr key | Yes | Yes | Yes |
+| Assign another operator's Nostr key | No | No | Yes |
 
 ## Architecture
 
@@ -211,11 +211,18 @@ Do not switch blindly to multiple WSGI workers: this project currently has
 in-process queues, workers, schedulers, and status state that would be duplicated
 across processes.
 
-### 6. Register the First Operator
+### 6. Configure the First Nostr Administrator
 
-Visit `/register`, enter the configured registration token, and select the
-`admin` role for the first account. Registration closes after the first account
-is created, regardless of its selected role.
+Install or unlock a NIP-07 browser extension, then visit `/register`. Enter the
+configured registration token and an administrator username. On an existing
+installation, the username must identify an active administrator; setup binds
+the signing pubkey to that account and preserves its audit history. On a fresh
+installation, setup creates the first administrator. The role is always admin.
+
+Set `PUBLIC_BASE_URL` to the exact externally visible HTTPS origin before
+setup. NIP-98 signatures bind login to this URL, so it must match the URL used
+in the browser. Administrators provision all other operator pubkeys from the
+Operators page; unknown pubkeys are denied.
 
 ## Configuration Reference
 
@@ -224,7 +231,10 @@ is created, regardless of its selected role.
 | Variable | Purpose | Default |
 | --- | --- | --- |
 | `SECRET_KEY` | Flask session and CSRF signing secret; required | None |
-| `REGISTRATION_TOKEN` | Token for first-account registration | None |
+| `REGISTRATION_TOKEN` | Token for initial Nostr administrator setup | None |
+| `PUBLIC_BASE_URL` | Exact externally visible HTTPS origin used in NIP-98 signatures | `https://localhost` |
+| `NOSTR_AUTH_CHALLENGE_TTL` | One-time challenge lifetime in seconds; minimum 10 | `60` |
+| `NOSTR_AUTH_TIMESTAMP_TOLERANCE` | Accepted event clock skew in seconds; minimum 10 | `60` |
 | `DATABASE_URL` | Control-plane SQLite URL | `sqlite:///strfrygui.db` |
 | `STRFRY_BINARY` | strfry executable | `/usr/local/bin/strfry` |
 | `STRFRY_CONFIG` | strfry configuration file | `/etc/strfry.conf` |
@@ -413,7 +423,10 @@ python -m flask --app app run --debug --no-reload
 ```
 
 Authenticated browser sessions require HTTPS because session cookies are always
-marked `Secure`.
+marked `Secure`. Authentication challenge and verification endpoints use the
+configured `RATELIMIT_LOGIN` limit (`5 per minute` by default). Nostr key
+rotation first requires a signature from the currently assigned key, then a
+signature from the new key; successful rotation revokes all existing sessions.
 
 ## Troubleshooting
 
