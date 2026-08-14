@@ -213,16 +213,18 @@ across processes.
 
 ### 6. Configure the First Nostr Administrator
 
-Install or unlock a NIP-07 browser extension, then visit `/register`. Enter the
-configured registration token and an administrator username. On an existing
-installation, the username must identify an active administrator; setup binds
-the signing pubkey to that account and preserves its audit history. On a fresh
-installation, setup creates the first administrator. The role is always admin.
+Install or unlock a NIP-07 browser extension, then visit `/register` and enter
+the configured registration token. On an existing installation, setup requires
+exactly one active administrator without a Nostr pubkey; it binds the signing
+pubkey to that account and preserves its audit history. On a fresh installation,
+setup creates the first administrator. The role is always admin.
 
 Set `PUBLIC_BASE_URL` to the exact externally visible HTTPS origin before
 setup. NIP-98 signatures bind login to this URL, so it must match the URL used
 in the browser. Administrators provision all other operator pubkeys from the
-Operators page; unknown pubkeys are denied.
+Operators page; unknown pubkeys are denied. Operator names come from the latest
+signed kind-0 profile `name` and refresh at login. A unique shortened npub is
+used when the profile has no usable unique name.
 
 ## Configuration Reference
 

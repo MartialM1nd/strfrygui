@@ -33,7 +33,7 @@ from utils.strfry import (
     scan_events, delete_events, export_events, import_events,
     compact_database, negentropy_list, negentropy_add, negentropy_build,
     negentropy_delete, dict_list, StrfryError,
-    validate_filter_json, npub_to_hex, get_strfry_process_info,
+    validate_filter_json, hex_to_npub, npub_to_hex, get_strfry_process_info,
     acquire_database_maintenance_lock, release_database_maintenance_lock,
 )
 from utils.metrics import get_summary, MetricsError
@@ -42,11 +42,13 @@ from utils.nostr_auth import NostrAuthError, issue_challenge, normalize_pubkey, 
 from utils.moderation import ModerationDecisions, ModerationError
 from utils.moderation_reports import sync_moderation_reports
 from utils.nip05 import (
+    InvalidNostrEvent,
     LOCAL_NAME_PATTERN,
     PUBKEY_PATTERN,
     Nip05VerificationError,
     fetch_nip05_document,
     normalize_domain,
+    validate_nostr_event,
 )
 from utils.domain_view import domain_identity_page, unresolved_identity_page
 from utils.decision_log import read_decision_log
@@ -213,9 +215,9 @@ def fetch_from_external_relays(pubkey, relays_list=None):
     return None
 
 
-def get_pubkey_metadata(pubkey):
-    cached = pubkey_metadata_cache.get(pubkey)
-    if cached:
+def get_pubkey_metadata(pubkey, refresh=False):
+    cached = None if refresh else pubkey_metadata_cache.get(pubkey)
+    if cached is not None:
         return cached
     
     try:
@@ -224,11 +226,14 @@ def get_pubkey_metadata(pubkey):
             'authors': [pubkey]
         }, limit=1)
         if events:
-            import json
+            validate_nostr_event(events[0])
+            if events[0].get('pubkey') != pubkey or events[0].get('kind') != 0:
+                raise ValueError('Unexpected profile event')
             content = json.loads(events[0]['content'])
-            pubkey_metadata_cache.set(pubkey, content)
-            return content
-    except Exception:
+            if isinstance(content, dict):
+                pubkey_metadata_cache.set(pubkey, content)
+                return content
+    except (InvalidNostrEvent, StrfryError, KeyError, TypeError, ValueError, json.JSONDecodeError):
         pass
     
     metadata = fetch_from_external_relays(pubkey)
@@ -238,6 +243,38 @@ def get_pubkey_metadata(pubkey):
     
     pubkey_metadata_cache.set(pubkey, {})
     return {}
+
+
+def _profile_username(pubkey, user_id=None):
+    """Return a unique operator name from signed profile metadata or the npub."""
+    metadata = get_pubkey_metadata(pubkey, refresh=True)
+    profile_name = metadata.get('name') if isinstance(metadata, dict) else None
+    if isinstance(profile_name, str):
+        profile_name = ' '.join(profile_name.split())
+        if (
+            profile_name
+            and len(profile_name) <= 80
+            and all(character.isprintable() for character in profile_name)
+            and not _username_in_use(profile_name, user_id)
+        ):
+            return profile_name
+
+    npub = hex_to_npub(pubkey)
+    for length in range(17, len(npub) + 1):
+        candidate = npub[:length]
+        if not _username_in_use(candidate, user_id):
+            return candidate
+    suffix = 2
+    while _username_in_use(f'{npub}_{suffix}', user_id):
+        suffix += 1
+    return f'{npub}_{suffix}'
+
+
+def _username_in_use(username, user_id=None):
+    query = User.query.filter_by(username=username)
+    if user_id is not None:
+        query = query.filter(User.id != user_id)
+    return query.first() is not None
 
 
 app = Flask(__name__)
@@ -266,11 +303,6 @@ def load_user(user_id):
 
 
 class AdminCreateUserForm(FlaskForm):
-    username = StringField('Username', validators=[
-        DataRequired(),
-        Length(min=3, max=80),
-        Regexp(r'^[a-zA-Z0-9_]+$', message='Username must be alphanumeric with underscores only')
-    ])
     nostr_pubkey = StringField('Nostr Pubkey', validators=[DataRequired(), Length(max=128)])
     role = SelectField('Role', choices=[('admin', 'Admin'), ('moderator', 'Moderator'), ('viewer', 'Viewer')], validators=[DataRequired()])
 
@@ -282,11 +314,6 @@ class AdminCreateUserForm(FlaskForm):
 
 
 class UserEditForm(FlaskForm):
-    username = StringField('Username', validators=[
-        DataRequired(),
-        Length(min=3, max=80),
-        Regexp(r'^[a-zA-Z0-9_]+$', message='Username must be alphanumeric with underscores only')
-    ])
     role = SelectField('Role', choices=[('admin', 'Admin'), ('moderator', 'Moderator'), ('viewer', 'Viewer')], validators=[DataRequired()])
     is_active = SelectField('Active', choices=[('true', 'Yes'), ('false', 'No')], validators=[DataRequired()])
     nostr_pubkey = StringField('Nostr Pubkey', validators=[DataRequired(), Length(max=128)])
@@ -1334,7 +1361,6 @@ def auth_challenge():
     if action == 'bootstrap':
         payload = {
             'registration_token': data.get('registration_token', ''),
-            'username': data.get('username', ''),
         }
     try:
         result = issue_challenge(
@@ -1374,13 +1400,19 @@ def auth_verify():
     if not user:
         log_audit('login_failed', 'Failed Nostr login for an unknown or inactive pubkey')
         return jsonify({'error': 'This Nostr identity is not authorized.'}), 401
+    with _operator_mutation_lock():
+        user.username = _profile_username(verified.pubkey, user.id)
+        user.update_login()
+        log_audit('login', 'User logged in with Nostr', commit=False)
+        try:
+            db.session.commit()
+        except IntegrityError:
+            db.session.rollback()
+            return jsonify({'error': 'Could not assign a unique operator name.'}), 409
     session.pop('_user_id', None)
     session.pop('_fresh', None)
     login_user(user, fresh=True)
     session['_nostr_auth_version'] = user.auth_version
-    user.update_login()
-    log_audit('login', 'User logged in with Nostr', commit=False)
-    db.session.commit()
     return jsonify({'redirect': verified.redirect_to or url_for('index')})
 
 
@@ -1396,27 +1428,31 @@ def auth_bootstrap():
         return jsonify({'error': 'Nostr setup verification failed.'}), 401
     expected_token = Config.REGISTRATION_TOKEN or ''
     supplied_token = verified.payload.get('registration_token', '')
-    username = verified.payload.get('username', '')
     if not expected_token or not hmac.compare_digest(supplied_token, expected_token):
         log_audit('register_failed', 'Invalid registration token during Nostr setup')
         return jsonify({'error': 'Invalid registration token.'}), 403
-    if not re.fullmatch(r'[a-zA-Z0-9_]{3,80}', username or ''):
-        return jsonify({'error': 'Enter a valid operator username.'}), 400
     if User.query.filter_by(nostr_pubkey=verified.pubkey).first():
         return jsonify({'error': 'This Nostr pubkey is already assigned.'}), 409
     if User.query.count() > 0:
-        user = User.query.filter_by(username=username, role='admin', is_active=True).first()
-        if not user or user.nostr_pubkey:
-            return jsonify({'error': 'Select an existing active, unbound administrator.'}), 400
+        eligible_admins = User.query.filter_by(
+            role='admin',
+            is_active=True,
+            nostr_pubkey=None,
+        ).all()
+        if len(eligible_admins) != 1:
+            return jsonify({'error': 'Existing setup requires exactly one active, unbound administrator.'}), 400
+        user = eligible_admins[0]
+        user.username = _profile_username(verified.pubkey, user.id)
         user.nostr_pubkey = verified.pubkey
         action = 'user_nostr_bootstrap'
     else:
+        username = _profile_username(verified.pubkey)
         user = User(username=username, nostr_pubkey=verified.pubkey, role='admin', must_change_password=False)
         user.disable_password()
         db.session.add(user)
         action = 'register'
     db.session.flush()
-    log_audit(action, f'Nostr administrator configured for {username}', commit=False)
+    log_audit(action, f'Nostr administrator configured for {user.username}', commit=False)
     db.session.commit()
     return jsonify({'redirect': url_for('login')})
 
@@ -2688,7 +2724,8 @@ def edit_user(user_id):
             flash('At least one active admin account is required.', 'danger')
             return redirect(url_for('admin_operators'))
         pubkey_changed = form.nostr_pubkey.data != user.nostr_pubkey
-        user.username = form.username.data
+        if pubkey_changed:
+            user.username = _profile_username(form.nostr_pubkey.data, user.id)
         user.nostr_pubkey = form.nostr_pubkey.data
         if pubkey_changed:
             user.auth_version += 1
@@ -2704,7 +2741,7 @@ def edit_user(user_id):
             flash(f'User {user.username} updated.', 'success')
         except IntegrityError:
             db.session.rollback()
-            flash('Username already exists.', 'danger')
+            flash('Nostr pubkey or profile-derived username already exists.', 'danger')
     else:
         flash('Failed to update user.', 'danger')
     
@@ -2791,11 +2828,11 @@ def create_user():
     form = AdminCreateUserForm()
     if form.validate_on_submit():
         user = User(
-            username=form.username.data,
             nostr_pubkey=form.nostr_pubkey.data,
             role=form.role.data,
             must_change_password=False,
         )
+        user.username = _profile_username(user.nostr_pubkey)
         user.disable_password()
         
         db.session.add(user)
@@ -2809,9 +2846,9 @@ def create_user():
             flash(f'User {user.username} created.', 'success')
         except IntegrityError:
             db.session.rollback()
-            flash('Username or Nostr pubkey already exists.', 'danger')
+            flash('Nostr pubkey or profile-derived username already exists.', 'danger')
     else:
-        flash('Failed to create user. Check the username, pubkey, and role.', 'danger')
+        flash('Failed to create user. Check the pubkey and role.', 'danger')
     
     return redirect(url_for('admin_operators'))
 
@@ -2837,6 +2874,7 @@ def authorize_nostr_key_rotation():
 @app.route('/api/auth/rotate-key', methods=['POST'])
 @viewer_or_higher
 @limiter.limit(Config.RATELIMIT_LOGIN)
+@_operator_mutation_lock()
 def rotate_nostr_key():
     rotation = session.pop('_nostr_rotation', None) or {}
     if (
@@ -2852,6 +2890,7 @@ def rotate_nostr_key():
     if User.query.filter(User.nostr_pubkey == verified.pubkey, User.id != current_user.id).first():
         return jsonify({'error': 'This Nostr pubkey is already assigned.'}), 409
     old_pubkey = current_user.nostr_pubkey
+    current_user.username = _profile_username(verified.pubkey, current_user.id)
     current_user.nostr_pubkey = verified.pubkey
     current_user.auth_version += 1
     log_audit(

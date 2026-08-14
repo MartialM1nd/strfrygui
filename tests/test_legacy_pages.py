@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 from config import Config
 from models import User, db
+from utils.strfry import hex_to_npub
 
 
 PASSWORD = 'StrongPassword123456!'
@@ -74,6 +75,7 @@ def test_auth_pages_render_nostr_only_controls_and_masked_token(legacy_app):
     login_page = client.get('/login')
 
     assert b'id="setupRegistrationToken"' in register_page.data
+    assert b'id="setupUsername"' not in register_page.data
     assert b'type="password"' in register_page.data
     assert b'Sign and configure administrator' in register_page.data
     assert b'Sign in with Nostr' in login_page.data
@@ -119,6 +121,7 @@ def test_nostr_login_maps_verified_pubkey_to_existing_user(legacy_app, monkeypat
         '_verified_auth',
         lambda action: SimpleNamespace(pubkey=pubkey, redirect_to='/events', payload={}),
     )
+    monkeypatch.setattr(app_module, 'get_pubkey_metadata', lambda value, refresh=False: {'name': 'updated-profile'})
 
     response = flask_app.test_client().post('/api/auth/verify')
 
@@ -127,6 +130,7 @@ def test_nostr_login_maps_verified_pubkey_to_existing_user(legacy_app, monkeypat
     with flask_app.app_context():
         user = db.session.get(User, user_id)
         assert user.last_login is not None
+        assert user.username == 'updated-profile'
 
 
 def test_nostr_bootstrap_binds_existing_admin_and_closes_setup(legacy_app, monkeypatch):
@@ -139,9 +143,10 @@ def test_nostr_bootstrap_binds_existing_admin_and_closes_setup(legacy_app, monke
         lambda action: SimpleNamespace(
             pubkey=pubkey,
             redirect_to=None,
-            payload={'username': 'existing_admin', 'registration_token': 'private-registration-token'},
+            payload={'registration_token': 'private-registration-token'},
         ),
     )
+    monkeypatch.setattr(app_module, 'get_pubkey_metadata', lambda value, refresh=False: {'name': 'profile-admin'})
 
     response = flask_app.test_client().post('/api/auth/bootstrap')
 
@@ -149,7 +154,100 @@ def test_nostr_bootstrap_binds_existing_admin_and_closes_setup(legacy_app, monke
     with flask_app.app_context():
         user = db.session.get(User, user_id)
         assert user.nostr_pubkey == pubkey
+        assert user.username == 'profile-admin'
         assert app_module._nostr_setup_available() is False
+
+
+def test_nostr_bootstrap_creates_fresh_admin_from_profile(legacy_app, monkeypatch):
+    app_module, flask_app = legacy_app
+    pubkey = '9' * 64
+    monkeypatch.setattr(
+        app_module,
+        '_verified_auth',
+        lambda action: SimpleNamespace(
+            pubkey=pubkey,
+            redirect_to=None,
+            payload={'registration_token': 'private-registration-token'},
+        ),
+    )
+    monkeypatch.setattr(app_module, 'get_pubkey_metadata', lambda value, refresh=False: {'name': 'fresh-admin'})
+
+    response = flask_app.test_client().post('/api/auth/bootstrap')
+
+    assert response.status_code == 200
+    with flask_app.app_context():
+        user = User.query.one()
+        assert user.username == 'fresh-admin'
+        assert user.nostr_pubkey == pubkey
+        assert user.role == 'admin'
+
+
+def test_nostr_bootstrap_requires_exactly_one_unbound_admin(legacy_app, monkeypatch):
+    app_module, flask_app = legacy_app
+    add_user(flask_app, username='first_admin')
+    add_user(flask_app, username='second_admin')
+    monkeypatch.setattr(
+        app_module,
+        '_verified_auth',
+        lambda action: SimpleNamespace(
+            pubkey='c' * 64,
+            redirect_to=None,
+            payload={'registration_token': 'private-registration-token'},
+        ),
+    )
+
+    response = flask_app.test_client().post('/api/auth/bootstrap')
+
+    assert response.status_code == 400
+    assert b'exactly one active, unbound administrator' in response.data
+
+
+def test_profile_username_uses_unique_short_npub_fallback(legacy_app, monkeypatch):
+    app_module, flask_app = legacy_app
+    pubkey = 'd' * 64
+    monkeypatch.setattr(app_module, 'get_pubkey_metadata', lambda value, refresh=False: {'name': 'taken'})
+    add_user(flask_app, username='taken')
+
+    with flask_app.app_context():
+        username = app_module._profile_username(pubkey)
+
+    assert username == hex_to_npub(pubkey)[:17]
+
+
+def test_key_rotation_updates_profile_username(legacy_app, monkeypatch):
+    app_module, flask_app = legacy_app
+    old_pubkey = 'e' * 64
+    new_pubkey = 'f' * 64
+    user_id = add_user(flask_app, username='old-name', role='viewer')
+    with flask_app.app_context():
+        user = db.session.get(User, user_id)
+        user.nostr_pubkey = old_pubkey
+        db.session.commit()
+
+    client = flask_app.test_client()
+    with client.session_transaction() as auth_session:
+        auth_session['_user_id'] = str(user_id)
+        auth_session['_fresh'] = True
+        auth_session['_nostr_auth_version'] = 1
+        auth_session['_nostr_rotation'] = {
+            'user_id': user_id,
+            'auth_version': 1,
+            'expires_at': int(app_module.time.time()) + 60,
+        }
+    monkeypatch.setattr(
+        app_module,
+        '_verified_auth',
+        lambda action: SimpleNamespace(pubkey=new_pubkey, redirect_to=None, payload={}),
+    )
+    monkeypatch.setattr(app_module, 'get_pubkey_metadata', lambda value, refresh=False: {'name': 'new-profile'})
+
+    response = client.post('/api/auth/rotate-key')
+
+    assert response.status_code == 200
+    with flask_app.app_context():
+        user = db.session.get(User, user_id)
+        assert user.nostr_pubkey == new_pubkey
+        assert user.username == 'new-profile'
 
 
 def test_error_pages_have_safe_context_status_and_recovery(legacy_app):

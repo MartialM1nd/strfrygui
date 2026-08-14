@@ -8,19 +8,16 @@
         <header class="legacy-panel-header">
             <span class="dashboard-section-label">Initial setup</span>
             <h1 id="registerTitle">Configure Nostr administrator</h1>
-            <p>{% if existing_install %}Bind a Nostr identity to an existing active administrator.{% else %}Create the first administrator using a NIP-07 extension.{% endif %}</p>
+            <p>{% if existing_install %}Bind a Nostr identity to the single active, unbound administrator.{% else %}Create the first administrator using a NIP-07 extension.{% endif %}</p>
         </header>
         <div class="legacy-panel-body">
-            <div class="mb-3">
-                <label class="form-label" for="setupUsername">{% if existing_install %}Existing admin username{% else %}Admin username{% endif %}</label>
-                <input class="form-control" id="setupUsername" type="text" autocomplete="username" minlength="3" maxlength="80" required>
-            </div>
             <div class="mb-3">
                 <label class="form-label" for="setupRegistrationToken">Registration token</label>
                 <input class="form-control" id="setupRegistrationToken" type="password" autocomplete="off" required>
             </div>
             <div id="nostrAuthStatus" class="alert alert-info" role="status">Checking for a Nostr extension...</div>
             <button id="nostrAuthButton" type="button" class="btn btn-primary w-100" disabled>Sign and configure administrator</button>
+            <p class="small text-body-secondary mt-3 mb-0">The operator name comes from the signed Nostr profile, with a shortened npub used when no unique profile name is available.</p>
         </div>
         <footer class="legacy-panel-footer"><a href="{{ url_for('login') }}">Return to sign in</a></footer>
     </section>

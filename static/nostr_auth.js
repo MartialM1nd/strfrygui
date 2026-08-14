@@ -22,14 +22,13 @@
         if (action !== 'bootstrap') return {};
         return {
             registration_token: document.getElementById('setupRegistrationToken').value,
-            username: document.getElementById('setupUsername').value,
         };
     }
 
     async function authenticate() {
         const payload = setupPayload();
-        if (action === 'bootstrap' && (!payload.username || !payload.registration_token)) {
-            show('Enter the administrator username and registration token.', 'warning');
+        if (action === 'bootstrap' && !payload.registration_token) {
+            show('Enter the registration token.', 'warning');
             return;
         }
         button.disabled = true;

@@ -140,8 +140,8 @@ def _client_for(flask_app, user_id=None):
     return client
 
 
-def _edit_data(username, role='admin', is_active='true', nostr_pubkey=PUBKEYS['admin']):
-    return {'username': username, 'role': role, 'is_active': is_active, 'nostr_pubkey': nostr_pubkey}
+def _edit_data(role='admin', is_active='true', nostr_pubkey=PUBKEYS['admin']):
+    return {'role': role, 'is_active': is_active, 'nostr_pubkey': nostr_pubkey}
 
 
 def test_admin_is_get_only_redirect_to_operators(admin_app):
@@ -193,18 +193,17 @@ def test_focused_pages_do_not_render_old_combined_admin(admin_app):
     assert b'secret_audit_marker' in audit.data
 
 
-def test_create_and_edit_duplicates_roll_back_mutation_and_audit(admin_app):
+def test_create_and_edit_duplicate_pubkeys_roll_back_mutation_and_audit(admin_app):
     _module, flask_app, users = admin_app
     client = _client_for(flask_app, users['admin'])
 
     create = client.post('/admin/user', data={
-        'username': 'viewer-test',
         'nostr_pubkey': PUBKEYS['viewer'],
         'role': 'viewer',
     })
     edit = client.post(
         f'/admin/user/{users["moderator"]}/edit',
-        data=_edit_data('viewer-test', role='moderator'),
+        data=_edit_data(role='moderator'),
     )
 
     assert create.status_code == 302
@@ -216,12 +215,12 @@ def test_create_and_edit_duplicates_roll_back_mutation_and_audit(admin_app):
         assert AuditLog.query.filter(AuditLog.action.in_(['user_create', 'user_edit'])).count() == 0
 
 
-def test_operator_mutation_and_audit_commit_together(admin_app):
-    _module, flask_app, users = admin_app
+def test_operator_uses_profile_name_and_commits_audit_together(admin_app, monkeypatch):
+    app_module, flask_app, users = admin_app
     client = _client_for(flask_app, users['admin'])
+    monkeypatch.setattr(app_module, 'get_pubkey_metadata', lambda pubkey, refresh=False: {'name': 'created_operator'})
 
     response = client.post('/admin/user', data={
-        'username': 'created_operator',
         'nostr_pubkey': '5' * 64,
         'role': 'moderator',
     })
@@ -243,11 +242,11 @@ def test_self_delete_demote_and_deactivate_are_forbidden(admin_app):
 
     demote = client.post(
         f'/admin/user/{admin_id}/edit',
-        data=_edit_data('admin-test', role='moderator'),
+        data=_edit_data(role='moderator'),
     )
     deactivate = client.post(
         f'/admin/user/{admin_id}/edit',
-        data=_edit_data('admin-test', is_active='false'),
+        data=_edit_data(is_active='false'),
     )
     delete = client.post(
         f'/admin/user/{admin_id}/delete',
@@ -295,17 +294,18 @@ def test_password_change_route_is_removed_and_operator_page_has_no_password_cont
     operators = client.get('/admin/operators')
     assert b'Set password' not in operators.data
     assert b'Nostr pubkey' in operators.data
+    assert b'name="username"' not in operators.data
 
 
-def test_admin_pubkey_replacement_revokes_existing_sessions(admin_app):
-    _module, flask_app, users = admin_app
+def test_admin_pubkey_replacement_updates_name_and_revokes_sessions(admin_app, monkeypatch):
+    app_module, flask_app, users = admin_app
     admin_client = _client_for(flask_app, users['admin'])
     viewer_client = _client_for(flask_app, users['viewer'])
+    monkeypatch.setattr(app_module, 'get_pubkey_metadata', lambda pubkey, refresh=False: {'name': 'viewer_profile'})
 
     response = admin_client.post(
         f'/admin/user/{users["viewer"]}/edit',
         data=_edit_data(
-            'viewer_test',
             role='viewer',
             nostr_pubkey='6' * 64,
         ),
@@ -313,9 +313,11 @@ def test_admin_pubkey_replacement_revokes_existing_sessions(admin_app):
     )
 
     assert response.status_code == 200
-    assert b'User viewer_test updated.' in response.data
+    assert b'User viewer_profile updated.' in response.data
     with flask_app.app_context():
-        assert db.session.get(User, users['viewer']).auth_version == 2
+        viewer = db.session.get(User, users['viewer'])
+        assert viewer.auth_version == 2
+        assert viewer.username == 'viewer_profile'
     assert viewer_client.get('/').headers['Location'].endswith('/login')
 
 

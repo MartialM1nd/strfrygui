@@ -9,10 +9,9 @@
         <span class="admin-count">{{ users|length }} account{% if users|length != 1 %}s{% endif %}</span>
     </div>
     <details class="dashboard-panel admin-create-disclosure mb-4" data-responsive-disclosure{% if create_user_form.errors %} open{% endif %}>
-        <summary><span><strong>Create operator</strong><small class="text-body-secondary">Assign a Nostr pubkey and the minimum role required.</small></span></summary>
+        <summary><span><strong>Create operator</strong><small class="text-body-secondary">Assign a Nostr pubkey and the minimum role required. The profile supplies the operator name.</small></span></summary>
         <form method="POST" action="{{ url_for('create_user') }}" class="admin-create-grid mt-3">
             {{ create_user_form.hidden_tag() }}
-            <div><label class="form-label" for="newOperatorUsername">Username</label><input class="form-control form-control-sm" id="newOperatorUsername" name="username" type="text" autocomplete="off" required>{{ field_errors(create_user_form.username) }}</div>
             <div><label class="form-label" for="newOperatorPubkey">Nostr pubkey</label><input class="form-control form-control-sm font-monospace" id="newOperatorPubkey" name="nostr_pubkey" type="text" placeholder="npub1... or hex" maxlength="128" required>{{ field_errors(create_user_form.nostr_pubkey) }}</div>
             <div><label class="form-label" for="newOperatorRole">Role</label><select class="form-select form-select-sm" id="newOperatorRole" name="role"><option value="viewer" selected>Viewer</option><option value="moderator">Moderator</option><option value="admin">Admin</option></select>{{ field_errors(create_user_form.role) }}</div>
             <button class="btn btn-sm btn-primary align-self-end" type="submit"><i class="bi bi-person-plus" aria-hidden="true"></i> Create operator</button>
@@ -29,7 +28,7 @@
             <dl class="admin-facts"><div><dt>Last login</dt><dd>{{ user.last_login.strftime('%Y-%m-%d %H:%M') if user.last_login else 'Never' }}</dd></div><div><dt>Operator ID</dt><dd>#{{ user.id }}</dd></div><div><dt>Nostr pubkey</dt><dd class="font-monospace" title="{{ user.nostr_pubkey or '' }}">{{ (user.nostr_pubkey[:12] ~ '...') if user.nostr_pubkey else 'Unbound' }}</dd></div></dl>
             <details class="admin-disclosure"><summary>Edit access</summary>
                 <form method="POST" action="{{ url_for('edit_user', user_id=user.id) }}" class="admin-inline-form mt-3">
-                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}"><input type="hidden" name="username" value="{{ user.username }}">
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                     <div><label class="form-label" for="pubkey-{{ user.id }}">Nostr pubkey</label><input class="form-control form-control-sm font-monospace" id="pubkey-{{ user.id }}" name="nostr_pubkey" value="{{ user.nostr_pubkey or '' }}" maxlength="128" required{% if user.id == current_user.id %} readonly{% endif %}></div>
                     <div><label class="form-label" for="role-{{ user.id }}">Role</label><select class="form-select form-select-sm" id="role-{{ user.id }}" name="role"><option value="viewer"{% if user.role == 'viewer' %} selected{% endif %}>Viewer</option><option value="moderator"{% if user.role == 'moderator' %} selected{% endif %}>Moderator</option><option value="admin"{% if user.role == 'admin' %} selected{% endif %}>Admin</option></select></div>
                     <div><label class="form-label" for="status-{{ user.id }}">Status</label><select class="form-select form-select-sm" id="status-{{ user.id }}" name="is_active"><option value="true"{% if user.is_active %} selected{% endif %}>Active</option><option value="false"{% if not user.is_active %} selected{% endif %}>Inactive</option></select></div>
