@@ -66,9 +66,10 @@
                 {{ field_errors(form.config_revision) }}
                 <div class="mb-3">
                     {{ form.plugin_path.label(class="form-label") }}
-                    {{ form.plugin_path(class="form-control font-monospace" + (' is-invalid' if form.plugin_path.errors else ''), placeholder="/opt/strfrygui/utils/blocklist_plugin.py") }}
+                    {{ form.plugin_path(class="form-select" + (' is-invalid' if form.plugin_path.errors else '')) }}
                     {{ field_errors(form.plugin_path) }}
-                    <div class="form-text">Absolute executable path, or empty to disable. Custom executables are allowed.</div>
+                    <div class="form-text">Only the bundled, deployment-controlled executable can be selected from the GUI.</div>
+                    {% if configuration_kind == 'unsupported' %}<div class="alert alert-warning mt-2 mb-0" role="alert">Current unsupported path: <code>{{ configured_path }}</code>. Saving requires migration to the bundled plugin or disabling write policy.</div>{% endif %}
                 </div>
                 <div class="plugin-number-grid mb-3">
                     <div>

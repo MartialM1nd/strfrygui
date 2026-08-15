@@ -23,7 +23,7 @@ from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
 from sqlalchemy.orm import joinedload
 from io import StringIO
 
-from config import Config
+from config import Config, bundled_plugin_available
 from models import (
     db, User, AuditLog, ModerationReport, BannedPubkey, BannedDomain, MetadataRelay,
     EventPurge, PubkeyBanSource, WoTBuildState, ensure_audit_log_indexes,
@@ -85,6 +85,7 @@ _compaction = {
 }
 _domain_scan_queue = queue.Queue(maxsize=1)
 _wot_build_queue = queue.Queue(maxsize=1)
+_purge_wakeup = queue.Queue(maxsize=1)
 _dashboard_sample_lock = threading.Lock()
 _operator_thread_lock = threading.Lock()
 _metadata_relay_thread_lock = threading.Lock()
@@ -447,19 +448,18 @@ class RelayNetworkForm(ConfigurationRevisionForm):
         field.data = value
 
 
-def _executable_plugin_path(value):
-    return (
-        not value
-        or (
-            os.path.isabs(value)
-            and os.path.isfile(value)
-            and os.access(value, os.X_OK)
-        )
+def _bundled_plugin_available():
+    return bundled_plugin_available(Config.BLOCKLIST_PLUGIN_PATH)
+
+
+def _supported_plugin_path(value):
+    return value == '' or (
+        value == Config.BLOCKLIST_PLUGIN_PATH and _bundled_plugin_available()
     )
 
 
 class PluginForm(ConfigurationRevisionForm):
-    plugin_path = StringField('Plugin Path', validators=[Optional(), Length(max=4096), control_safe])
+    plugin_path = SelectField('Write-policy plugin', choices=[])
     timeout = IntegerField('Timeout (seconds)', validators=[
         InputRequired(), NumberRange(min=1, max=60),
     ])
@@ -468,10 +468,17 @@ class PluginForm(ConfigurationRevisionForm):
     ])
     confirm_plugin_change = BooleanField('I understand this changes or disables the configured executable')
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.plugin_path.choices = [
+            ('', 'Disabled'),
+            (Config.BLOCKLIST_PLUGIN_PATH, 'Bundled plugin'),
+        ]
+
     def validate_plugin_path(self, field):
         field.data = (field.data or '').strip()
-        if not _executable_plugin_path(field.data):
-            raise ValidationError('Enter an absolute executable file path, or leave empty to disable.')
+        if not _supported_plugin_path(field.data):
+            raise ValidationError('Select the bundled write-policy plugin or disable it.')
 
 
 class WoTPolicyForm(FlaskForm):
@@ -587,13 +594,21 @@ def get_client_ip():
 
 
 def moderation_decisions():
-    return ModerationDecisions(current_user.id, get_client_ip())
+    return ModerationDecisions(
+        current_user.id,
+        get_client_ip(),
+        purge_notifier=queue_purge_processing,
+    )
 
 
 def _run_domain_reconciliation(domain_id, actor_id, ip_address):
     with app.app_context():
         try:
-            ModerationDecisions(actor_id, ip_address).reconcile_domain(domain_id)
+            ModerationDecisions(
+                actor_id,
+                ip_address,
+                purge_notifier=queue_purge_processing,
+            ).reconcile_domain(domain_id)
         except Exception as exc:
             app.logger.exception('NIP-05 domain reconciliation failed')
             db.session.rollback()
@@ -650,6 +665,32 @@ def queue_domain_reconciliation(domain_id, actor_id, ip_address):
         db.session.commit()
         return False
     return True
+
+
+def queue_purge_processing():
+    """Wake the durable purge worker without accumulating in-memory jobs."""
+    try:
+        _purge_wakeup.put_nowait(True)
+    except queue.Full:
+        pass
+
+
+def _purge_worker():
+    while True:
+        signaled = False
+        try:
+            _purge_wakeup.get(timeout=Config.MODERATION_PURGE_WORKER_INTERVAL)
+            signaled = True
+        except queue.Empty:
+            pass
+        try:
+            with app.app_context():
+                ModerationDecisions.process_pending_purges()
+        except Exception:
+            app.logger.exception('Durable event purge worker failed')
+        finally:
+            if signaled:
+                _purge_wakeup.task_done()
 
 
 def _domain_scan_lease_seconds():
@@ -2036,9 +2077,9 @@ def update_relay_network():
 
 def _write_policy_updates(plugin_path, timeout, lookback):
     """Validate write-policy values independently of the HTTP form."""
-    if not _executable_plugin_path(plugin_path):
+    if not _supported_plugin_path(plugin_path):
         raise ConfigurationError(
-            'relay.writePolicy.plugin must be empty or an absolute executable file path'
+            'relay.writePolicy.plugin must be empty or the bundled plugin path'
         )
     if isinstance(timeout, bool) or not isinstance(timeout, int) or not 1 <= timeout <= 60:
         raise ConfigurationError('relay.writePolicy.timeoutSeconds must be between 1 and 60')
@@ -2058,12 +2099,12 @@ def _plugins_page(plugin_form=None, wot_form=None, status_code=200):
     if not isinstance(configured_path, str):
         configured_path = ''
     bundled_path = app.config['BLOCKLIST_PLUGIN_PATH']
-    bundled_installed = _executable_plugin_path(bundled_path) and bool(bundled_path)
-    configured_executable = _executable_plugin_path(configured_path) and bool(configured_path)
+    bundled_installed = _bundled_plugin_available()
+    configured_executable = configured_path == bundled_path and bundled_installed
     configuration_kind = (
         'disabled' if not configured_path
         else 'bundled' if configured_path == bundled_path
-        else 'custom'
+        else 'unsupported'
     )
 
     blocklist_count = BannedPubkey.query.count()
@@ -2086,7 +2127,11 @@ def _plugins_page(plugin_form=None, wot_form=None, status_code=200):
     if plugin_form is None:
         plugin_form = PluginForm(formdata=None, data={
             'config_revision': snapshot.revision or '',
-            'plugin_path': configured_path,
+            'plugin_path': (
+                configured_path
+                if configured_path in {'', bundled_path}
+                else bundled_path
+            ),
             'timeout': write_policy.get('timeoutSeconds', 10),
             'lookback': write_policy.get('lookbackSeconds', 0),
         })
@@ -2107,7 +2152,9 @@ def _plugins_page(plugin_form=None, wot_form=None, status_code=200):
     if not snapshot.writable:
         attention.append('The strfry configuration is read-only or unavailable.')
     if configured_path and not configured_executable:
-        attention.append('The configured plugin path is not currently executable.')
+        attention.append(
+            'The configured plugin is unsupported. Select the bundled plugin or disable it.'
+        )
     if projection.status == 'pending':
         attention.append('The latest ban projection has not been published.')
     if wot_state.status == 'failed':
@@ -2982,6 +3029,19 @@ def init_db():
                 except OperationalError as exc:
                     if 'duplicate column name' not in str(exc).lower():
                         raise
+            purge_columns = {
+                row[1]
+                for row in conn.execute(text("PRAGMA table_info('event_purges')"))
+            }
+            if 'claimed_at' not in purge_columns:
+                try:
+                    conn.execute(text(
+                        'ALTER TABLE event_purges ADD COLUMN claimed_at DATETIME'
+                    ))
+                    conn.commit()
+                except OperationalError as exc:
+                    if 'duplicate column name' not in str(exc).lower():
+                        raise
             conn.execute(text(
                 'CREATE INDEX IF NOT EXISTS ix_pubkey_ban_source_domain_id '
                 'ON pubkey_ban_sources (banned_domain_id, id)'
@@ -3025,7 +3085,11 @@ def init_db():
                 db.session.commit()
         
         ModerationDecisions.initialize_projection()
-        ModerationDecisions.reconcile_write_policy(force=True)
+        projection = ModerationDecisions.reconcile_write_policy(force=True)
+        if projection.status != 'published':
+            raise RuntimeError(
+                f'Could not publish initial blocklist: {projection.last_error or "unknown error"}'
+            )
         wot_policy, wot_state = initialize_wot()
         stale_wot_before = utcnow() - timedelta(seconds=360)
         if (
@@ -3045,6 +3109,13 @@ def init_db():
 
 
 init_db()
+
+threading.Thread(
+    target=_purge_worker,
+    daemon=True,
+    name='event-purge-worker',
+).start()
+queue_purge_processing()
 
 threading.Thread(
     target=_wot_refresh_scheduler,

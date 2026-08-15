@@ -6,7 +6,7 @@ import pytest
 from flask import Flask
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-os.environ.setdefault("SECRET_KEY", "test-secret")
+os.environ.setdefault("SECRET_KEY", "0" * 64)
 
 from config import Config
 from models import db
@@ -46,7 +46,6 @@ def app(tmp_path):
     old_trust_stats = Config.TRUST_POLICY_STATS_FILE
     old_decision_log = Config.WRITE_POLICY_EVENT_LOG
     old_timeout = Config.MODERATION_PURGE_TIMEOUT
-    old_scan_limit = Config.DOMAIN_SCAN_EVENT_LIMIT
     old_scan_timeout = Config.DOMAIN_SCAN_TIMEOUT
     old_candidate_limit = Config.DOMAIN_SCAN_CANDIDATE_LIMIT
     old_total_timeout = Config.DOMAIN_SCAN_TOTAL_TIMEOUT
@@ -61,7 +60,6 @@ def app(tmp_path):
     Config.TRUST_POLICY_STATS_FILE = str(trust_stats_path)
     Config.WRITE_POLICY_EVENT_LOG = str(decision_log_path)
     Config.MODERATION_PURGE_TIMEOUT = 1
-    Config.DOMAIN_SCAN_EVENT_LIMIT = 500
     Config.DOMAIN_SCAN_TIMEOUT = 30
     Config.DOMAIN_SCAN_CANDIDATE_LIMIT = 50
     Config.DOMAIN_SCAN_TOTAL_TIMEOUT = 30
@@ -83,7 +81,6 @@ def app(tmp_path):
     Config.TRUST_POLICY_STATS_FILE = old_trust_stats
     Config.WRITE_POLICY_EVENT_LOG = old_decision_log
     Config.MODERATION_PURGE_TIMEOUT = old_timeout
-    Config.DOMAIN_SCAN_EVENT_LIMIT = old_scan_limit
     Config.DOMAIN_SCAN_TIMEOUT = old_scan_timeout
     Config.DOMAIN_SCAN_CANDIDATE_LIMIT = old_candidate_limit
     Config.DOMAIN_SCAN_TOTAL_TIMEOUT = old_total_timeout

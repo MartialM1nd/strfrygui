@@ -192,21 +192,23 @@
 
     <details class="dashboard-panel moderation-operation mb-3"{% if pending_purges %} open{% endif %}>
         <summary>
-            <span><span class="dashboard-section-label">Event purge operations</span><small>Retry pending work and inspect recent outcomes.</small></span>
+            <span><span class="dashboard-section-label">Event purge operations</span><small>Inspect queued work, retry failures, and review recent outcomes.</small></span>
             <span class="badge {% if pending_purges %}bg-warning text-dark{% else %}bg-secondary{% endif %}">{{ pending_purges|length }} pending</span>
         </summary>
         <div class="moderation-operation-body">
             {% if pending_purges %}
-            <div class="dashboard-section-label mb-2">Needs attention</div>
+            <div class="dashboard-section-label mb-2">Queued and failed work</div>
             <div class="moderation-operation-list mb-4">
                 {% for purge in pending_purges %}
                 <div class="moderation-operation-row">
-                    <div><span class="badge bg-warning text-dark">Pending {{ purge.target_type }}</span> <code class="text-break">{{ purge.target }}</code>{% if purge.last_error %}<div class="small text-danger mt-1">{{ purge.last_error }}</div>{% endif %}</div>
+                    <div><span class="badge {% if purge.attempts %}bg-warning text-dark{% else %}bg-info text-dark{% endif %}">{{ 'Failed' if purge.attempts else 'Queued' }} {{ purge.target_type }}</span> <code class="text-break">{{ purge.target }}</code>{% if purge.last_error %}<div class="small text-danger mt-1">{{ purge.last_error }}</div>{% endif %}</div>
+                    {% if purge.attempts %}
                     <form method="POST" action="{{ url_for('moderation_retry_purge', purge_id=purge.id) }}">
                         <input type="hidden" name="csrf_token" value="{{ form.csrf_token.current_token }}">
                         <input type="hidden" name="next" value="{{ request.full_path.rstrip('?') }}">
                         <button type="submit" class="btn btn-sm btn-outline-warning">Retry</button>
                     </form>
+                    {% else %}<small class="text-body-secondary">Automatic processing pending</small>{% endif %}
                 </div>
                 {% endfor %}
             </div>

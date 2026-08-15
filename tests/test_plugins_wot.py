@@ -50,6 +50,15 @@ def test_plugins_page_manages_and_publishes_wot_policy(monkeypatch, tmp_path):
     )
 
     app_module = importlib.import_module('app')
+    assert app_module._bundled_plugin_available() is True
+    bundled_plugin.chmod(0o775)
+    assert app_module._bundled_plugin_available() is False
+    bundled_plugin.chmod(0o755)
+    plugin_symlink = tmp_path / 'plugin-symlink'
+    plugin_symlink.symlink_to(bundled_plugin)
+    monkeypatch.setattr(Config, 'BLOCKLIST_PLUGIN_PATH', str(plugin_symlink))
+    assert app_module._bundled_plugin_available() is False
+    monkeypatch.setattr(Config, 'BLOCKLIST_PLUGIN_PATH', str(bundled_plugin))
     monkeypatch.setattr(app_module, 'queue_wot_rebuild', lambda: False)
     monkeypatch.setattr(app_module, '_collect_dashboard_sample', lambda: None)
     monkeypatch.setattr(app_module, 'sync_moderation_reports', lambda: None)
@@ -196,8 +205,7 @@ def test_plugins_page_manages_and_publishes_wot_policy(monkeypatch, tmp_path):
         'lookback': '0',
     })
     assert invalid_path.status_code == 422
-    assert b'relative-plugin' in invalid_path.data
-    assert b'absolute executable file path' in invalid_path.data
+    assert b'Select the bundled write-policy plugin or disable it' in invalid_path.data
     invalid_timeout = client.post('/plugins/write-policy', data={
         'config_revision': config_revision,
         'plugin_path': str(bundled_plugin),
@@ -210,30 +218,35 @@ def test_plugins_page_manages_and_publishes_wot_policy(monkeypatch, tmp_path):
     custom_plugin = tmp_path / 'custom-policy'
     custom_plugin.write_text('#!/bin/sh\nexit 0\n')
     custom_plugin.chmod(0o755)
-    unconfirmed_path = client.post('/plugins/write-policy', data={
-        'config_revision': config_revision,
-        'plugin_path': str(custom_plugin),
-        'timeout': '10',
-        'lookback': '0',
-    })
-    assert unconfirmed_path.status_code == 422
-    assert b'Confirm this plugin path change' in unconfirmed_path.data
-    changed_path = client.post('/plugins/write-policy', data={
+    rejected_custom_path = client.post('/plugins/write-policy', data={
         'config_revision': config_revision,
         'plugin_path': str(custom_plugin),
         'timeout': '10',
         'lookback': '0',
         'confirm_plugin_change': 'y',
     })
-    assert changed_path.status_code == 303
-    changed_page = client.get(changed_path.headers['Location'])
-    assert b'Restart required' in changed_page.data
-    assert b'Custom' in changed_page.data
-    assert load_configuration(strfry_config).values['relay']['writePolicy']['plugin'] == str(custom_plugin)
+    assert rejected_custom_path.status_code == 422
+    assert load_configuration(strfry_config).values['relay']['writePolicy']['plugin'] == str(bundled_plugin)
+
+    strfry_config.write_text(
+        strfry_config.read_text().replace(str(bundled_plugin), str(custom_plugin))
+    )
+    unsupported_page = client.get('/plugins')
+    assert b'Unsupported' in unsupported_page.data
+    assert str(custom_plugin).encode() in unsupported_page.data
+    migrated_path = client.post('/plugins/write-policy', data={
+        'config_revision': load_configuration(strfry_config).revision,
+        'plugin_path': str(bundled_plugin),
+        'timeout': '10',
+        'lookback': '0',
+        'confirm_plugin_change': 'y',
+    })
+    assert migrated_path.status_code == 303
+    assert load_configuration(strfry_config).values['relay']['writePolicy']['plugin'] == str(bundled_plugin)
 
     timeout_only = client.post('/plugins/write-policy', data={
         'config_revision': load_configuration(strfry_config).revision,
-        'plugin_path': str(custom_plugin),
+        'plugin_path': str(bundled_plugin),
         'timeout': '11',
         'lookback': '0',
     })
@@ -245,7 +258,7 @@ def test_plugins_page_manages_and_publishes_wot_policy(monkeypatch, tmp_path):
     externally_updated = strfry_config.read_bytes()
     stale_config = client.post('/plugins/write-policy', data={
         'config_revision': stale_config_revision,
-        'plugin_path': str(custom_plugin),
+        'plugin_path': str(bundled_plugin),
         'timeout': '12',
         'lookback': '0',
     })

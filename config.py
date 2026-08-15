@@ -1,18 +1,83 @@
 import os
+import stat
 from urllib.parse import urlsplit
+
 from dotenv import load_dotenv
 
-load_dotenv()
-
 APP_DIR = os.path.dirname(os.path.abspath(__file__))
+DOTENV_PATH = os.path.join(APP_DIR, '.env')
+
+
+def _open_validated_dotenv(path):
+    """Open a dotenv file once, rejecting unsafe ownership and permissions."""
+    flags = os.O_RDONLY | getattr(os, 'O_CLOEXEC', 0) | getattr(os, 'O_NOFOLLOW', 0)
+    try:
+        descriptor = os.open(path, flags)
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        raise ValueError('.env must be a regular file, not a symlink') from exc
+    try:
+        file_stat = os.fstat(descriptor)
+        mode = stat.S_IMODE(file_stat.st_mode)
+        if not stat.S_ISREG(file_stat.st_mode):
+            raise ValueError('.env must be a regular file, not a symlink')
+        if file_stat.st_uid not in {0, os.geteuid()}:
+            raise ValueError('.env must be owned by root or the service user')
+        if mode & 0o027:
+            raise ValueError('.env must not be group-writable or accessible by other users')
+        trusted_groups = {os.getegid(), *os.getgroups()}
+        if mode & 0o040 and file_stat.st_gid not in trusted_groups:
+            raise ValueError('.env group access must be limited to the service group')
+        return descriptor
+    except Exception:
+        os.close(descriptor)
+        raise
+
+
+def _validate_dotenv(path):
+    descriptor = _open_validated_dotenv(path)
+    if descriptor is not None:
+        os.close(descriptor)
+
+
+def _validate_secret(name, value, required=True):
+    if not value:
+        if required:
+            raise ValueError(f'{name} must be set in environment')
+        return None
+    if len(value) < 32:
+        raise ValueError(f'{name} must contain at least 32 characters')
+    return value
+
+
+def bundled_plugin_available(path):
+    """Return whether path is the deployment-controlled bundled executable."""
+    try:
+        plugin_stat = os.lstat(path)
+        source_owner = os.stat(APP_DIR).st_uid
+    except OSError:
+        return False
+    return (
+        os.path.isabs(path)
+        and stat.S_ISREG(plugin_stat.st_mode)
+        and plugin_stat.st_uid in {0, source_owner}
+        and os.access(path, os.X_OK)
+        and plugin_stat.st_mode & 0o022 == 0
+    )
+
+
+_dotenv_descriptor = _open_validated_dotenv(DOTENV_PATH)
+if _dotenv_descriptor is not None:
+    with os.fdopen(_dotenv_descriptor, encoding='utf-8') as _dotenv_file:
+        load_dotenv(stream=_dotenv_file)
 
 
 class Config:
-    SECRET_KEY = os.getenv('SECRET_KEY')
-    if not SECRET_KEY:
-        raise ValueError("SECRET_KEY must be set in environment")
-    
-    REGISTRATION_TOKEN = os.getenv('REGISTRATION_TOKEN')
+    SECRET_KEY = _validate_secret('SECRET_KEY', os.getenv('SECRET_KEY'))
+    REGISTRATION_TOKEN = _validate_secret(
+        'REGISTRATION_TOKEN', os.getenv('REGISTRATION_TOKEN'), required=False
+    )
     PUBLIC_BASE_URL = os.getenv('PUBLIC_BASE_URL', 'https://localhost').rstrip('/')
     _PUBLIC_URL = urlsplit(PUBLIC_BASE_URL)
     try:
@@ -51,14 +116,23 @@ class Config:
     BLOCKLIST_PLUGIN_PATH = os.path.join(APP_DIR, 'utils', 'blocklist_plugin.py')
     DASHBOARD_SAMPLE_INTERVAL = max(60, int(os.getenv('DASHBOARD_SAMPLE_INTERVAL', '60')))
     MODERATION_PURGE_TIMEOUT = int(os.getenv('MODERATION_PURGE_TIMEOUT', '30'))
+    MODERATION_PURGE_BATCH_SIZE = max(1, int(os.getenv('MODERATION_PURGE_BATCH_SIZE', '5')))
+    MODERATION_PURGE_RETRY_SECONDS = max(1, int(os.getenv('MODERATION_PURGE_RETRY_SECONDS', '300')))
+    MODERATION_PURGE_RETRY_MAX_SECONDS = max(
+        MODERATION_PURGE_RETRY_SECONDS,
+        int(os.getenv('MODERATION_PURGE_RETRY_MAX_SECONDS', '3600')),
+    )
+    MODERATION_PURGE_WORKER_INTERVAL = max(1, int(os.getenv('MODERATION_PURGE_WORKER_INTERVAL', '30')))
     MODERATION_REPORT_SYNC_TIMEOUT = max(1, int(os.getenv('MODERATION_REPORT_SYNC_TIMEOUT', '30')))
     MODERATION_REPORT_VALIDATION_LIMIT = max(1, int(os.getenv('MODERATION_REPORT_VALIDATION_LIMIT', '20')))
     MODERATION_REPORT_REJECTION_TTL = max(0, int(os.getenv('MODERATION_REPORT_REJECTION_TTL', '3600')))
     MODERATION_REPORT_REJECTION_CACHE_SIZE = max(1, int(os.getenv('MODERATION_REPORT_REJECTION_CACHE_SIZE', '2000')))
     MODERATION_REPORT_PENDING_LIMIT = max(200, int(os.getenv('MODERATION_REPORT_PENDING_LIMIT', '1000')))
-    DOMAIN_SCAN_EVENT_LIMIT = int(os.getenv('DOMAIN_SCAN_EVENT_LIMIT', '500'))
     DOMAIN_SCAN_TIMEOUT = int(os.getenv('DOMAIN_SCAN_TIMEOUT', '30'))
     DOMAIN_SCAN_CANDIDATE_LIMIT = int(os.getenv('DOMAIN_SCAN_CANDIDATE_LIMIT', '50'))
+    DOMAIN_SCAN_ALIASES_PER_PUBKEY = max(
+        1, int(os.getenv('DOMAIN_SCAN_ALIASES_PER_PUBKEY', '3'))
+    )
     DOMAIN_SCAN_TOTAL_TIMEOUT = int(os.getenv('DOMAIN_SCAN_TOTAL_TIMEOUT', '120'))
     NIP05_HTTP_TIMEOUT = float(os.getenv('NIP05_HTTP_TIMEOUT', '5'))
     NIP05_MAX_RESPONSE_BYTES = int(os.getenv('NIP05_MAX_RESPONSE_BYTES', '262144'))

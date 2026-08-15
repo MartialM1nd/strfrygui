@@ -198,6 +198,10 @@ class PolicyReloader:
             self._runtime_activated = True
         return self.policy
 
+    @property
+    def ready(self):
+        return self._has_valid_policy
+
     @staticmethod
     def _load(path):
         try:
@@ -244,6 +248,10 @@ class BlocklistReloader:
                     self._runtime_activated = True
             self._mtime = current_mtime
         return self.blocklist
+
+    @property
+    def ready(self):
+        return self._has_valid_blocklist
 
 
 def leading_zero_bits(event_id):
@@ -525,6 +533,7 @@ class WritePolicyRuntime:
         self.rate_limiter = TokenBucket()
         self.counters = Counter()
         self._stats_flushed_at = 0
+        self._artifacts_ready = self.blocklists.ready and self.policies.ready
 
     def flush_stats(self, now=None, force=False):
         """Publish aggregate counters at most once every ten seconds."""
@@ -568,6 +577,7 @@ class WritePolicyRuntime:
         if not isinstance(event_id, str) or not event_id:
             return None
         policy = self.policies.reload()
+        blocklist = self.blocklists.reload()
         source_type = request.get("sourceType")
         details = {
             "policy_mode": policy.mode,
@@ -594,7 +604,6 @@ class WritePolicyRuntime:
                 **details,
             )
 
-        blocklist = self.blocklists.reload()
         pubkey = event["pubkey"]
         if pubkey in blocklist:
             self.counters["blocked"] += 1
@@ -605,6 +614,21 @@ class WritePolicyRuntime:
         if isinstance(source_type, str) and source_type.lower() in NON_NETWORK_SOURCE_TYPES:
             self.counters["bypassed"] += 1
             return Decision(_accept(event_id), "non_network_bypass", **details)
+        artifacts_ready = self.blocklists.ready and self.policies.ready
+        if not artifacts_ready:
+            if not self.blocklists.ready:
+                self.counters["unavailable_blocklist"] += 1
+            if not self.policies.ready:
+                self.counters["unavailable_trust_policy"] += 1
+            self._artifacts_ready = False
+            return Decision(
+                _reject(event_id, "blocked: write-policy artifacts are unavailable"),
+                "policy_unavailable",
+                **details,
+            )
+        if not self._artifacts_ready:
+            self.counters["policy_recovered"] += 1
+            self._artifacts_ready = True
         if policy.mode == "off":
             self.counters["accepted_off"] += 1
             return Decision(_accept(event_id), "policy_off", **details)

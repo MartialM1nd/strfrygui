@@ -4,8 +4,9 @@ import tempfile
 import threading
 import time
 from dataclasses import dataclass
+from datetime import timedelta
 
-from sqlalchemy import update
+from sqlalchemy import or_, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.exc import SQLAlchemyError
 
@@ -109,11 +110,13 @@ class ModerationDecisions:
         ip_address=None,
         directory_fetcher=None,
         profile_lookup=None,
+        purge_notifier=None,
     ):
         self.actor_id = actor_id
         self.ip_address = ip_address
         self.directory_fetcher = directory_fetcher or fetch_nip05_directory
         self.profile_lookup = profile_lookup or lookup_profile_claim
+        self.purge_notifier = purge_notifier
 
     def ban_report(self, report_id, reason):
         report = db.session.get(ModerationReport, report_id)
@@ -185,33 +188,61 @@ class ModerationDecisions:
                     banned_domain_id=domain_id,
                 )
             }
+            candidate_limit = max(
+                1,
+                min(Config.DOMAIN_SCAN_CANDIDATE_LIMIT, Config.NIP05_MAX_NAMES),
+            )
+            aliases_by_pubkey = {}
+            truncated_aliases = 0
+            for local_name, pubkey in sorted(directory.names.items()):
+                aliases = aliases_by_pubkey.setdefault(pubkey, [])
+                if len(aliases) < Config.DOMAIN_SCAN_ALIASES_PER_PUBKEY:
+                    aliases.append(local_name)
+                else:
+                    truncated_aliases += 1
+
+            candidates = []
+            truncated_candidates = 0
+            for pubkey, aliases in aliases_by_pubkey.items():
+                if len(candidates) >= candidate_limit:
+                    truncated_candidates += 1
+                    continue
+                candidates.append((pubkey, aliases))
+
             verified = []
             unresolved = []
-            for local_name, pubkey in directory.names.items():
+            for pubkey, aliases in candidates:
+                local_name = aliases[0]
                 if time.monotonic() >= deadline:
                     unresolved.append({'name': local_name, 'pubkey': pubkey, 'error': 'Scan deadline reached'})
                     continue
-                try:
-                    profile_timeout = max(
-                        0.1,
-                        min(getattr(Config, 'NIP05_PROFILE_TIMEOUT', 10), 60),
-                    )
-                    profile_deadline = min(deadline, time.monotonic() + profile_timeout)
-                    result = self.profile_lookup(
-                        local_name,
-                        domain,
-                        pubkey,
-                        directory.relays.get(pubkey, ()),
-                        configured_relays,
-                        profile_deadline,
-                    )
-                except (Nip05VerificationError, OSError, ValueError) as exc:
-                    result = ProfileClaimResult(False, error=str(exc))
-                if result.verified:
-                    verified.append((local_name, pubkey, result.source))
-                else:
+                profile_timeout = max(
+                    0.1,
+                    min(getattr(Config, 'NIP05_PROFILE_TIMEOUT', 10), 60),
+                )
+                profile_deadline = min(deadline, time.monotonic() + profile_timeout)
+                result = ProfileClaimResult(False)
+                for local_name in aliases:
+                    if time.monotonic() >= profile_deadline:
+                        result = ProfileClaimResult(False, error='Profile lookup deadline reached')
+                        break
+                    try:
+                        result = self.profile_lookup(
+                            local_name,
+                            domain,
+                            pubkey,
+                            directory.relays.get(pubkey, ()),
+                            configured_relays,
+                            profile_deadline,
+                        )
+                    except (Nip05VerificationError, OSError, ValueError) as exc:
+                        result = ProfileClaimResult(False, error=str(exc))
+                    if result.verified:
+                        verified.append((local_name, pubkey, result.source))
+                        break
+                if not result.verified:
                     unresolved.append({
-                        'name': local_name,
+                        'name': aliases[0],
                         'pubkey': pubkey,
                         'error': result.error or 'Profile claim could not be verified',
                     })
@@ -268,7 +299,7 @@ class ModerationDecisions:
             banned_domain.scan_status = 'idle'
             banned_domain.scan_started_at = None
             banned_domain.last_scan_events = len(directory.names)
-            banned_domain.last_scan_candidates = len(directory.names)
+            banned_domain.last_scan_candidates = len(candidates)
             verified_count = len(verified)
             banned_domain.last_scan_verified = verified_count
             banned_domain.last_scan_new_bans = len(new_bans)
@@ -277,6 +308,8 @@ class ModerationDecisions:
                 'invalid_entries': directory.invalid_entries,
                 'unresolved': len(unresolved),
                 'unresolved_entries': unresolved,
+                'truncated_candidates': truncated_candidates,
+                'truncated_aliases': truncated_aliases,
                 'new_sources': new_sources,
                 'purge_completed': 0,
                 'purge_pending': len(purge_ids),
@@ -296,19 +329,9 @@ class ModerationDecisions:
                 else self.initialize_projection()
             )
             purge_completed = 0
-            purge_pending = 0
-            for purge_id in purge_ids:
-                purge = self._attempt_purge(purge_id)
-                if purge.status == 'completed':
-                    purge_completed += 1
-                else:
-                    purge_pending += 1
-            banned_domain = db.session.get(BannedDomain, domain_id)
-            if banned_domain is not None:
-                details['purge_completed'] = purge_completed
-                details['purge_pending'] = purge_pending
-                banned_domain.last_scan_details = json.dumps(details)
-                self._commit()
+            purge_pending = len(purge_ids)
+            if purge_ids and self.purge_notifier is not None:
+                self.purge_notifier()
             return DomainScanOutcome(
                 names=len(directory.names),
                 verified=verified_count,
@@ -747,25 +770,85 @@ class ModerationDecisions:
         purge = db.session.get(EventPurge, purge_id)
         if purge is None:
             raise ModerationError('Event purge not found')
+        claimed_at = self._claim_purge(purge_id)
+        if claimed_at is None:
+            return purge
         self._add_audit(
             'event_purge_retried',
             f'Retried {purge.target_type} purge for {purge.target}',
         )
         self._commit()
-        return self._attempt_purge(purge_id)
+        return self._attempt_purge(purge_id, claimed_at=claimed_at)
+
+    @classmethod
+    def process_pending_purges(cls, limit=None):
+        """Attempt a bounded batch of durable, retry-eligible purge jobs."""
+        limit = limit or Config.MODERATION_PURGE_BATCH_SIZE
+        now = utcnow()
+        retry_before = now - timedelta(seconds=Config.MODERATION_PURGE_RETRY_SECONDS)
+        purge_ids = []
+        last_id = 0
+        while len(purge_ids) < limit:
+            pending = EventPurge.query.filter(
+                EventPurge.status == 'pending',
+                EventPurge.id > last_id,
+                or_(
+                    EventPurge.attempted_at.is_(None),
+                    EventPurge.attempted_at <= retry_before,
+                ),
+            ).order_by(EventPurge.id).limit(100).all()
+            if not pending:
+                break
+            for purge in pending:
+                last_id = purge.id
+                retry_delay = min(
+                    Config.MODERATION_PURGE_RETRY_SECONDS
+                    * (2 ** min(16, max(0, purge.attempts - 1))),
+                    Config.MODERATION_PURGE_RETRY_MAX_SECONDS,
+                )
+                if (
+                    purge.attempted_at is not None
+                    and purge.attempted_at > now - timedelta(seconds=retry_delay)
+                ):
+                    continue
+                purge_ids.append(purge.id)
+                if len(purge_ids) >= limit:
+                    break
+        return [cls._attempt_purge(purge_id) for purge_id in purge_ids]
 
     @staticmethod
-    def _attempt_purge(purge_id):
+    def _claim_purge(purge_id):
+        claimed_at = utcnow()
+        stale_before = claimed_at - timedelta(
+            seconds=max(1, Config.MODERATION_PURGE_TIMEOUT) + 60
+        )
+        claimed = EventPurge.query.filter(
+            EventPurge.id == purge_id,
+            EventPurge.status == 'pending',
+            or_(
+                EventPurge.claimed_at.is_(None),
+                EventPurge.claimed_at <= stale_before,
+            ),
+        ).update({'claimed_at': claimed_at}, synchronize_session=False)
+        db.session.commit()
+        return claimed_at if claimed == 1 else None
+
+    @staticmethod
+    def _attempt_purge(purge_id, claimed_at=None):
+        if claimed_at is None:
+            claimed_at = ModerationDecisions._claim_purge(purge_id)
+            if claimed_at is None:
+                return db.session.get(EventPurge, purge_id)
         with _purge_lock:
-            return ModerationDecisions._attempt_purge_locked(purge_id)
+            return ModerationDecisions._attempt_purge_locked(purge_id, claimed_at)
 
     @staticmethod
-    def _attempt_purge_locked(purge_id):
+    def _attempt_purge_locked(purge_id, claimed_at):
         """Run one bounded purge attempt and persist its observable outcome."""
-        purge = db.session.get(EventPurge, purge_id)
+        purge = db.session.get(EventPurge, purge_id, populate_existing=True)
         if purge is None:
             raise ModerationError('Event purge not found')
-        if purge.status == 'completed':
+        if purge.status == 'completed' or purge.claimed_at != claimed_at:
             return purge
 
         purge.attempts += 1
@@ -775,6 +858,7 @@ class ModerationDecisions:
                 purge.status = 'completed'
                 purge.last_error = 'Cancelled: pubkey is no longer banned'
                 purge.completed_at = utcnow()
+                purge.claimed_at = None
                 ModerationDecisions._commit()
                 return purge
             event_filter = {'authors': [purge.target]}
@@ -793,5 +877,6 @@ class ModerationDecisions:
         except (ValueError, StrfryError) as exc:
             purge.status = 'pending'
             purge.last_error = str(exc)
+        purge.claimed_at = None
         ModerationDecisions._commit()
         return purge

@@ -4,7 +4,7 @@ from datetime import timedelta
 
 from sqlalchemy.exc import IntegrityError
 
-from config import Config
+from config import Config, bundled_plugin_available
 from models import (
     BannedDomain,
     BannedPubkey,
@@ -268,9 +268,12 @@ def _attention_items(latest, now, role):
                 'label': 'Ban projection publication is pending',
                 'url': '/moderation',
             })
-        pending_purges = EventPurge.query.filter_by(status='pending').count()
-        if pending_purges:
-            items.append({'severity': 'warning', 'label': f'{pending_purges} event purges pending', 'url': '/moderation'})
+        failed_purges = EventPurge.query.filter(
+            EventPurge.status == 'pending',
+            EventPurge.attempts > 0,
+        ).count()
+        if failed_purges:
+            items.append({'severity': 'warning', 'label': f'{failed_purges} event purges need attention', 'url': '/moderation'})
         failed_domains = BannedDomain.query.filter(
             BannedDomain.scan_status == 'idle',
             BannedDomain.last_scan_error.isnot(None),
@@ -296,13 +299,12 @@ def _attention_items(latest, now, role):
             })
         elif (
             not isinstance(configured_path, str)
-            or not os.path.isabs(configured_path)
-            or not os.path.isfile(configured_path)
-            or not os.access(configured_path, os.X_OK)
+            or configured_path != Config.BLOCKLIST_PLUGIN_PATH
+            or not bundled_plugin_available(Config.BLOCKLIST_PLUGIN_PATH)
         ):
             items.append({
                 'severity': 'danger',
-                'label': 'Configured write-policy plugin is not executable',
+                'label': 'Configured write-policy plugin is unsupported or unsafe',
                 'url': '/plugins',
             })
         wot_state = db.session.get(WoTBuildState, 1)

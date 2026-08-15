@@ -418,6 +418,7 @@ class EventPurge(db.Model):
         nullable=True,
     )
     created_at = db.Column(db.DateTime, default=utcnow)
+    claimed_at = db.Column(db.DateTime)
     attempted_at = db.Column(db.DateTime)
     completed_at = db.Column(db.DateTime)
 

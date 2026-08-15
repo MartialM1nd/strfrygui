@@ -157,6 +157,10 @@ sudo chmod 0640 /opt/strfrygui/.env
 sudo editor /opt/strfrygui/.env
 ```
 
+Startup rejects symlinked dotenv files, files accessible by other users, and
+files writable by the service group. Both secrets must contain at least 32
+characters when configured.
+
 At minimum, set unique non-empty values for `SECRET_KEY` and
 `REGISTRATION_TOKEN`, and use the dedicated state path:
 
@@ -461,11 +465,17 @@ granting broad write access to system directories.
 
 Confirm all of the following:
 
-- The configured plugin path is correct and executable.
+- The bundled plugin is selected and is a root-owned, non-writable executable.
 - strfry was restarted after a plugin path change.
 - The Plugins page reports successful policy publication.
 - The shared runtime directory is accessible to both services.
 - Recent policy telemetry or decision-log activity is present.
+
+The plugin rejects network writes until it has loaded both a valid blocklist and
+a valid trust-policy artifact. Explicit empty blocklists and `off` policies are
+valid; missing or malformed initial artifacts are not. Domain reconciliation
+limits unique profile candidates and leaves destructive event deletion to the
+bounded durable purge worker.
 
 ## Project Layout
 

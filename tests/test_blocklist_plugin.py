@@ -10,6 +10,7 @@ from utils import blocklist_plugin as plugin
 
 
 EVENT_ID = "0" * 4 + "f" * 60
+_DEFAULT_ARTIFACT = object()
 
 
 def policy_data(**updates):
@@ -43,10 +44,14 @@ def request(pubkey="unknown", event_id=EVENT_ID, tags=None, **updates):
     return value
 
 
-def runtime(tmp_path, policy=None, blocklist=None):
+def runtime(tmp_path, policy=_DEFAULT_ARTIFACT, blocklist=_DEFAULT_ARTIFACT):
     tmp_path.mkdir(parents=True, exist_ok=True)
     blocklist_path = tmp_path / "blocklist.json"
     policy_path = tmp_path / "trust_policy.json"
+    if policy is _DEFAULT_ARTIFACT:
+        policy = policy_data(mode="off")
+    if blocklist is _DEFAULT_ARTIFACT:
+        blocklist = []
     if blocklist is not None:
         write_json(blocklist_path, blocklist)
     if policy is not None:
@@ -58,15 +63,36 @@ def runtime(tmp_path, policy=None, blocklist=None):
     )
 
 
-def test_missing_policy_defaults_to_blocklist_only_off(tmp_path):
-    subject = runtime(tmp_path, blocklist=["banned"])
+def test_missing_policy_rejects_network_writes_but_loaded_bans_win(tmp_path):
+    subject = runtime(tmp_path, policy=None, blocklist=["banned"])
 
-    assert subject.process(request("unknown"), now=200)["action"] == "accept"
+    unavailable = subject.process(request("unknown"), now=200)
+    assert unavailable == {
+        "id": EVENT_ID,
+        "action": "reject",
+        "msg": "blocked: write-policy artifacts are unavailable",
+    }
     assert subject.process(request("banned"), now=200) == {
         "id": EVENT_ID,
         "action": "reject",
         "msg": "blocked: pubkey is banned",
     }
+
+
+def test_runtime_recovers_after_initial_artifacts_are_published(tmp_path):
+    subject = runtime(tmp_path, policy=None, blocklist=None)
+    assert subject.process(request(), now=200)["action"] == "reject"
+    assert subject.process(
+        request(sourceType="Import"), now=200
+    )["action"] == "accept"
+
+    write_json(tmp_path / "blocklist.json", [])
+    write_json(tmp_path / "trust_policy.json", policy_data(mode="off"))
+
+    assert subject.process(request(), now=200)["action"] == "accept"
+    assert subject.counters["unavailable_blocklist"] == 1
+    assert subject.counters["unavailable_trust_policy"] == 1
+    assert subject.counters["policy_recovered"] == 1
 
 
 def test_off_and_monitor_accept_but_bans_always_win(tmp_path):
@@ -265,6 +291,8 @@ def test_reloaders_do_not_fail_open_when_initial_runtime_files_are_invalid(tmp_p
 
 def test_runtime_flushes_aggregate_stats_atomically(tmp_path):
     stats_path = tmp_path / "trust_policy_stats.json"
+    write_json(tmp_path / "blocklist.json", [])
+    write_json(tmp_path / "trust_policy.json", policy_data(mode="off"))
     subject = plugin.WritePolicyRuntime(
         str(tmp_path / "blocklist.json"),
         str(tmp_path / "trust_policy.json"),
