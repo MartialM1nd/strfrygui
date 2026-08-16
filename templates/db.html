@@ -15,8 +15,7 @@
 
     <section class="dashboard-panel mb-4" aria-label="Negentropy trees">
         {% call panel_header('Negentropy trees', 'Manage reconciliation indexes used to efficiently synchronize relay events.') %}
-        <form method="POST" class="mb-0">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <form method="GET" class="mb-0">
             <button type="submit" name="refresh_negentropy" class="btn btn-sm btn-outline-secondary">
                 <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh trees
             </button>
@@ -113,8 +112,7 @@
 
     <section class="dashboard-panel mb-4" aria-label="Compression dictionaries">
         {% call panel_header('Compression dictionaries', 'Inspect dictionaries available to strfry for compressed event storage.') %}
-        <form method="POST" class="mb-0">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <form method="GET" class="mb-0">
             <button type="submit" name="refresh_dict" class="btn btn-sm btn-outline-secondary">
                 <i class="bi bi-arrow-clockwise" aria-hidden="true"></i> Refresh dictionaries
             </button>

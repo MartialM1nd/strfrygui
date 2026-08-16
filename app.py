@@ -1931,8 +1931,22 @@ def db_management():
     dict_output = None
     negentropy_add_form = EventSearchForm()
     negentropy_add_form.limit.data = 0
-    
-    if request.method == 'POST':
+
+    if request.method == 'GET' and request.args:
+        refresh_actions = ('refresh_negentropy', 'refresh_dict')
+        if sum(action in request.args for action in refresh_actions) != 1:
+            abort(400, description='Request exactly one database refresh')
+        if 'refresh_negentropy' in request.args:
+            try:
+                trees = negentropy_list()
+            except StrfryError as e:
+                negentropy_error = str(e)
+        else:
+            try:
+                dict_output = dict_list()
+            except StrfryError as e:
+                dict_error = str(e)
+    elif request.method == 'POST':
         actions = (
             'negentropy_add', 'negentropy_build', 'negentropy_delete', 'compact',
             'refresh_negentropy', 'refresh_dict',
