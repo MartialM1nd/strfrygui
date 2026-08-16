@@ -146,6 +146,21 @@ def test_missing_api_route_returns_json(legacy_app):
     assert response.get_json() == {'error': 'The requested API endpoint does not exist.'}
 
 
+def test_database_page_renders_with_offline_compaction_guidance(legacy_app):
+    _app_module, flask_app = legacy_app
+    user_id = add_user(flask_app)
+    client = flask_app.test_client()
+    with client.session_transaction() as auth_session:
+        auth_session['_user_id'] = str(user_id)
+        auth_session['_fresh'] = True
+        auth_session['_nostr_auth_version'] = 1
+
+    response = client.get('/db')
+
+    assert response.status_code == 200
+    assert b'Web compaction is disabled.' in response.data
+
+
 def test_protected_api_returns_json_when_role_is_insufficient(legacy_app):
     _app_module, flask_app = legacy_app
     user_id = add_user(flask_app, role='viewer')
