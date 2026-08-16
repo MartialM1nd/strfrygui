@@ -1459,6 +1459,7 @@ def _auth_verify_url(action):
 
 
 @app.route('/api/auth/challenge', methods=['POST'])
+@csrf.exempt
 @limiter.limit(Config.RATELIMIT_LOGIN)
 def auth_challenge():
     data = request.get_json(silent=True) or {}
@@ -1509,6 +1510,7 @@ def _verified_auth(action):
 
 
 @app.route('/api/auth/verify', methods=['POST'])
+@csrf.exempt
 @limiter.limit(Config.RATELIMIT_LOGIN)
 def auth_verify():
     try:
@@ -1536,6 +1538,7 @@ def auth_verify():
 
 
 @app.route('/api/auth/bootstrap', methods=['POST'])
+@csrf.exempt
 @limiter.limit(Config.RATELIMIT_LOGIN)
 @_operator_mutation_lock()
 def auth_bootstrap():
@@ -2950,6 +2953,7 @@ def create_user():
 
 
 @app.route('/api/auth/rotate-current', methods=['POST'])
+@csrf.exempt
 @viewer_or_higher
 @limiter.limit(Config.RATELIMIT_LOGIN)
 def authorize_nostr_key_rotation():
@@ -2968,6 +2972,7 @@ def authorize_nostr_key_rotation():
 
 
 @app.route('/api/auth/rotate-key', methods=['POST'])
+@csrf.exempt
 @viewer_or_higher
 @limiter.limit(Config.RATELIMIT_LOGIN)
 @_operator_mutation_lock()

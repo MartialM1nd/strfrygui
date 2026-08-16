@@ -249,14 +249,20 @@ def test_oversized_api_body_is_rejected_before_json_parsing(legacy_app):
     assert response.get_json() == {'error': 'Request body is too large.'}
 
 
-def test_auth_api_csrf_rejection_is_json(legacy_app):
+def test_protected_api_csrf_rejection_is_json(legacy_app):
     app_module, flask_app = legacy_app
     app_module.limiter.reset()
+    user_id = add_user(flask_app)
+    client = flask_app.test_client()
+    with client.session_transaction() as auth_session:
+        auth_session['_user_id'] = str(user_id)
+        auth_session['_fresh'] = True
+        auth_session['_nostr_auth_version'] = 1
     flask_app.config['WTF_CSRF_ENABLED'] = True
     try:
-        response = flask_app.test_client().post(
-            '/api/auth/challenge',
-            json={'action': 'login'},
+        response = client.post(
+            '/api/metadata-relays',
+            json={'url': 'wss://relay.example'},
         )
     finally:
         flask_app.config['WTF_CSRF_ENABLED'] = False
@@ -264,6 +270,51 @@ def test_auth_api_csrf_rejection_is_json(legacy_app):
     assert response.status_code == 400
     assert response.is_json
     assert response.get_json() == {'error': 'Request validation failed.'}
+
+
+def test_nostr_login_endpoints_do_not_require_redundant_csrf_token(legacy_app):
+    app_module, flask_app = legacy_app
+    app_module.limiter.reset()
+    flask_app.config['WTF_CSRF_ENABLED'] = True
+    client = flask_app.test_client()
+    try:
+        challenge_response = client.post(
+            '/api/auth/challenge',
+            json={'action': 'login'},
+        )
+        verify_response = client.post('/api/auth/verify')
+    finally:
+        flask_app.config['WTF_CSRF_ENABLED'] = False
+
+    assert challenge_response.status_code == 200
+    assert challenge_response.is_json
+    assert 'event' in challenge_response.get_json()
+    assert verify_response.status_code == 401
+    assert verify_response.get_json() == {'error': 'Nostr authentication failed.'}
+
+
+def test_auth_api_accepts_csrf_token_from_login_page(legacy_app):
+    app_module, flask_app = legacy_app
+    app_module.limiter.reset()
+    flask_app.config['WTF_CSRF_ENABLED'] = True
+    client = flask_app.test_client()
+    try:
+        login_page = client.get('/login')
+        token = re.search(
+            rb'<meta name="csrf-token" content="([^"]+)">',
+            login_page.data,
+        ).group(1).decode()
+        response = client.post(
+            '/api/auth/challenge',
+            json={'action': 'login'},
+            headers={'X-CSRFToken': token},
+        )
+    finally:
+        flask_app.config['WTF_CSRF_ENABLED'] = False
+
+    assert response.status_code == 200
+    assert response.is_json
+    assert 'event' in response.get_json()
 
 
 def test_oversized_body_is_rejected_even_when_route_does_not_read_it(legacy_app):
