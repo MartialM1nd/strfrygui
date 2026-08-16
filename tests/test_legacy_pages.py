@@ -161,6 +161,30 @@ def test_database_page_renders_with_offline_compaction_guidance(legacy_app):
     assert b'Web compaction is disabled.' in response.data
 
 
+def test_event_query_uses_get_without_csrf_validation(legacy_app, monkeypatch):
+    app_module, flask_app = legacy_app
+    user_id = add_user(flask_app)
+    client = flask_app.test_client()
+    with client.session_transaction() as auth_session:
+        auth_session['_user_id'] = str(user_id)
+        auth_session['_fresh'] = True
+        auth_session['_nostr_auth_version'] = 1
+    monkeypatch.setattr(app_module, 'scan_events', lambda *args, **kwargs: [])
+    flask_app.config['WTF_CSRF_ENABLED'] = True
+    try:
+        page = client.get('/events')
+        response = client.get('/events', query_string={
+            'search_type': 'all',
+            'limit': '25',
+        })
+    finally:
+        flask_app.config['WTF_CSRF_ENABLED'] = False
+
+    assert b'<form method="GET" id="searchForm">' in page.data
+    assert response.status_code == 200
+    assert b'0 events loaded from this bounded query.' in response.data
+
+
 def test_protected_api_returns_json_when_role_is_insufficient(legacy_app):
     _app_module, flask_app = legacy_app
     user_id = add_user(flask_app, role='viewer')

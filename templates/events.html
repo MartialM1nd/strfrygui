@@ -36,8 +36,7 @@
         {% if error %}<div class="alert alert-danger" role="alert"><strong>Query failed.</strong> {{ error }}</div>{% endif %}
 
         <div id="eventQueryBuilder" class="collapse{% if not search_performed or error %} show{% endif %}" data-responsive-disclosure>
-        <form method="POST" id="searchForm">
-            {{ form.hidden_tag() }}
+        <form method="GET" id="searchForm">
             <input type="hidden" name="search" value="1">
             <div class="event-query-grid">
                 <div>
