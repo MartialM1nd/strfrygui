@@ -26,6 +26,18 @@ def append(path, *records):
             output.write(json.dumps(value).encode() + b'\n')
 
 
+def test_decision_log_reader_does_not_follow_symlinks(tmp_path):
+    victim = tmp_path / 'victim.jsonl'
+    append(victim, record(1))
+    path = tmp_path / 'events.jsonl'
+    path.symlink_to(victim)
+
+    batch = read_decision_log(str(path))
+
+    assert batch.available is False
+    assert batch.events == []
+
+
 def test_initial_read_returns_latest_records_from_rotated_and_current(tmp_path):
     path = tmp_path / 'events.jsonl'
     append(tmp_path / 'events.jsonl.1', record(1), record(2))

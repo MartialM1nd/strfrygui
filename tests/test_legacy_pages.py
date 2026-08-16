@@ -1,11 +1,12 @@
 import importlib
+import re
 import sys
 
 import pytest
 from types import SimpleNamespace
 
 from config import Config
-from models import User, db
+from models import AuditLog, User, db
 from utils.strfry import hex_to_npub
 
 
@@ -16,7 +17,9 @@ PASSWORD = 'StrongPassword123456!'
 def legacy_app(tmp_path_factory):
     tmp_path = tmp_path_factory.mktemp('legacy-pages')
     old_database_uri = Config.SQLALCHEMY_DATABASE_URI
+    old_proxy_count = Config.TRUSTED_PROXY_COUNT
     Config.SQLALCHEMY_DATABASE_URI = f'sqlite:///{tmp_path / "legacy.db"}'
+    Config.TRUSTED_PROXY_COUNT = 1
     app_module = importlib.import_module('app')
     flask_app = app_module.app
     old_token = Config.REGISTRATION_TOKEN
@@ -34,6 +37,7 @@ def legacy_app(tmp_path_factory):
         db.session.remove()
         db.drop_all()
     Config.REGISTRATION_TOKEN = old_token
+    Config.TRUSTED_PROXY_COUNT = old_proxy_count
     Config.SQLALCHEMY_DATABASE_URI = old_database_uri
     sys.modules.pop('app', None)
 
@@ -80,6 +84,23 @@ def test_auth_pages_render_nostr_only_controls_and_masked_token(legacy_app):
     assert b'Sign and configure administrator' in register_page.data
     assert b'Sign in with Nostr' in login_page.data
     assert b'name="password"' not in login_page.data
+    csp = login_page.headers['Content-Security-Policy']
+    nonce = re.search(r"'nonce-([^']+)'", csp).group(1)
+    assert f'nonce="{nonce}"'.encode() in login_page.data
+    assert "frame-ancestors 'none'" in csp
+    assert login_page.headers['X-Frame-Options'] == 'DENY'
+    assert login_page.headers['X-Content-Type-Options'] == 'nosniff'
+    assert login_page.headers['Cache-Control'].startswith('no-store')
+
+
+def test_vendored_static_assets_are_cacheable_without_external_execution(legacy_app):
+    _app_module, flask_app = legacy_app
+    response = flask_app.test_client().get(
+        '/static/vendor/bootstrap-5.3.2/bootstrap.min.css'
+    )
+
+    assert response.status_code == 200
+    assert response.headers['Cache-Control'] == 'public, max-age=31536000, immutable'
 
 
 @pytest.mark.parametrize('next_url', [
@@ -105,6 +126,77 @@ def test_password_login_and_change_routes_are_removed(legacy_app):
     client = flask_app.test_client()
     assert client.post('/login', data={'username': 'operator', 'password': PASSWORD}).status_code == 405
     assert client.post('/change-password/1').status_code == 404
+
+
+def test_trusted_proxy_identity_is_shared_by_audit_and_rate_limit(legacy_app, monkeypatch):
+    app_module, flask_app = legacy_app
+    app_module.limiter.reset()
+    monkeypatch.setattr(
+        app_module,
+        '_verified_auth',
+        lambda action: SimpleNamespace(pubkey='f' * 64, redirect_to=None, payload={}),
+    )
+    client = flask_app.test_client()
+
+    failed_login = client.post(
+        '/api/auth/verify',
+        headers={'X-Forwarded-For': '198.51.100.10'},
+        environ_base={'REMOTE_ADDR': '127.0.0.1'},
+    )
+    with flask_app.app_context():
+        audit = AuditLog.query.filter_by(action='login_failed').one()
+    for _ in range(5):
+        client.post(
+            '/api/auth/challenge',
+            json={'action': 'login'},
+            headers={'X-Forwarded-For': '198.51.100.20'},
+            environ_base={'REMOTE_ADDR': '127.0.0.1'},
+        )
+    limited = client.post(
+        '/api/auth/challenge',
+        json={'action': 'login'},
+        headers={'X-Forwarded-For': '198.51.100.20'},
+        environ_base={'REMOTE_ADDR': '127.0.0.1'},
+    )
+    independent = client.post(
+        '/api/auth/challenge',
+        json={'action': 'login'},
+        headers={'X-Forwarded-For': '198.51.100.21'},
+        environ_base={'REMOTE_ADDR': '127.0.0.1'},
+    )
+
+    assert failed_login.status_code == 401
+    assert audit.ip_address == '198.51.100.10'
+    assert limited.status_code == 429
+    assert independent.status_code == 200
+
+
+def test_oversized_api_body_is_rejected_before_json_parsing(legacy_app):
+    _app_module, flask_app = legacy_app
+    original_limit = flask_app.config['REQUEST_MAX_BYTES']
+    flask_app.config['REQUEST_MAX_BYTES'] = 64
+    try:
+        response = flask_app.test_client().post(
+            '/api/auth/challenge',
+            json={'action': 'login', 'padding': 'x' * 100},
+        )
+    finally:
+        flask_app.config['REQUEST_MAX_BYTES'] = original_limit
+
+    assert response.status_code == 413
+    assert response.get_json() == {'error': 'Request body is too large.'}
+
+
+def test_oversized_body_is_rejected_even_when_route_does_not_read_it(legacy_app):
+    _app_module, flask_app = legacy_app
+    original_limit = flask_app.config['REQUEST_MAX_BYTES']
+    flask_app.config['REQUEST_MAX_BYTES'] = 64
+    try:
+        response = flask_app.test_client().get('/login', data='x' * 100)
+    finally:
+        flask_app.config['REQUEST_MAX_BYTES'] = original_limit
+
+    assert response.status_code == 413
 
 
 def test_nostr_login_maps_verified_pubkey_to_existing_user(legacy_app, monkeypatch):

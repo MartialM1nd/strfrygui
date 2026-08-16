@@ -24,8 +24,8 @@ the strfry event database.
   reveal for NIP-36/content-warning-tagged events.
 - Bounded JSONL import and export previews, including optional fried output and
   explicit confirmation before skipping signature verification.
-- Negentropy tree management, compression dictionary inspection, and database
-  compaction guarded by relay-process and cross-process maintenance checks.
+- Negentropy tree management and compression dictionary inspection. Database
+  compaction is intentionally offline-only.
 
 ### Moderation and Policy
 
@@ -135,15 +135,18 @@ sudo chown -R root:root /opt/strfrygui
 
 ### 2. Create State Directories
 
-The SQLite database should live outside the source tree. The runtime directory
-is shared with the bundled write-policy plugin.
+The SQLite database should live outside the source tree. Policy files, plugin
+telemetry, and GUI locks use separate writer-owned directories.
 
 ```bash
 sudo groupadd -f -r strfry-observers
 sudo usermod -aG strfry-observers nostr
 sudo usermod -aG strfry-observers www-data
-sudo install -d -o www-data -g www-data -m 0750 /var/lib/strfrygui
-sudo install -d -o root -g strfry-observers -m 2770 /opt/strfrygui/runtime
+sudo install -d -o root -g strfry-observers -m 0750 /var/lib/strfrygui
+sudo install -d -o www-data -g www-data -m 0750 /var/lib/strfrygui/control
+sudo install -d -o www-data -g strfry-observers -m 2750 /var/lib/strfrygui/policy
+sudo install -d -o nostr -g strfry-observers -m 2750 /var/lib/strfrygui/plugin
+sudo install -d -o www-data -g www-data -m 0750 /run/strfrygui
 ```
 
 Restart services after changing group membership.
@@ -167,11 +170,14 @@ At minimum, set unique non-empty values for `SECRET_KEY` and
 ```env
 SECRET_KEY=<generated-secret>
 REGISTRATION_TOKEN=<generated-secret>
-DATABASE_URL=sqlite:////var/lib/strfrygui/strfrygui.db
+DATABASE_URL=sqlite:////var/lib/strfrygui/control/strfrygui.db
 STRFRY_BINARY=/usr/local/bin/strfry
 STRFRY_CONFIG=/etc/strfry.conf
 STRFRY_DB_PATH=/var/lib/strfry
 STRFRY_METRICS_URL=http://localhost:7777/metrics
+STRFRYGUI_POLICY_DIR=/var/lib/strfrygui/policy
+STRFRYGUI_PLUGIN_STATE_DIR=/var/lib/strfrygui/plugin
+STRFRYGUI_LOCK_DIR=/run/strfrygui
 TRUSTED_PROXY_COUNT=1
 ```
 
@@ -181,8 +187,16 @@ Generate secrets with:
 python3 -c "import secrets; print(secrets.token_hex(32))"
 ```
 
-`TRUSTED_PROXY_COUNT=1` is appropriate when exactly one trusted reverse proxy
-sits between clients and Flask. Use `0` when Flask is directly exposed.
+`TRUSTED_PROXY_COUNT=1` is appropriate only when the bundled nginx proxy is the
+single hop and Flask remains unreachable except through loopback. nginx
+overwrites `X-Forwarded-For`; the resulting address drives both audits and rate
+limits. Use `0` when Flask is directly exposed.
+
+Set the policy and plugin-state variables in the strfry service environment as
+well, because the standalone write-policy process does not load Flask's `.env`.
+The setgid child directories ensure atomic `0640` replacements inherit the
+shared observer group. Runtime directory symlinks are rejected; replace legacy
+symlinks with real directories before upgrading.
 
 ### 4. Configure HTTPS
 
@@ -194,7 +208,7 @@ The application permits imports up to 5 MiB by default. Configure nginx with a
 slightly larger request allowance, for example:
 
 ```nginx
-client_max_body_size 6m;
+client_max_body_size 16m;
 ```
 
 Align reverse-proxy timeouts with the bounded import, export, and maintenance
@@ -202,7 +216,7 @@ operations you intend to use.
 
 ### 5. Start the Service
 
-`strfrygui.service` is a simple single-process reference unit:
+`strfrygui.service` uses one threaded Gunicorn worker and a systemd sandbox:
 
 ```bash
 sudo cp /opt/strfrygui/strfrygui.service /etc/systemd/system/
@@ -210,8 +224,7 @@ sudo systemctl daemon-reload
 sudo systemctl enable --now strfrygui
 ```
 
-The bundled unit uses Flask's server. Review and harden it for your deployment.
-Do not switch blindly to multiple WSGI workers: this project currently has
+Do not increase Gunicorn above one worker: this project currently has
 in-process queues, workers, schedulers, and status state that would be duplicated
 across processes.
 
@@ -334,7 +347,7 @@ Ban operations have separate observable stages:
 
 1. The ban and its provenance are committed to SQLite.
 2. The complete blocklist is atomically published to
-   `/opt/strfrygui/runtime/blocklist.json`.
+   `/var/lib/strfrygui/policy/blocklist.json`.
 3. The running plugin reloads the artifact.
 4. Existing matching events are purged through durable, retryable work.
 
@@ -368,13 +381,13 @@ one 5 MiB backup. The browser retains at most 1,000 decisions and polls every
 
 ## Database Maintenance
 
-Database compaction acts directly on strfry storage. StrfryGUI requires explicit
-confirmation, refuses to start while visible strfry processes are running, and
-also refuses when process visibility is unavailable. Stop the relay and verify
-backups before compacting.
+Web-triggered database compaction is disabled because a process check cannot
+exclude a concurrent relay start. Stop the strfry service, verify all relay
+processes exited, back up the database, run `strfry compact` offline, then
+restart and health-check the relay.
 
-Import, event deletion, negentropy mutation, and compaction share a filesystem
-maintenance lock to prevent overlapping GUI writes across worker processes.
+Import, event deletion, and negentropy mutation share a filesystem maintenance
+lock to prevent overlapping GUI writes across worker processes.
 
 ## Backup and Recovery
 
@@ -383,7 +396,7 @@ Back up these locations before upgrades or destructive maintenance:
 - The control-plane SQLite database from `DATABASE_URL`.
 - The strfry event database at `STRFRY_DB_PATH`.
 - `strfry.conf`.
-- `/opt/strfrygui/runtime`, including policy artifacts and decision logs.
+- `/var/lib/strfrygui/policy` and `/var/lib/strfrygui/plugin`.
 
 Do not delete the SQLite database merely to reset an account. It also contains
 audit history, reports, bans and provenance, purge status, metadata relays,

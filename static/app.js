@@ -1,4 +1,11 @@
 (function() {
+    document.addEventListener('click', function(event) {
+        const control = typeof event.target.closest === 'function' ? event.target.closest('[data-confirm]') : null;
+        if (control && !window.confirm(control.getAttribute('data-confirm'))) {
+            event.preventDefault();
+        }
+    });
+
     window.csrfFetch = function(url, options) {
         const requestOptions = { ...(options || {}) };
         const method = String(requestOptions.method || 'GET').toUpperCase();

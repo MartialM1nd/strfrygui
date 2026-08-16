@@ -21,6 +21,10 @@ MODERATION_REPORT_INDEXES = (
     'ON moderation_reports (reported_event_id)',
     'CREATE INDEX IF NOT EXISTS ix_moderation_reports_created_at '
     'ON moderation_reports (created_at)',
+    'CREATE INDEX IF NOT EXISTS ix_moderation_reports_reporter_received '
+    'ON moderation_reports (reporter_pubkey, received_at)',
+    'CREATE INDEX IF NOT EXISTS ix_moderation_reports_reviewed_received_id '
+    'ON moderation_reports (reviewed, received_at, id)',
 )
 
 AUDIT_LOG_INDEXES = (
@@ -146,6 +150,17 @@ class ModerationReport(db.Model):
             'created_at',
             'id',
         ),
+        db.Index(
+            'ix_moderation_reports_reporter_received',
+            'reporter_pubkey',
+            'received_at',
+        ),
+        db.Index(
+            'ix_moderation_reports_reviewed_received_id',
+            'reviewed',
+            'received_at',
+            'id',
+        ),
     )
     
     id = db.Column(db.Integer, primary_key=True)
@@ -156,6 +171,7 @@ class ModerationReport(db.Model):
     report_type = db.Column(db.String(20), index=True)
     content = db.Column(db.Text)
     created_at = db.Column(db.DateTime, default=utcnow, index=True)
+    received_at = db.Column(db.DateTime, default=utcnow, nullable=False, index=True)
     reviewed = db.Column(db.Boolean, default=False)
     reviewed_by = db.Column(db.Integer, db.ForeignKey('users.id'))
     reviewed_at = db.Column(db.DateTime)

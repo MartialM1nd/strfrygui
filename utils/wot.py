@@ -1,8 +1,5 @@
-import fcntl
 import hashlib
 import json
-import os
-import tempfile
 import threading
 import time
 from contextlib import contextmanager
@@ -15,6 +12,7 @@ from config import Config
 from models import WoTBuildState, WoTPolicy, db, utcnow
 from utils.nip05 import InvalidNostrEvent, validate_nostr_event
 from utils.strfry import StrfryError, iter_scan_events, npub_to_hex
+from utils.runtime_files import atomic_write, file_lock, read_bounded
 
 
 DEFAULT_ROOT_NPUBS = (
@@ -37,13 +35,8 @@ class WoTError(Exception):
 @contextmanager
 def _publication_lock():
     with _publication_thread_lock:
-        with open(Config.TRUST_POLICY_FILE + '.lock', 'a+') as lock_file:
-            os.fchmod(lock_file.fileno(), 0o640)
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-            try:
-                yield
-            finally:
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        with file_lock(Config.TRUST_POLICY_FILE + '.lock'):
+            yield
 
 
 @dataclass(frozen=True)
@@ -248,19 +241,10 @@ def build_snapshot(policy, scanner=None, validator=None, now=None):
 
 
 def _atomic_json_write(path, data):
-    directory = os.path.dirname(path) or '.'
-    fd, temporary_path = tempfile.mkstemp(prefix='.trust-policy-', dir=directory, text=True)
-    try:
-        with os.fdopen(fd, 'w') as output:
-            json.dump(data, output, separators=(',', ':'), sort_keys=True)
-            output.flush()
-            os.fsync(output.fileno())
-        os.chmod(temporary_path, 0o640)
-        os.replace(temporary_path, path)
-    except OSError:
-        if os.path.exists(temporary_path):
-            os.unlink(temporary_path)
-        raise
+    atomic_write(
+        path,
+        json.dumps(data, separators=(',', ':'), sort_keys=True).encode('utf-8'),
+    )
 
 
 def publish_policy(policy, snapshot=None, generated_at=None):
@@ -302,8 +286,7 @@ def republish_policy_settings(policy):
         Config.LEGACY_TRUST_POLICY_FILE,
     ):
         try:
-            with open(source_path) as policy_file:
-                candidate = json.load(policy_file)
+            candidate = json.loads(read_bounded(source_path, 5 * 1024 * 1024))
         except (OSError, json.JSONDecodeError, TypeError):
             continue
         if _compatible_policy_snapshot(candidate, roots):

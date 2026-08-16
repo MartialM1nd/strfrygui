@@ -239,7 +239,7 @@
                     {{ domain_form.hidden_tag() }}
                     <div class="col-md-4">{{ domain_form.domain.label(class="form-label") }}{{ domain_form.domain(class="form-control", placeholder="example.com") }}</div>
                     <div class="col-md-6">{{ domain_form.reason.label(class="form-label") }}{{ domain_form.reason(class="form-control", rows="1", placeholder="Reason for domain ban") }}</div>
-                    <div class="col-md-2 d-flex align-items-end"><button type="submit" class="btn btn-danger w-100" onclick="return confirm('Ban this exact NIP-05 domain and enumerate its directory?')">Ban domain</button></div>
+                    <div class="col-md-2 d-flex align-items-end"><button type="submit" class="btn btn-danger w-100" data-confirm="Ban this exact NIP-05 domain and enumerate its directory?">Ban domain</button></div>
                 </form>
             </details>
 
@@ -300,7 +300,7 @@
 {% endblock %}
 
 {% block scripts %}
-<script>
+<script nonce="{{ g.csp_nonce }}">
 const reportList = document.getElementById('reportList');
 const loadMoreButton = document.getElementById('loadMoreReports');
 const reportLoadError = document.getElementById('reportLoadError');

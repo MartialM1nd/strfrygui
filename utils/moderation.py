@@ -1,6 +1,5 @@
 import json
 import os
-import tempfile
 import threading
 import time
 from dataclasses import dataclass
@@ -32,6 +31,7 @@ from utils.nip05 import (
     normalize_domain,
 )
 from utils.strfry import StrfryError, delete_events
+from utils.runtime_files import atomic_write
 
 
 _projection_lock = threading.Lock()
@@ -752,19 +752,7 @@ class ModerationDecisions:
         if not os.access(plugin_path, os.X_OK):
             raise PermissionError(f'Write-policy plugin is not executable: {plugin_path}')
 
-        directory = os.path.dirname(blocklist_path) or '.'
-        fd, temporary_path = tempfile.mkstemp(prefix='.blocklist-', dir=directory, text=True)
-        try:
-            with os.fdopen(fd, 'w') as blocklist_file:
-                json.dump(pubkeys, blocklist_file)
-                blocklist_file.flush()
-                os.fsync(blocklist_file.fileno())
-            os.chmod(temporary_path, 0o640)
-            os.replace(temporary_path, blocklist_path)
-        except OSError:
-            if os.path.exists(temporary_path):
-                os.unlink(temporary_path)
-            raise
+        atomic_write(blocklist_path, json.dumps(pubkeys).encode('utf-8'))
 
     def retry_purge(self, purge_id):
         purge = db.session.get(EventPurge, purge_id)

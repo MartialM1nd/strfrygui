@@ -63,6 +63,26 @@ def test_export_events_rejects_output_over_limit(monkeypatch, tmp_path):
         export_events()
 
 
+def test_commands_reject_unbounded_stderr(monkeypatch, tmp_path):
+    binary = executable(tmp_path, "printf '1234567890' >&2\n")
+    monkeypatch.setattr(Config, 'STRFRY_BINARY', str(binary))
+    monkeypatch.setattr(Config, 'STRFRY_CONFIG', '')
+    monkeypatch.setattr(Config, 'STRFRY_COMMAND_MAX_STDERR_BYTES', 5)
+
+    with pytest.raises(StrfryError, match='stderr exceeds the 5-byte safety limit'):
+        export_events()
+
+
+def test_scan_rejects_oversized_unterminated_event_line(monkeypatch, tmp_path):
+    binary = executable(tmp_path, "printf '1234567890'\n")
+    monkeypatch.setattr(Config, 'STRFRY_BINARY', str(binary))
+    monkeypatch.setattr(Config, 'STRFRY_CONFIG', '')
+    monkeypatch.setattr(Config, 'STRFRY_SCAN_MAX_LINE_BYTES', 5)
+
+    with pytest.raises(StrfryError, match='line-size safety limit'):
+        list(iter_scan_events({}, limit=1, timeout=2))
+
+
 def test_export_events_preserves_zero_timestamp_bounds(monkeypatch, tmp_path):
     args_file = tmp_path / 'args'
     binary = executable(tmp_path, f"printf '%s' \"$*\" > '{args_file}'\n")

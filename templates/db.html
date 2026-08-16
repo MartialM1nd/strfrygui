@@ -73,7 +73,7 @@
                                     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
                                     <input type="hidden" name="tree_id" value="{{ tree.id }}">
                                     <input type="hidden" name="confirm_tree_delete" value="{{ tree.id }}">
-                                    <button type="submit" name="negentropy_delete" class="btn btn-sm btn-outline-danger" onclick="return confirm('Delete this negentropy tree?')">
+                                    <button type="submit" name="negentropy_delete" class="btn btn-sm btn-outline-danger" data-confirm="Delete this negentropy tree?">
                                         <i class="bi bi-trash" aria-hidden="true"></i> Delete tree
                                     </button>
                                 </form>
@@ -143,58 +143,11 @@
         {% endif %}
     </section>
 
-    <details class="dashboard-panel operations-danger-zone compaction-disclosure" data-responsive-disclosure aria-labelledby="compactionTitle">
-        <summary>
-            <span class="compaction-summary-title">
-                <span class="dashboard-section-label text-danger" id="compactionTitle">Database compaction</span>
-                <strong>Relay must be stopped</strong>
-            </span>
-            <span class="compaction-summary-outcome small">
-                {% if compaction_status.running %}
-                Status: in progress since {{ compaction_status.started_at.strftime('%Y-%m-%d %H:%M:%S') }}; Last outcome: pending
-                {% elif compaction_status.finished_at and compaction_status.error %}
-                Status: ready; Last outcome: failed at {{ compaction_status.finished_at.strftime('%Y-%m-%d %H:%M:%S') }}
-                {% elif compaction_status.finished_at %}
-                Status: ready; Last outcome: completed at {{ compaction_status.finished_at.strftime('%Y-%m-%d %H:%M:%S') }}
-                {% else %}
-                Status: ready; Last outcome: not run in this session
-                {% endif %}
-            </span>
-            <span class="badge {% if compaction_status.running %}bg-warning text-dark{% else %}bg-danger{% endif %}">
-                {{ 'In progress' if compaction_status.running else 'Danger zone' }}
-            </span>
-        </summary>
-
-        <div class="workflow-disclosure-body">
-            <div class="alert alert-warning" role="note">
-                <strong>Stop the relay before compacting.</strong> Compaction acts directly on database storage and should not run while the relay is serving traffic.
-            </div>
-
-        {% if compaction_status.running %}
-        <div class="d-flex align-items-center gap-2 mb-3" role="status" aria-live="polite">
-            <span class="spinner-border spinner-border-sm text-warning" aria-hidden="true"></span>
-            <span>Compaction in progress since <strong>{{ compaction_status.started_at.strftime('%Y-%m-%d %H:%M:%S') }}</strong>.</span>
+    <section class="dashboard-panel operations-danger-zone" aria-labelledby="compactionTitle">
+        <div class="dashboard-section-label text-danger" id="compactionTitle">Database compaction</div>
+        <div class="alert alert-warning mt-3 mb-0" role="note">
+            <strong>Web compaction is disabled.</strong> Stop the strfry service, verify every relay process has exited, run <code>strfry compact</code> offline, then restart and health-check the relay.
         </div>
-        {% elif compaction_status.finished_at %}
-            {% if compaction_status.error %}
-        <div class="alert alert-danger" role="alert"><strong>Compaction failed.</strong> {{ compaction_status.error }}</div>
-            {% else %}
-        <div class="alert alert-success" role="status"><strong>Compaction completed.</strong> Finished at {{ compaction_status.finished_at.strftime('%Y-%m-%d %H:%M:%S') }}.</div>
-            {% endif %}
-        {% endif %}
-
-            <form method="POST" class="operations-action-bar">
-                <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-                <label class="form-check small text-danger">
-                    <input class="form-check-input" type="checkbox" name="confirm_compact" value="yes" required{% if compaction_status.running %} disabled{% endif %}>
-                    I confirm all strfry relay processes are stopped.
-                </label>
-                <button type="submit" name="compact" class="btn btn-danger"{% if compaction_status.running %} disabled{% else %} onclick="return confirm('Confirm the relay is stopped and start database compaction?')"{% endif %}>
-                    <i class="bi bi-hdd{% if compaction_status.running %}-stack{% endif %}" aria-hidden="true"></i>
-                    {{ 'Compacting database...' if compaction_status.running else 'Compact database' }}
-                </button>
-            </form>
-        </div>
-    </details>
+    </section>
 </div>
 {% endblock %}

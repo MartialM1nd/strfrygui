@@ -88,7 +88,8 @@ def admin_app(tmp_path_factory):
 
 @pytest.fixture(autouse=True)
 def clean_admin_data(admin_app):
-    _module, flask_app, user_ids = admin_app
+    app_module, flask_app, user_ids = admin_app
+    app_module.pubkey_metadata_cache.clear()
     with flask_app.app_context():
         AuditLog.query.delete()
         PubkeyBanSource.query.delete()
@@ -555,6 +556,69 @@ def test_external_metadata_lookup_uses_safe_latest_kind0(admin_app, monkeypatch)
 
     assert metadata == {'name': 'Latest profile'}
     assert calls == [('a' * 64, ['wss://relay.example/'], 5)]
+
+
+def test_metadata_endpoint_rejects_invalid_pubkey_before_lookup(admin_app, monkeypatch):
+    app_module, flask_app, users = admin_app
+    monkeypatch.setattr(
+        app_module,
+        'scan_events',
+        lambda *args, **kwargs: pytest.fail('invalid pubkey must not be scanned'),
+    )
+    monkeypatch.setattr(
+        app_module,
+        'fetch_from_external_relays',
+        lambda *args, **kwargs: pytest.fail('invalid pubkey must not reach relays'),
+    )
+
+    response = _client_for(flask_app, users['viewer']).get('/api/pubkey-metadata/ABC')
+
+    assert response.status_code == 400
+
+
+def test_metadata_lookup_caps_relays_and_content_size(admin_app, monkeypatch):
+    app_module, _flask_app, _users = admin_app
+    calls = []
+    monkeypatch.setattr(Config, 'METADATA_LOOKUP_MAX_RELAYS', 2)
+    monkeypatch.setattr(Config, 'METADATA_MAX_CONTENT_BYTES', 8)
+    monkeypatch.setattr(
+        app_module,
+        'safe_lookup_kind0',
+        lambda pubkey, relays, timeout: (
+            calls.append((relays, timeout))
+            or {'content': json.dumps({'name': 'too-large'})}
+        ),
+    )
+
+    metadata = app_module.fetch_from_external_relays(
+        'a' * 64,
+        ['wss://one.example', 'wss://two.example', 'wss://three.example'],
+    )
+
+    assert metadata is None
+    assert calls == [(['wss://one.example/', 'wss://two.example/'], 5)]
+
+
+def test_negative_metadata_results_use_cache(admin_app, monkeypatch):
+    app_module, flask_app, _users = admin_app
+    calls = []
+    monkeypatch.setattr(
+        app_module,
+        'scan_events',
+        lambda *args, **kwargs: calls.append('local') or [],
+    )
+    monkeypatch.setattr(
+        app_module,
+        'fetch_from_external_relays',
+        lambda pubkey: calls.append('external') or None,
+    )
+
+    with flask_app.app_context():
+        first = app_module.get_pubkey_metadata('a' * 64)
+        second = app_module.get_pubkey_metadata('a' * 64)
+
+    assert first == second == {}
+    assert calls == ['local', 'external']
 
 
 def test_ban_removals_require_exact_targets_and_preserve_service_calls(admin_app, monkeypatch):

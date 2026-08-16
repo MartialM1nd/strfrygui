@@ -1,6 +1,13 @@
-import requests
+import ipaddress
+import queue
+import socket
+import threading
 import time
 from collections import deque
+from urllib.parse import urlsplit
+
+import urllib3
+
 from config import Config
 from utils.strfry import get_strfry_uptime
 
@@ -20,19 +27,129 @@ previous_relay = {}
 previous_events = {}
 
 history_initialized = False
+_dns_slots = threading.BoundedSemaphore(4)
 
 
 def fetch_metrics():
+    """Fetch metrics from a pinned loopback address with a bounded response."""
     try:
-        response = requests.get(
-            Config.STRFRY_METRICS_URL,
-            timeout=5,
-            headers={"Accept": "text/plain"}
-        )
-        response.raise_for_status()
-        return response.text
-    except requests.RequestException as e:
-        raise MetricsError(f"Failed to fetch metrics: {e}")
+        parsed = urlsplit(Config.STRFRY_METRICS_URL)
+        port = parsed.port
+    except ValueError as exc:
+        raise MetricsError('Metrics URL is invalid') from exc
+    if (
+        parsed.scheme not in {'http', 'https'}
+        or not parsed.hostname
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.fragment
+    ):
+        raise MetricsError('Metrics URL is invalid')
+    hostname = parsed.hostname
+    port = port or (443 if parsed.scheme == 'https' else 80)
+    authority_host = f'[{hostname}]' if ':' in hostname else hostname
+    default_port = 443 if parsed.scheme == 'https' else 80
+    authority = authority_host if port == default_port else f'{authority_host}:{port}'
+    deadline = time.monotonic() + Config.STRFRY_METRICS_TIMEOUT
+    addresses = _resolve_loopback_addresses(hostname, port, deadline)
+    path = parsed.path or '/'
+    if parsed.query:
+        path += '?' + parsed.query
+
+    for address in addresses:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        response = None
+        try:
+            timeout = urllib3.Timeout(total=remaining, connect=remaining, read=remaining)
+            if parsed.scheme == 'https':
+                pool = urllib3.HTTPSConnectionPool(
+                    address,
+                    port=port,
+                    assert_hostname=hostname,
+                    server_hostname=hostname,
+                    cert_reqs='CERT_REQUIRED',
+                    timeout=timeout,
+                    retries=False,
+                )
+            else:
+                pool = urllib3.HTTPConnectionPool(
+                    address,
+                    port=port,
+                    timeout=timeout,
+                    retries=False,
+                )
+            response = pool.request(
+                'GET',
+                path,
+                headers={
+                    'Host': authority,
+                    'Accept': 'text/plain',
+                    'Accept-Encoding': 'identity',
+                    'User-Agent': 'StrfryGUI/1.0',
+                },
+                redirect=False,
+                preload_content=False,
+            )
+            if response.status != 200:
+                raise MetricsError(f'Metrics endpoint returned HTTP {response.status}')
+            encoding = response.headers.get('Content-Encoding', 'identity').lower()
+            if encoding not in {'', 'identity'}:
+                raise MetricsError('Metrics endpoint returned unsupported encoding')
+            content_length = response.headers.get('Content-Length')
+            if (
+                content_length is not None
+                and int(content_length) > Config.STRFRY_METRICS_MAX_RESPONSE_BYTES
+            ):
+                raise MetricsError('Metrics response is too large')
+            body = response.read(Config.STRFRY_METRICS_MAX_RESPONSE_BYTES + 1)
+            if len(body) > Config.STRFRY_METRICS_MAX_RESPONSE_BYTES:
+                raise MetricsError('Metrics response is too large')
+            return body.decode('utf-8')
+        except MetricsError:
+            raise
+        except (OSError, ValueError, UnicodeError, urllib3.exceptions.HTTPError):
+            continue
+        finally:
+            if response is not None:
+                response.release_conn()
+    raise MetricsError('Failed to fetch metrics')
+
+
+def _resolve_loopback_addresses(hostname, port, deadline):
+    remaining = deadline - time.monotonic()
+    if remaining <= 0 or not _dns_slots.acquire(timeout=remaining):
+        raise MetricsError('Metrics hostname resolution timed out')
+    results = queue.Queue(maxsize=1)
+
+    def resolve():
+        try:
+            results.put((True, socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)))
+        except OSError as exc:
+            results.put((False, exc))
+        finally:
+            _dns_slots.release()
+
+    threading.Thread(target=resolve, daemon=True, name='metrics-dns').start()
+    try:
+        succeeded, resolved = results.get(timeout=max(0.1, deadline - time.monotonic()))
+    except queue.Empty as exc:
+        raise MetricsError('Metrics hostname resolution timed out') from exc
+    if not succeeded:
+        raise MetricsError('Metrics hostname could not be resolved') from resolved
+    addresses = []
+    for result in resolved:
+        address = result[4][0]
+        if not ipaddress.ip_address(address).is_loopback:
+            raise MetricsError('Metrics endpoint must resolve only to loopback addresses')
+        if address not in addresses:
+            addresses.append(address)
+        if len(addresses) > Config.STRFRY_METRICS_MAX_ADDRESSES:
+            raise MetricsError('Metrics hostname resolves to too many addresses')
+    if not addresses:
+        raise MetricsError('Metrics hostname could not be resolved')
+    return addresses
 
 
 def parse_metrics(raw_metrics):

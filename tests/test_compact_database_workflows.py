@@ -18,12 +18,10 @@ def test_database_disclosures_keep_inventory_visible_and_secondary_output_compac
     assert 'dict_output is not none' in DATABASE
 
 
-def test_compaction_summary_preserves_status_and_both_confirmations():
-    assert 'class="dashboard-panel operations-danger-zone compaction-disclosure" data-responsive-disclosure' in DATABASE
-    assert 'Relay must be stopped' in DATABASE
-    assert 'Last outcome:' in DATABASE
-    assert 'name="confirm_compact" value="yes" required' in DATABASE
-    assert "confirm('Confirm the relay is stopped and start database compaction?')" in DATABASE
+def test_compaction_is_offline_only():
+    assert 'Web compaction is disabled' in DATABASE
+    assert 'name="compact"' not in DATABASE
+    assert 'strfry compact' in DATABASE
 
 
 def test_import_export_opens_the_relevant_workflow_and_keeps_reference_disclosed():

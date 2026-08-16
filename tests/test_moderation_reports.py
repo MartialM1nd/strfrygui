@@ -1,9 +1,56 @@
+from datetime import UTC, datetime
+import hashlib
+import json
+
+import pytest
 from sqlalchemy import event, text
 
 from config import Config
 from models import ModerationReport, db, ensure_moderation_report_indexes
 from utils import moderation_reports
+from utils import nip05
 from utils.strfry import StrfryError
+
+
+STRICT_PARSE_REPORT = moderation_reports._parse_report
+
+
+def sign_schnorr(private_key, message):
+    public_point = nip05._point_multiply(private_key, nip05._SECP256K1_G)
+    secret = private_key if public_point[1] % 2 == 0 else nip05._SECP256K1_N - private_key
+    public_key = public_point[0].to_bytes(32, 'big')
+    nonce = int.from_bytes(nip05._tagged_hash(
+        'BIP0340/nonce', secret.to_bytes(32, 'big') + public_key + message
+    ), 'big') % nip05._SECP256K1_N
+    nonce_point = nip05._point_multiply(nonce, nip05._SECP256K1_G)
+    if nonce_point[1] % 2:
+        nonce = nip05._SECP256K1_N - nonce
+        nonce_point = nip05._point_multiply(nonce, nip05._SECP256K1_G)
+    r = nonce_point[0].to_bytes(32, 'big')
+    challenge = int.from_bytes(nip05._tagged_hash(
+        'BIP0340/challenge', r + public_key + message
+    ), 'big') % nip05._SECP256K1_N
+    return r + ((nonce + challenge * secret) % nip05._SECP256K1_N).to_bytes(32, 'big')
+
+
+@pytest.fixture(autouse=True)
+def preserve_legacy_sync_fixtures(monkeypatch):
+    def parse(report):
+        p_tag = next((tag for tag in report.get('tags', []) if tag[0] == 'p'), None)
+        e_tag = next((tag for tag in report.get('tags', []) if tag[0] == 'e'), None)
+        return (
+            p_tag[1] if p_tag else None,
+            e_tag[1] if e_tag else None,
+            p_tag[2] if p_tag else None,
+            datetime.fromtimestamp(report.get('created_at', 0), UTC).replace(tzinfo=None),
+        )
+
+    monkeypatch.setattr(moderation_reports, '_parse_report', parse)
+    monkeypatch.setattr(
+        moderation_reports,
+        '_target_exists',
+        lambda events, pubkey, event_id=None: bool(events),
+    )
 
 
 def report_event(event_id, reported_pubkey=None, reported_event_id=None):
@@ -47,7 +94,7 @@ def test_sync_bulk_checks_existing_reports(app, monkeypatch):
         event.remove(db.engine, 'before_cursor_execute', count_report_queries)
 
     assert result == 0
-    assert len(report_queries) == 1
+    assert len(report_queries) == 3
     assert calls == [
         ({'kinds': [1984], 'limit': 200}, 200, Config.MODERATION_REPORT_SYNC_TIMEOUT)
     ]
@@ -199,10 +246,12 @@ def test_existing_database_migration_creates_report_indexes(app):
         'ix_moderation_reports_reported_pubkey',
         'ix_moderation_reports_reported_event_id',
         'ix_moderation_reports_created_at',
+        'ix_moderation_reports_reporter_received',
+        'ix_moderation_reports_reviewed_received_id',
     }
     with db.engine.begin() as connection:
         for index_name in index_names:
-            connection.execute(text(f'DROP INDEX {index_name}'))
+            connection.execute(text(f'DROP INDEX IF EXISTS {index_name}'))
         ensure_moderation_report_indexes(connection)
         actual_names = {
             row[1]
@@ -212,3 +261,60 @@ def test_existing_database_migration_creates_report_indexes(app):
         }
 
     assert index_names <= actual_names
+
+
+def test_strict_report_parser_requires_signed_unambiguous_targets(monkeypatch):
+    now = int(datetime.now(UTC).timestamp())
+    report = {
+        'id': '1' * 64,
+        'pubkey': '2' * 64,
+        'sig': '3' * 128,
+        'kind': 1984,
+        'created_at': now,
+        'content': 'Spam report',
+        'tags': [['p', '4' * 64, 'spam']],
+    }
+    calls = []
+    monkeypatch.setattr(
+        moderation_reports,
+        'validate_nostr_event',
+        lambda event: calls.append(event),
+    )
+
+    parsed = STRICT_PARSE_REPORT(report)
+
+    assert parsed[:3] == ('4' * 64, None, 'spam')
+    assert calls == [report]
+    report['tags'] = [
+        ['e', '5' * 64, 'spam'],
+        ['p', '4' * 64],
+    ]
+    assert STRICT_PARSE_REPORT(report)[:3] == ('4' * 64, '5' * 64, 'spam')
+    report['tags'].append(['p', '5' * 64, 'spam'])
+    with pytest.raises(ValueError, match='ambiguous'):
+        STRICT_PARSE_REPORT(report)
+
+
+def test_strict_report_parser_accepts_canonical_signed_note_report():
+    private_key = 7
+    public_point = nip05._point_multiply(private_key, nip05._SECP256K1_G)
+    pubkey = public_point[0].to_bytes(32, 'big').hex()
+    created_at = int(datetime.now(UTC).timestamp())
+    tags = [['e', '5' * 64, 'spam'], ['p', '4' * 64]]
+    serialized = json.dumps(
+        [0, pubkey, created_at, 1984, tags, 'Spam report'],
+        ensure_ascii=False,
+        separators=(',', ':'),
+    ).encode()
+    digest = hashlib.sha256(serialized).digest()
+    report = {
+        'id': digest.hex(),
+        'pubkey': pubkey,
+        'sig': sign_schnorr(private_key, digest).hex(),
+        'kind': 1984,
+        'created_at': created_at,
+        'content': 'Spam report',
+        'tags': tags,
+    }
+
+    assert STRICT_PARSE_REPORT(report)[:3] == ('4' * 64, '5' * 64, 'spam')

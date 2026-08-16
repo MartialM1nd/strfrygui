@@ -203,7 +203,7 @@
 {% endblock %}
 
 {% block scripts %}
-<script>
+<script nonce="{{ g.csp_nonce }}">
 const searchType = document.getElementById('searchType');
 const searchFields = document.querySelectorAll('[data-search-field]');
 

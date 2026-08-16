@@ -7,21 +7,29 @@ import json
 import math
 import os
 import queue
+import stat
 import sys
 import threading
 import time
 from collections import Counter, OrderedDict
 from dataclasses import dataclass, field
 
+try:
+    from utils.runtime_files import atomic_write, read_bounded
+except ModuleNotFoundError:
+    from runtime_files import atomic_write, read_bounded
+
 
 BASE_DIR = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 RUNTIME_DIR = os.path.join(BASE_DIR, "runtime")
+POLICY_DIR = os.getenv("STRFRYGUI_POLICY_DIR", RUNTIME_DIR)
+PLUGIN_STATE_DIR = os.getenv("STRFRYGUI_PLUGIN_STATE_DIR", RUNTIME_DIR)
 LEGACY_BLOCKLIST_FILE = os.path.join(BASE_DIR, "blocklist.json")
 LEGACY_TRUST_POLICY_FILE = os.path.join(BASE_DIR, "trust_policy.json")
-BLOCKLIST_FILE = os.path.join(RUNTIME_DIR, "blocklist.json")
-TRUST_POLICY_FILE = os.path.join(RUNTIME_DIR, "trust_policy.json")
-TRUST_POLICY_STATS_FILE = os.path.join(RUNTIME_DIR, "trust_policy_stats.json")
-DECISION_LOG_FILE = os.path.join(RUNTIME_DIR, "write_policy_events.jsonl")
+BLOCKLIST_FILE = os.path.join(POLICY_DIR, "blocklist.json")
+TRUST_POLICY_FILE = os.path.join(POLICY_DIR, "trust_policy.json")
+TRUST_POLICY_STATS_FILE = os.path.join(PLUGIN_STATE_DIR, "trust_policy_stats.json")
+DECISION_LOG_FILE = os.path.join(PLUGIN_STATE_DIR, "write_policy_events.jsonl")
 DECISION_LOG_MAX_BYTES = 5 * 1024 * 1024
 DECISION_LOG_MAX_RECORD_BYTES = 4096
 DECISION_LOG_QUEUE_SIZE = 4096
@@ -30,7 +38,8 @@ NON_NETWORK_SOURCE_TYPES = frozenset({"import", "stream", "sync", "stored"})
 
 def _file_mtime(path):
     try:
-        return os.stat(path).st_mtime_ns
+        file_stat = os.lstat(path)
+        return file_stat.st_mtime_ns if stat.S_ISREG(file_stat.st_mode) else None
     except OSError:
         return None
 
@@ -38,8 +47,7 @@ def _file_mtime(path):
 def load_blocklist(path=BLOCKLIST_FILE):
     """Load the legacy JSON pubkey list, returning an empty set on failure."""
     try:
-        with open(path, encoding="utf-8") as blocklist_file:
-            data = json.load(blocklist_file)
+        data = json.loads(read_bounded(path, 5 * 1024 * 1024))
     except (json.JSONDecodeError, OSError):
         return set()
     if not isinstance(data, list):
@@ -52,8 +60,7 @@ def load_blocklist(path=BLOCKLIST_FILE):
 
 def _load_valid_blocklist(path):
     try:
-        with open(path, encoding="utf-8") as blocklist_file:
-            data = json.load(blocklist_file)
+        data = json.loads(read_bounded(path, 5 * 1024 * 1024))
     except (json.JSONDecodeError, OSError):
         return None
     if not isinstance(data, list) or not all(isinstance(value, str) for value in data):
@@ -205,8 +212,9 @@ class PolicyReloader:
     @staticmethod
     def _load(path):
         try:
-            with open(path, encoding="utf-8") as policy_file:
-                return TrustPolicy.from_dict(json.load(policy_file))
+            return TrustPolicy.from_dict(
+                json.loads(read_bounded(path, 5 * 1024 * 1024))
+            )
         except (json.JSONDecodeError, OSError, ValueError, TypeError):
             return None
 
@@ -412,10 +420,17 @@ class DecisionLog:
     @staticmethod
     def _open(path, flags):
         try:
-            descriptor = os.open(path, flags | os.O_CREAT | os.O_EXCL, 0o640)
+            descriptor = os.open(
+                path,
+                flags | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                0o640,
+            )
         except FileExistsError:
-            descriptor = os.open(path, flags)
+            descriptor = os.open(path, flags | getattr(os, "O_NOFOLLOW", 0))
         try:
+            file_stat = os.fstat(descriptor)
+            if not stat.S_ISREG(file_stat.st_mode) or file_stat.st_nlink != 1:
+                raise OSError("decision log path is unsafe")
             os.fchmod(descriptor, 0o640)
         except OSError:
             os.close(descriptor)
@@ -540,25 +555,18 @@ class WritePolicyRuntime:
         now = time.time() if now is None else now
         if not force and now - self._stats_flushed_at < 10:
             return
-        temporary_path = self.stats_path + ".tmp"
         try:
-            with open(temporary_path, "w", encoding="utf-8") as stats_file:
-                json.dump(
+            atomic_write(
+                self.stats_path,
+                json.dumps(
                     {"updated_at": int(now), "counters": dict(self.counters)},
-                    stats_file,
                     separators=(",", ":"),
                     sort_keys=True,
-                )
-                stats_file.flush()
-                os.fsync(stats_file.fileno())
-            os.chmod(temporary_path, 0o640)
-            os.replace(temporary_path, self.stats_path)
+                ).encode("utf-8"),
+            )
             self._stats_flushed_at = now
         except OSError:
-            try:
-                os.unlink(temporary_path)
-            except OSError:
-                pass
+            pass
 
     def process(self, request, now=None, monotonic_now=None):
         """Return a strfry response, or None for ignorable messages."""

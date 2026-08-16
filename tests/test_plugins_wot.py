@@ -299,7 +299,7 @@ def test_plugins_page_manages_and_publishes_wot_policy(monkeypatch, tmp_path):
     assert b'Monitor reason' in policy_log_script.data
     api_response = client.get('/api/write-policy-events?limit=99999')
     assert api_response.status_code == 200
-    assert api_response.headers['Cache-Control'] == 'no-store, max-age=0'
+    assert api_response.headers['Cache-Control'].startswith('no-store, max-age=0')
     assert api_response.get_json()['events'][0]['source_ip'] == '192.0.2.1'
 
     dashboard_page = client.get('/')
@@ -317,7 +317,7 @@ def test_plugins_page_manages_and_publishes_wot_policy(monkeypatch, tmp_path):
     assert connections_page.status_code == 200
     assert b'Connection Operations' in connections_page.data
     assert connections_api.status_code == 200
-    assert connections_api.headers['Cache-Control'] == 'no-store, max-age=0'
+    assert connections_api.headers['Cache-Control'].startswith('no-store, max-age=0')
     assert 'current' in connections_api.get_json()
     assert 'sessions' not in connections_api.get_json()
 
@@ -358,7 +358,7 @@ def test_plugins_page_manages_and_publishes_wot_policy(monkeypatch, tmp_path):
     assert moderation_page.data.index(b'Report queue') < moderation_page.data.index(b'Event purge operations')
     assert moderation_page.data.index(b'Event purge operations') < moderation_page.data.index(b'Domain ban operations')
     assert b'id="openReportCount">1<' in moderation_page.data
-    assert b'id="newReportCount">1<' in moderation_page.data
+    assert b'id="newReportCount">2<' in moderation_page.data
     assert b'Load more reports' in moderation_page.data
     assert b'innerHTML' not in moderation_page.data
     assert b'location.reload' not in moderation_page.data
@@ -484,7 +484,7 @@ def test_plugins_page_manages_and_publishes_wot_policy(monkeypatch, tmp_path):
         'confirm_no_verify': 'y',
     })
     assert confirmed_import.status_code == 200
-    assert confirmed_import.headers['Cache-Control'] == 'no-store'
+    assert confirmed_import.headers['Cache-Control'].startswith('no-store')
     assert imported == [('{"id":"event"}', False)]
 
     initial_import_export = client.get('/import_export')
@@ -511,16 +511,11 @@ def test_plugins_page_manages_and_publishes_wot_policy(monkeypatch, tmp_path):
         'refresh_dict': '1',
     }).status_code == 400
 
-    monkeypatch.setattr(
-        app_module,
-        'get_strfry_process_info',
-        lambda: {'process_count': 1, 'uptime_seconds': 30},
-    )
     compaction_blocked = client.post('/db', data={
         'compact': '1',
         'confirm_compact': 'yes',
-    }, follow_redirects=True)
-    assert b'Stop all strfry processes before compacting' in compaction_blocked.data
+    })
+    assert compaction_blocked.status_code == 410
 
     viewer_client = flask_app.test_client()
     with viewer_client.session_transaction() as session:

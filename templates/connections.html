@@ -116,7 +116,7 @@
 {% endblock %}
 
 {% block scripts %}
-<script>
+<script nonce="{{ g.csp_nonce }}">
 const initialConnections = {{ connections|tojson }};
 let connectionDetailChart;
 

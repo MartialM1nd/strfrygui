@@ -144,7 +144,7 @@
 {% endblock %}
 
 {% block scripts %}
-<script>
+<script nonce="{{ g.csp_nonce }}">
     const verificationSelect = document.getElementById('no_verify');
     const verificationControls = document.getElementById('verificationControls');
 

@@ -106,13 +106,41 @@ class Config:
     STRFRY_BINARY = os.getenv('STRFRY_BINARY', '/usr/local/bin/strfry')
     STRFRY_CONFIG = os.getenv('STRFRY_CONFIG', '/etc/strfry.conf')
     STRFRY_DB_PATH = os.getenv('STRFRY_DB_PATH', '/var/lib/strfry')
+    STRFRY_COMMAND_MAX_STDOUT_BYTES = max(
+        1024, int(os.getenv('STRFRY_COMMAND_MAX_STDOUT_BYTES', str(5 * 1024 * 1024)))
+    )
+    STRFRY_COMMAND_MAX_STDERR_BYTES = max(
+        1024, int(os.getenv('STRFRY_COMMAND_MAX_STDERR_BYTES', '65536'))
+    )
+    STRFRY_SCAN_MAX_BYTES = max(
+        1024, int(os.getenv('STRFRY_SCAN_MAX_BYTES', str(5 * 1024 * 1024)))
+    )
+    STRFRY_SCAN_MAX_LINE_BYTES = max(
+        1024, int(os.getenv('STRFRY_SCAN_MAX_LINE_BYTES', '262144'))
+    )
+    STRFRY_TERMINATE_GRACE_SECONDS = max(
+        0.1, min(5.0, float(os.getenv('STRFRY_TERMINATE_GRACE_SECONDS', '1')))
+    )
     STRFRY_METRICS_URL = os.getenv('STRFRY_METRICS_URL', 'http://localhost:7777/metrics')
+    STRFRY_METRICS_TIMEOUT = max(
+        0.1, min(30.0, float(os.getenv('STRFRY_METRICS_TIMEOUT', '5')))
+    )
+    STRFRY_METRICS_MAX_RESPONSE_BYTES = max(
+        1024,
+        min(1048576, int(os.getenv('STRFRY_METRICS_MAX_RESPONSE_BYTES', '262144'))),
+    )
+    STRFRY_METRICS_MAX_ADDRESSES = max(
+        1, min(16, int(os.getenv('STRFRY_METRICS_MAX_ADDRESSES', '4')))
+    )
     RUNTIME_DIR = os.path.join(APP_DIR, 'runtime')
+    POLICY_DIR = os.getenv('STRFRYGUI_POLICY_DIR', RUNTIME_DIR)
+    PLUGIN_STATE_DIR = os.getenv('STRFRYGUI_PLUGIN_STATE_DIR', RUNTIME_DIR)
+    LOCK_DIR = os.getenv('STRFRYGUI_LOCK_DIR', RUNTIME_DIR)
     LEGACY_TRUST_POLICY_FILE = os.path.join(APP_DIR, 'trust_policy.json')
-    BANNED_PUBKEYS_FILE = os.path.join(RUNTIME_DIR, 'blocklist.json')
-    TRUST_POLICY_FILE = os.path.join(RUNTIME_DIR, 'trust_policy.json')
-    TRUST_POLICY_STATS_FILE = os.path.join(RUNTIME_DIR, 'trust_policy_stats.json')
-    WRITE_POLICY_EVENT_LOG = os.path.join(RUNTIME_DIR, 'write_policy_events.jsonl')
+    BANNED_PUBKEYS_FILE = os.path.join(POLICY_DIR, 'blocklist.json')
+    TRUST_POLICY_FILE = os.path.join(POLICY_DIR, 'trust_policy.json')
+    TRUST_POLICY_STATS_FILE = os.path.join(PLUGIN_STATE_DIR, 'trust_policy_stats.json')
+    WRITE_POLICY_EVENT_LOG = os.path.join(PLUGIN_STATE_DIR, 'write_policy_events.jsonl')
     BLOCKLIST_PLUGIN_PATH = os.path.join(APP_DIR, 'utils', 'blocklist_plugin.py')
     DASHBOARD_SAMPLE_INTERVAL = max(60, int(os.getenv('DASHBOARD_SAMPLE_INTERVAL', '60')))
     MODERATION_PURGE_TIMEOUT = int(os.getenv('MODERATION_PURGE_TIMEOUT', '30'))
@@ -128,6 +156,15 @@ class Config:
     MODERATION_REPORT_REJECTION_TTL = max(0, int(os.getenv('MODERATION_REPORT_REJECTION_TTL', '3600')))
     MODERATION_REPORT_REJECTION_CACHE_SIZE = max(1, int(os.getenv('MODERATION_REPORT_REJECTION_CACHE_SIZE', '2000')))
     MODERATION_REPORT_PENDING_LIMIT = max(200, int(os.getenv('MODERATION_REPORT_PENDING_LIMIT', '1000')))
+    MODERATION_REPORT_MAX_EVENT_BYTES = max(1024, int(os.getenv('MODERATION_REPORT_MAX_EVENT_BYTES', '65536')))
+    MODERATION_REPORT_MAX_CONTENT_BYTES = max(256, int(os.getenv('MODERATION_REPORT_MAX_CONTENT_BYTES', '4096')))
+    MODERATION_REPORT_MAX_TAGS = max(1, int(os.getenv('MODERATION_REPORT_MAX_TAGS', '64')))
+    MODERATION_REPORT_ACCEPT_LIMIT = max(1, int(os.getenv('MODERATION_REPORT_ACCEPT_LIMIT', '50')))
+    MODERATION_REPORT_REPORTER_LIMIT = max(1, int(os.getenv('MODERATION_REPORT_REPORTER_LIMIT', '20')))
+    MODERATION_REPORT_MAX_STORED = max(100, int(os.getenv('MODERATION_REPORT_MAX_STORED', '50000')))
+    MODERATION_REPORT_MAX_AGE_DAYS = max(1, int(os.getenv('MODERATION_REPORT_MAX_AGE_DAYS', '30')))
+    MODERATION_REPORT_REVIEWED_RETENTION_DAYS = max(1, int(os.getenv('MODERATION_REPORT_REVIEWED_RETENTION_DAYS', '90')))
+    MODERATION_REPORT_RETENTION_BATCH_SIZE = max(1, int(os.getenv('MODERATION_REPORT_RETENTION_BATCH_SIZE', '500')))
     DOMAIN_SCAN_TIMEOUT = int(os.getenv('DOMAIN_SCAN_TIMEOUT', '30'))
     DOMAIN_SCAN_CANDIDATE_LIMIT = int(os.getenv('DOMAIN_SCAN_CANDIDATE_LIMIT', '50'))
     DOMAIN_SCAN_ALIASES_PER_PUBKEY = max(
@@ -145,10 +182,27 @@ class Config:
     IMPORT_MAX_BYTES = max(1, int(os.getenv('IMPORT_MAX_BYTES', str(5 * 1024 * 1024))))
     IMPORT_MAX_EVENTS = max(1, int(os.getenv('IMPORT_MAX_EVENTS', '10000')))
     EXPORT_MAX_BYTES = max(1, int(os.getenv('EXPORT_MAX_BYTES', str(5 * 1024 * 1024))))
-    DATABASE_MAINTENANCE_LOCK = os.path.join(RUNTIME_DIR, 'database-maintenance.lock')
+    REQUEST_MAX_BYTES = max(1024, int(os.getenv('REQUEST_MAX_BYTES', str(1024 * 1024))))
+    IMPORT_REQUEST_MAX_BYTES = max(
+        REQUEST_MAX_BYTES,
+        int(os.getenv('IMPORT_REQUEST_MAX_BYTES', str(3 * IMPORT_MAX_BYTES + 65536))),
+    )
+    MAX_CONTENT_LENGTH = IMPORT_REQUEST_MAX_BYTES
+    MAX_FORM_MEMORY_SIZE = IMPORT_REQUEST_MAX_BYTES
+    MAX_FORM_PARTS = max(1, int(os.getenv('MAX_FORM_PARTS', '100')))
+    DATABASE_MAINTENANCE_LOCK = os.path.join(LOCK_DIR, 'database-maintenance.lock')
     
     EXTERNAL_RELAYS = os.getenv('EXTERNAL_RELAYS', 'wss://relay.damus.io\nwss://nos.lol').split('\n')
     EXTERNAL_RELAYS = [r.strip() for r in EXTERNAL_RELAYS if r.strip()]
+    METADATA_LOOKUP_MAX_RELAYS = max(1, min(8, int(os.getenv('METADATA_LOOKUP_MAX_RELAYS', '3'))))
+    METADATA_LOOKUP_TIMEOUT = max(1, min(30, int(os.getenv('METADATA_LOOKUP_TIMEOUT', '5'))))
+    METADATA_LOOKUP_CONCURRENCY = max(1, int(os.getenv('METADATA_LOOKUP_CONCURRENCY', '4')))
+    METADATA_MAX_CONTENT_BYTES = max(1024, int(os.getenv('METADATA_MAX_CONTENT_BYTES', '16384')))
+    METADATA_CACHE_MAX_ENTRIES = max(1, int(os.getenv('METADATA_CACHE_MAX_ENTRIES', '1000')))
+    METADATA_CACHE_TTL_SECONDS = max(1, int(os.getenv('METADATA_CACHE_TTL_SECONDS', '3600')))
+    METADATA_NEGATIVE_CACHE_TTL_SECONDS = max(
+        1, int(os.getenv('METADATA_NEGATIVE_CACHE_TTL_SECONDS', '60'))
+    )
     
     SQLALCHEMY_DATABASE_URI = os.getenv('DATABASE_URL', 'sqlite:///strfrygui.db')
     SQLALCHEMY_TRACK_MODIFICATIONS = False
@@ -166,6 +220,7 @@ class Config:
     RATELIMIT_ENABLED = True
     RATELIMIT_DEFAULT = "100 per minute"
     RATELIMIT_LOGIN = "5 per minute"
+    RATELIMIT_METADATA = "30 per minute"
 
 
 class Security:

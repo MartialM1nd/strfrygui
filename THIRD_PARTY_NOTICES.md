@@ -1,5 +1,13 @@
 # Third-Party Notices
 
+Vendored browser assets are distributed under their upstream licenses:
+
+- Bootstrap 5.3.2, MIT License, SHA-256 `3017df4a76db5f01c2b99b603d88b03106df13bcfe18e67b7c13c2341d3a67df` (CSS) and `82f64f62bb03c1bc1824b0f9c9e05f70dba33e146818e63cdf5c306c8cf3dedd` (JavaScript).
+- Bootstrap Icons 1.11.1, MIT License, SHA-256 `bb6fd8cd85394cb367e8ac58e47292f2d68eb288fa12fab68e65430a5ddfce48` (CSS), `bacd70afda7da1deac2bbd49b5717a4dd133bcd59c379525d705b8492f678e95` (WOFF2), and `4d4572ef314e1b734cdd6485f913b0396d81bedf4d216a47cfde0cdf32a9316e` (WOFF).
+- Chart.js 4.4.1, MIT License, SHA-256 `d2af8974e95271638772e9e9524db5b9a6f58d6ec2d5d781400447b4a31c681e`.
+
+Upstream sources: `https://getbootstrap.com/`, `https://icons.getbootstrap.com/`, and `https://www.chartjs.org/`. Complete upstream MIT notices are included beside each asset as `LICENSE` or `LICENSE.md`.
+
 The NIP-98 browser request construction and NIP-07 extension error-handling
 patterns in `static/nostr_auth.js` were adapted from the following projects:
 

@@ -2,6 +2,7 @@ import json
 import os
 from datetime import timedelta
 
+from sqlalchemy import func
 from sqlalchemy.exc import IntegrityError
 
 from config import Config, bundled_plugin_available
@@ -19,6 +20,7 @@ from models import (
 )
 from utils.metrics import MetricsError, get_metrics
 from utils.configuration import load_configuration
+from utils.runtime_files import read_bounded
 from utils.strfry import get_strfry_process_info
 
 
@@ -41,8 +43,7 @@ SAMPLE_RETENTION_DAYS = 30
 
 def _json_dict(path):
     try:
-        with open(path, encoding='utf-8') as input_file:
-            value = json.load(input_file)
+        value = json.loads(read_bounded(path, 1024 * 1024))
     except (OSError, json.JSONDecodeError):
         return {}
     return value if isinstance(value, dict) else {}
@@ -512,7 +513,9 @@ def dashboard_summary(now=None, role='viewer'):
     if role in ('admin', 'moderator'):
         summary['moderation'] = {
             'unreviewed_reports': ModerationReport.query.filter_by(reviewed=False).count(),
-            'new_reports_24h': ModerationReport.query.filter(ModerationReport.created_at >= cutoff).count(),
+            'new_reports_24h': ModerationReport.query.filter(
+                func.coalesce(ModerationReport.received_at, ModerationReport.created_at) >= cutoff
+            ).count(),
             'banned_pubkeys': BannedPubkey.query.count(),
             'banned_domains': BannedDomain.query.count(),
             'new_pubkey_bans_24h': BannedPubkey.query.filter(BannedPubkey.banned_at >= cutoff).count(),

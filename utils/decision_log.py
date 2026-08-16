@@ -34,7 +34,7 @@ def _log_files(path):
     files = []
     for candidate in (path + '.1', path):
         try:
-            file_stat = os.stat(candidate)
+            file_stat = os.lstat(candidate)
         except OSError:
             continue
         if not stat.S_ISREG(file_stat.st_mode):
@@ -47,6 +47,18 @@ def _log_files(path):
             modified_ms=int(file_stat.st_mtime * 1000),
         ))
     return files
+
+
+def _open_log(path):
+    descriptor = os.open(
+        path,
+        os.O_RDONLY | os.O_CLOEXEC | getattr(os, 'O_NOFOLLOW', 0),
+    )
+    file_stat = os.fstat(descriptor)
+    if not stat.S_ISREG(file_stat.st_mode):
+        os.close(descriptor)
+        raise OSError('Decision log path is not a regular file')
+    return os.fdopen(descriptor, 'rb')
 
 
 def _encode_cursor(log_file, offset):
@@ -117,7 +129,7 @@ def _read_latest(files, limit):
     actual_files = []
     for log_file in files:
         try:
-            with open(log_file.path, 'rb') as input_file:
+            with _open_log(log_file.path) as input_file:
                 file_stat = os.fstat(input_file.fileno())
                 start = max(0, file_stat.st_size - MAX_FILE_BYTES)
                 input_file.seek(start)
@@ -186,7 +198,7 @@ def _read_file(log_file, offset, limit, byte_budget):
     events = []
     consumed = 0
     try:
-        with open(log_file.path, 'rb') as input_file:
+        with _open_log(log_file.path) as input_file:
             file_stat = os.fstat(input_file.fileno())
             if (file_stat.st_dev, file_stat.st_ino) != (
                 log_file.device,

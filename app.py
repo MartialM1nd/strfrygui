@@ -1,13 +1,14 @@
 import csv
 import hmac
-import fcntl
 import ipaddress
 import json
 import os
 import queue
 import re
+import secrets
 import threading
 import time
+from collections import OrderedDict
 from contextlib import contextmanager
 from datetime import datetime, time as datetime_time, timedelta
 from urllib.parse import urlsplit
@@ -17,11 +18,12 @@ from flask_wtf import CSRFProtect, FlaskForm
 from wtforms import BooleanField, StringField, SelectField, TextAreaField, IntegerField, HiddenField
 from wtforms.validators import DataRequired, InputRequired, Length, NumberRange, Optional, Regexp, ValidationError
 from flask_limiter import Limiter
-from flask_limiter.util import get_remote_address
 from sqlalchemy import and_, func, or_
 from sqlalchemy.exc import IntegrityError, OperationalError, SQLAlchemyError
 from sqlalchemy.orm import joinedload
 from io import StringIO
+from werkzeug.exceptions import RequestEntityTooLarge
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from config import Config, bundled_plugin_available
 from models import (
@@ -31,10 +33,9 @@ from models import (
 )
 from utils.strfry import (
     scan_events, delete_events, export_events, import_events,
-    compact_database, negentropy_list, negentropy_add, negentropy_build,
+    negentropy_list, negentropy_add, negentropy_build,
     negentropy_delete, dict_list, StrfryError,
-    validate_filter_json, hex_to_npub, npub_to_hex, get_strfry_process_info,
-    acquire_database_maintenance_lock, release_database_maintenance_lock,
+    validate_filter_json, hex_to_npub, npub_to_hex,
 )
 from utils.metrics import get_summary, MetricsError
 from utils.auth import admin_required, moderator_required, viewer_or_higher, permission_required
@@ -75,14 +76,8 @@ from utils.relay import (
     normalize_relay_url,
     test_relay,
 )
+from utils.runtime_files import file_lock, read_bounded
 
-_compaction = {
-    'running': False,
-    'started_at': None,
-    'finished_at': None,
-    'error': None,
-    'thread': None,
-}
 _domain_scan_queue = queue.Queue(maxsize=1)
 _wot_build_queue = queue.Queue(maxsize=1)
 _purge_wakeup = queue.Queue(maxsize=1)
@@ -91,100 +86,85 @@ _operator_thread_lock = threading.Lock()
 _metadata_relay_thread_lock = threading.Lock()
 
 
-def _run_compaction(lock_file):
-    try:
-        compact_database(lock_file=lock_file)
-    except StrfryError as e:
-        _compaction['error'] = str(e)
-    finally:
-        release_database_maintenance_lock(lock_file)
-        _compaction['finished_at'] = datetime.now()
-        _compaction['running'] = False
-
-
 @contextmanager
 def _operator_mutation_lock():
     """Serialize active-admin invariant checks across web workers."""
-    os.makedirs(Config.RUNTIME_DIR, exist_ok=True)
-    lock_path = os.path.join(Config.RUNTIME_DIR, 'operator-mutations.lock')
-    with _operator_thread_lock, open(lock_path, 'w') as lock_file:
-        fcntl.flock(lock_file, fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(lock_file, fcntl.LOCK_UN)
+    lock_path = os.path.join(Config.LOCK_DIR, 'operator-mutations.lock')
+    with _operator_thread_lock, file_lock(lock_path):
+        yield
 
 
 @contextmanager
 def _metadata_relay_mutation_lock():
     """Serialize metadata-relay capacity checks and mutations across workers."""
-    os.makedirs(Config.RUNTIME_DIR, exist_ok=True)
-    lock_path = os.path.join(Config.RUNTIME_DIR, 'metadata-relay-mutations.lock')
-    with _metadata_relay_thread_lock, open(lock_path, 'w') as lock_file:
-        fcntl.flock(lock_file, fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(lock_file, fcntl.LOCK_UN)
+    lock_path = os.path.join(Config.LOCK_DIR, 'metadata-relay-mutations.lock')
+    with _metadata_relay_thread_lock, file_lock(lock_path):
+        yield
 
 
 class PubkeyMetadataCache:
-    def __init__(self, max_size=50000, ttl_days=7):
-        self.cache = {}
+    def __init__(self, max_size, ttl_seconds, negative_ttl_seconds):
+        self.cache = OrderedDict()
         self.max_size = max_size
-        self.ttl_seconds = ttl_days * 86400
-        self.access_order = []
-    
+        self.ttl_seconds = ttl_seconds
+        self.negative_ttl_seconds = negative_ttl_seconds
+        self.lock = threading.RLock()
+        self.generation = 0
+
     def get(self, pubkey):
-        if pubkey in self.cache:
-            metadata, timestamp = self.cache[pubkey]
-            import time
-            if time.time() - timestamp > self.ttl_seconds:
+        with self.lock:
+            entry = self.cache.get(pubkey)
+            if entry is None:
+                return False, None
+            metadata, expires_at = entry
+            if time.monotonic() >= expires_at:
                 del self.cache[pubkey]
-                self.access_order.remove(pubkey)
-                return None
-            if pubkey in self.access_order:
-                self.access_order.remove(pubkey)
-            self.access_order.append(pubkey)
-            return metadata
-        return None
-    
-    def set(self, pubkey, metadata):
-        import time
-        current_time = time.time()
-        
-        if len(self.cache) > 0 and len(self.cache) % 100 == 0:
-            self._cleanup_expired()
-        
-        if pubkey in self.cache:
-            if pubkey in self.access_order:
-                self.access_order.remove(pubkey)
-        else:
-            if len(self.cache) >= self.max_size:
-                oldest = self.access_order.pop(0)
-                del self.cache[oldest]
-        
-        self.cache[pubkey] = (metadata, current_time)
-        self.access_order.append(pubkey)
-    
-    def _cleanup_expired(self):
-        import time
-        now = time.time()
-        expired = [
-            k for k, v in self.cache.items() 
-            if now - v[1] > self.ttl_seconds
-        ]
-        for k in expired:
-            del self.cache[k]
-            if k in self.access_order:
-                self.access_order.remove(k)
+                return False, None
+            self.cache.move_to_end(pubkey)
+            return True, metadata
+
+    def set(self, pubkey, metadata, expected_generation=None):
+        ttl = self.ttl_seconds if metadata else self.negative_ttl_seconds
+        with self.lock:
+            if (
+                expected_generation is not None
+                and expected_generation != self.generation
+            ):
+                return False
+            self.cache[pubkey] = (metadata, time.monotonic() + ttl)
+            self.cache.move_to_end(pubkey)
+            while len(self.cache) > self.max_size:
+                self.cache.popitem(last=False)
+            return True
+
+    def current_generation(self):
+        with self.lock:
+            return self.generation
+
+    def clear(self):
+        with self.lock:
+            self.cache.clear()
+            self.generation += 1
 
 
-pubkey_metadata_cache = PubkeyMetadataCache()
+class MetadataLookupBusy(RuntimeError):
+    """Raised when bounded external metadata lookup capacity is exhausted."""
+
+
+pubkey_metadata_cache = PubkeyMetadataCache(
+    Config.METADATA_CACHE_MAX_ENTRIES,
+    Config.METADATA_CACHE_TTL_SECONDS,
+    Config.METADATA_NEGATIVE_CACHE_TTL_SECONDS,
+)
+_metadata_lookup_slots = threading.BoundedSemaphore(Config.METADATA_LOOKUP_CONCURRENCY)
+_metadata_inflight = set()
+_metadata_inflight_lock = threading.Lock()
 
 
 def fetch_from_external_relays(pubkey, relays_list=None):
     """Fetch bounded, signed kind-0 metadata from configured public relays."""
+    if not isinstance(pubkey, str) or PUBKEY_PATTERN.fullmatch(pubkey) is None:
+        raise ValueError('Pubkey must be 64 lowercase hexadecimal characters.')
     if relays_list is None:
         enabled_relays = MetadataRelay.query.filter_by(enabled=True).order_by(MetadataRelay.id).all()
         relays_list = [r.url for r in enabled_relays]
@@ -197,17 +177,23 @@ def fetch_from_external_relays(pubkey, relays_list=None):
             continue
         if normalized not in normalized_relays:
             normalized_relays.append(normalized)
-        if len(normalized_relays) == MAX_RELAYS:
+        if len(normalized_relays) == Config.METADATA_LOOKUP_MAX_RELAYS:
             break
 
     try:
-        event = safe_lookup_kind0(pubkey, normalized_relays, timeout=5)
+        event = safe_lookup_kind0(
+            pubkey,
+            normalized_relays,
+            timeout=Config.METADATA_LOOKUP_TIMEOUT,
+        )
     except RelayError as exc:
         app.logger.warning('External metadata lookup rejected: %s', exc)
         return None
     if event is None:
         return None
     try:
+        if len(event['content'].encode('utf-8')) > Config.METADATA_MAX_CONTENT_BYTES:
+            return None
         metadata = json.loads(event['content'])
     except (KeyError, TypeError, json.JSONDecodeError):
         return None
@@ -217,38 +203,65 @@ def fetch_from_external_relays(pubkey, relays_list=None):
 
 
 def get_pubkey_metadata(pubkey, refresh=False):
-    cached = None if refresh else pubkey_metadata_cache.get(pubkey)
-    if cached is not None:
+    if not isinstance(pubkey, str) or PUBKEY_PATTERN.fullmatch(pubkey) is None:
+        raise ValueError('Pubkey must be 64 lowercase hexadecimal characters.')
+    cache_hit, cached = (False, None) if refresh else pubkey_metadata_cache.get(pubkey)
+    if cache_hit:
         return cached
-    
+    if not _metadata_lookup_slots.acquire(blocking=False):
+        raise MetadataLookupBusy('Metadata lookup capacity is exhausted.')
+    with _metadata_inflight_lock:
+        if pubkey in _metadata_inflight:
+            _metadata_lookup_slots.release()
+            raise MetadataLookupBusy('Metadata lookup is already in progress.')
+        _metadata_inflight.add(pubkey)
     try:
-        events = scan_events({
-            'kinds': [0],
-            'authors': [pubkey]
-        }, limit=1)
-        if events:
-            validate_nostr_event(events[0])
-            if events[0].get('pubkey') != pubkey or events[0].get('kind') != 0:
-                raise ValueError('Unexpected profile event')
-            content = json.loads(events[0]['content'])
-            if isinstance(content, dict):
-                pubkey_metadata_cache.set(pubkey, content)
-                return content
-    except (InvalidNostrEvent, StrfryError, KeyError, TypeError, ValueError, json.JSONDecodeError):
-        pass
-    
-    metadata = fetch_from_external_relays(pubkey)
-    if metadata:
-        pubkey_metadata_cache.set(pubkey, metadata)
-        return metadata
-    
-    pubkey_metadata_cache.set(pubkey, {})
-    return {}
+        if not refresh:
+            cache_hit, cached = pubkey_metadata_cache.get(pubkey)
+            if cache_hit:
+                return cached
+        generation = pubkey_metadata_cache.current_generation()
+        try:
+            events = scan_events({
+                'kinds': [0],
+                'authors': [pubkey]
+            }, limit=1, timeout=Config.METADATA_LOOKUP_TIMEOUT)
+            if events:
+                validate_nostr_event(events[0])
+                if events[0].get('pubkey') != pubkey or events[0].get('kind') != 0:
+                    raise ValueError('Unexpected profile event')
+                if len(events[0]['content'].encode('utf-8')) > Config.METADATA_MAX_CONTENT_BYTES:
+                    raise ValueError('Profile metadata is too large')
+                content = json.loads(events[0]['content'])
+                if isinstance(content, dict):
+                    pubkey_metadata_cache.set(
+                        pubkey, content, expected_generation=generation
+                    )
+                    return content
+        except (InvalidNostrEvent, StrfryError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+            pass
+
+        metadata = fetch_from_external_relays(pubkey)
+        if metadata:
+            pubkey_metadata_cache.set(
+                pubkey, metadata, expected_generation=generation
+            )
+            return metadata
+
+        pubkey_metadata_cache.set(pubkey, {}, expected_generation=generation)
+        return {}
+    finally:
+        with _metadata_inflight_lock:
+            _metadata_inflight.discard(pubkey)
+        _metadata_lookup_slots.release()
 
 
 def _profile_username(pubkey, user_id=None):
     """Return a unique operator name from signed profile metadata or the npub."""
-    metadata = get_pubkey_metadata(pubkey, refresh=True)
+    try:
+        metadata = get_pubkey_metadata(pubkey, refresh=True)
+    except (MetadataLookupBusy, ValueError):
+        metadata = {}
     profile_name = metadata.get('name') if isinstance(metadata, dict) else None
     if isinstance(profile_name, str):
         profile_name = ' '.join(profile_name.split())
@@ -280,6 +293,7 @@ def _username_in_use(username, user_id=None):
 
 app = Flask(__name__)
 app.config.from_object(Config)
+app.wsgi_app = ProxyFix(app.wsgi_app, x_for=app.config['TRUSTED_PROXY_COUNT'])
 
 db.init_app(app)
 csrf = CSRFProtect(app)
@@ -290,9 +304,69 @@ login_manager.login_message_category = 'info'
 
 limiter = Limiter(
     app=app,
-    key_func=get_remote_address,
-    default_limits=["100 per minute"]
+    key_func=lambda: get_client_ip(),
+    default_limits=[Config.RATELIMIT_DEFAULT],
 )
+
+
+@app.before_request
+def apply_request_limits():
+    g.csp_nonce = secrets.token_urlsafe(24)
+    is_import = request.endpoint == 'import_export'
+    maximum = app.config[
+        'IMPORT_REQUEST_MAX_BYTES' if is_import else 'REQUEST_MAX_BYTES'
+    ]
+    request.max_content_length = maximum
+    request.max_form_memory_size = (
+        app.config['IMPORT_MAX_BYTES'] + 65536
+        if is_import
+        else min(app.config['REQUEST_MAX_BYTES'], 256 * 1024)
+    )
+    request.max_form_parts = app.config['MAX_FORM_PARTS']
+    if request.content_length is not None and request.content_length > maximum:
+        raise RequestEntityTooLarge()
+    if request.content_length is None and request.environ.get('HTTP_TRANSFER_ENCODING'):
+        request.get_data(cache=True)
+
+
+@app.after_request
+def apply_security_headers(response):
+    nonce = getattr(g, 'csp_nonce', '')
+    response.headers['Content-Security-Policy'] = '; '.join((
+        "default-src 'none'",
+        "base-uri 'none'",
+        "object-src 'none'",
+        "frame-ancestors 'none'",
+        "form-action 'self'",
+        f"script-src 'self' 'nonce-{nonce}'",
+        "script-src-attr 'none'",
+        "style-src 'self' 'unsafe-inline'",
+        "img-src 'self' data:",
+        "font-src 'self'",
+        "connect-src 'self'",
+        "worker-src 'none'",
+    ))
+    response.headers['X-Content-Type-Options'] = 'nosniff'
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['Referrer-Policy'] = 'no-referrer'
+    response.headers['Permissions-Policy'] = (
+        'accelerometer=(), camera=(), geolocation=(), gyroscope=(), '
+        'magnetometer=(), microphone=(), payment=(), usb=()'
+    )
+    response.headers['Cross-Origin-Opener-Policy'] = 'same-origin'
+    response.headers['Cross-Origin-Resource-Policy'] = 'same-origin'
+    response.headers['X-Permitted-Cross-Domain-Policies'] = 'none'
+    response.headers['X-XSS-Protection'] = '0'
+    if request.endpoint == 'static':
+        if '/vendor/' in request.path:
+            response.headers['Cache-Control'] = 'public, max-age=31536000, immutable'
+        else:
+            response.headers['Cache-Control'] = 'public, max-age=0, must-revalidate'
+    else:
+        response.headers['Cache-Control'] = 'no-store, max-age=0, must-revalidate'
+        response.headers['Pragma'] = 'no-cache'
+        response.headers['Expires'] = '0'
+    return response
 
 @login_manager.user_loader
 def load_user(user_id):
@@ -581,16 +655,10 @@ def format_uptime_filter(seconds):
 
 
 def get_client_ip():
-    xff = request.headers.get('X-Forwarded-For')
-    if xff and Config.TRUSTED_PROXY_COUNT > 0:
-        forwarded = [part.strip() for part in xff.split(',') if part.strip()]
-        if len(forwarded) >= Config.TRUSTED_PROXY_COUNT:
-            candidate = forwarded[-Config.TRUSTED_PROXY_COUNT]
-            try:
-                return str(ipaddress.ip_address(candidate))
-            except ValueError:
-                pass
-    return request.remote_addr
+    try:
+        return str(ipaddress.ip_address(request.remote_addr))
+    except (TypeError, ValueError):
+        return 'unknown'
 
 
 def moderation_decisions():
@@ -910,12 +978,18 @@ def api_write_policy_events():
 
 @app.route('/api/pubkey-metadata/<pubkey>')
 @viewer_or_higher
+@limiter.limit(Config.RATELIMIT_METADATA)
 def api_pubkey_metadata(pubkey):
     try:
         metadata = get_pubkey_metadata(pubkey)
         return jsonify(metadata)
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    except ValueError as exc:
+        return jsonify({'error': str(exc)}), 400
+    except MetadataLookupBusy:
+        return jsonify({'error': 'Metadata lookup is temporarily unavailable.'}), 503
+    except Exception:
+        app.logger.exception('Metadata lookup failed')
+        return jsonify({'error': 'Metadata lookup failed.'}), 500
 
 
 @app.route('/api/event/<event_id>')
@@ -978,6 +1052,7 @@ def api_metadata_relays_add():
         db.session.rollback()
         app.logger.exception('Could not add metadata relay %s', url)
         return jsonify({'error': 'Relay could not be added'}), 500
+    pubkey_metadata_cache.clear()
     return jsonify(relay.to_dict())
 
 
@@ -1000,6 +1075,7 @@ def api_metadata_relays_delete(relay_id):
         db.session.rollback()
         app.logger.exception('Could not delete metadata relay %s', url)
         return jsonify({'error': 'Relay could not be deleted'}), 500
+    pubkey_metadata_cache.clear()
     return jsonify({'success': True})
 
 
@@ -1026,6 +1102,7 @@ def api_metadata_relays_toggle(relay_id):
         db.session.rollback()
         app.logger.exception('Could not toggle metadata relay %s', url)
         return jsonify({'error': 'Relay could not be updated'}), 500
+    pubkey_metadata_cache.clear()
     return jsonify(relay.to_dict())
 
 
@@ -1896,32 +1973,7 @@ def db_management():
             return redirect(url_for('db_management'))
         
         elif 'compact' in request.form:
-            if _compaction['running']:
-                flash('Compaction is already in progress.', 'warning')
-            elif request.form.get('confirm_compact') != 'yes':
-                flash('Confirm that the relay is stopped before compacting.', 'danger')
-            else:
-                process_count = get_strfry_process_info()['process_count']
-                if process_count is None:
-                    flash('Cannot confirm that the relay is stopped; compaction was not started.', 'danger')
-                elif process_count > 0:
-                    flash('Stop all strfry processes before compacting the database.', 'danger')
-                else:
-                    try:
-                        lock_file = acquire_database_maintenance_lock()
-                    except StrfryError as e:
-                        flash(str(e), 'danger')
-                    else:
-                        _compaction['running'] = True
-                        _compaction['started_at'] = datetime.now()
-                        _compaction['finished_at'] = None
-                        _compaction['error'] = None
-                        t = threading.Thread(target=_run_compaction, args=(lock_file,), daemon=True)
-                        _compaction['thread'] = t
-                        t.start()
-                        flash('Database compaction started in background.', 'info')
-                        log_audit('compact', 'Database compaction initiated')
-            return redirect(url_for('db_management'))
+            abort(410, description='Web compaction is disabled; stop strfry and compact offline.')
         
         elif 'refresh_negentropy' in request.form:
             try:
@@ -1935,12 +1987,6 @@ def db_management():
             except StrfryError as e:
                 dict_error = str(e)
     
-    compaction_status = {
-        'running': _compaction['running'],
-        'started_at': _compaction.get('started_at'),
-        'finished_at': _compaction.get('finished_at'),
-        'error': _compaction.get('error'),
-    }
     return render_template(
         'db.html',
         trees=trees,
@@ -1949,7 +1995,6 @@ def db_management():
         negentropy_success=negentropy_success,
         dict_output=dict_output,
         dict_error=dict_error,
-        compaction_status=compaction_status,
     )
 
 
@@ -2111,8 +2156,10 @@ def _plugins_page(plugin_form=None, wot_form=None, status_code=200):
     projection = ModerationDecisions.initialize_projection()
     wot_policy, wot_state = initialize_wot()
     try:
-        with open(app.config['TRUST_POLICY_STATS_FILE']) as stats_file:
-            wot_stats = json.load(stats_file)
+        wot_stats = json.loads(read_bounded(
+            app.config['TRUST_POLICY_STATS_FILE'],
+            1024 * 1024,
+        ))
         if not isinstance(wot_stats, dict):
             wot_stats = {}
     except (OSError, json.JSONDecodeError):
@@ -2441,7 +2488,8 @@ def moderation():
         }
     open_report_count = ModerationReport.query.filter_by(reviewed=False).count()
     new_report_count = ModerationReport.query.filter(
-        ModerationReport.created_at >= utcnow() - timedelta(hours=24)
+        func.coalesce(ModerationReport.received_at, ModerationReport.created_at)
+        >= utcnow() - timedelta(hours=24)
     ).count()
     pending_purges = EventPurge.query.filter_by(status='pending').order_by(EventPurge.created_at.desc()).all()
     completed_purges = EventPurge.query.filter_by(status='completed').order_by(
@@ -2963,6 +3011,17 @@ def not_found_error(error):
     )
 
 
+@app.errorhandler(RequestEntityTooLarge)
+def request_too_large(error):
+    if request.path.startswith('/api/'):
+        return jsonify({'error': 'Request body is too large.'}), 413
+    return _error_response(
+        413,
+        'Request too large',
+        'The submitted request exceeds the allowed size.',
+    )
+
+
 @app.errorhandler(500)
 def internal_error(error):
     db.session.rollback()
@@ -3037,6 +3096,23 @@ def init_db():
                 try:
                     conn.execute(text(
                         'ALTER TABLE event_purges ADD COLUMN claimed_at DATETIME'
+                    ))
+                    conn.commit()
+                except OperationalError as exc:
+                    if 'duplicate column name' not in str(exc).lower():
+                        raise
+            report_columns = {
+                row[1]
+                for row in conn.execute(text("PRAGMA table_info('moderation_reports')"))
+            }
+            if 'received_at' not in report_columns:
+                try:
+                    conn.execute(text(
+                        'ALTER TABLE moderation_reports ADD COLUMN received_at DATETIME'
+                    ))
+                    conn.execute(text(
+                        'UPDATE moderation_reports SET received_at = CURRENT_TIMESTAMP '
+                        'WHERE received_at IS NULL'
                     ))
                     conn.commit()
                 except OperationalError as exc:

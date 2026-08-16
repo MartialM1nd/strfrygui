@@ -133,7 +133,7 @@
 {% endblock %}
 
 {% block scripts %}
-<script>
+<script nonce="{{ g.csp_nonce }}">
 const clipboardStatus = document.getElementById('clipboardStatus');
 document.querySelectorAll('.copy-value').forEach(function(button) {
     button.addEventListener('click', async function() {

@@ -1,12 +1,13 @@
 import subprocess
-import fcntl
 import json
 import os
 import selectors
+import signal
 import tempfile
 import time
 from contextlib import contextmanager
 from config import Config
+from utils.runtime_files import file_lock
 
 
 _cache = {}
@@ -83,88 +84,131 @@ def _strfry_command(args):
 
 def run_strfry_command(args, input_data=None, capture_output=True, timeout=300):
     cmd = _strfry_command(args)
-
-    try:
-        result = subprocess.run(
-            cmd,
-            input=input_data,
-            capture_output=capture_output,
-            text=True,
-            timeout=timeout
-        )
-        if result.returncode != 0:
-            raise StrfryError(result.stderr.strip() or f"Command failed with code {result.returncode}")
-        return result.stdout.strip() if capture_output else None
-    except subprocess.TimeoutExpired:
-        raise StrfryError("Command timed out")
-    except FileNotFoundError:
-        raise StrfryError(f"strfry binary not found at {Config.STRFRY_BINARY}")
-    except OSError as e:
-        raise StrfryError(f"Failed to execute strfry: {e}")
+    output = _run_bounded_process(
+        cmd,
+        input_data=input_data,
+        timeout=timeout,
+        max_stdout=(Config.STRFRY_COMMAND_MAX_STDOUT_BYTES if capture_output else 0),
+        max_stderr=Config.STRFRY_COMMAND_MAX_STDERR_BYTES,
+    )
+    return output.strip() if capture_output else None
 
 
 def run_strfry_command_limited(args, max_output_bytes, timeout=300):
     """Run a read-only command while bounding captured stdout in memory and on disk."""
-    cmd = _strfry_command(args)
-    stderr_file = tempfile.TemporaryFile()
+    return _run_bounded_process(
+        _strfry_command(args),
+        timeout=timeout,
+        max_stdout=max_output_bytes,
+        max_stderr=Config.STRFRY_COMMAND_MAX_STDERR_BYTES,
+    ).strip()
+
+
+def _run_bounded_process(cmd, input_data=None, timeout=300, max_stdout=None, max_stderr=None):
+    """Run one command with bounded output, deadline, and process-group cleanup."""
+    max_stdout = Config.STRFRY_COMMAND_MAX_STDOUT_BYTES if max_stdout is None else max_stdout
+    max_stderr = Config.STRFRY_COMMAND_MAX_STDERR_BYTES if max_stderr is None else max_stderr
+    input_file = None
+    if input_data is not None:
+        input_file = tempfile.TemporaryFile()
+        input_file.write(input_data.encode('utf-8') if isinstance(input_data, str) else input_data)
+        input_file.seek(0)
     try:
-        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=stderr_file)
+        process = subprocess.Popen(
+            cmd,
+            stdin=input_file,
+            stdout=subprocess.PIPE if max_stdout else subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
     except (FileNotFoundError, OSError) as exc:
-        stderr_file.close()
+        if input_file is not None:
+            input_file.close()
         raise StrfryError(f"Failed to execute strfry: {exc}") from exc
 
-    output = bytearray()
-    deadline = time.monotonic() + timeout
+    streams = {}
     selector = selectors.DefaultSelector()
-    selector.register(process.stdout, selectors.EVENT_READ)
+    if process.stdout is not None:
+        selector.register(process.stdout, selectors.EVENT_READ)
+        streams[process.stdout.fileno()] = ('stdout', bytearray(), max_stdout)
+    selector.register(process.stderr, selectors.EVENT_READ)
+    streams[process.stderr.fileno()] = ('stderr', bytearray(), max_stderr)
+    deadline = time.monotonic() + timeout
     try:
-        while True:
+        while selector.get_map():
             remaining = deadline - time.monotonic()
-            if remaining <= 0 or not selector.select(remaining):
-                process.kill()
-                raise StrfryError("Command timed out")
-            chunk = os.read(
-                process.stdout.fileno(),
-                min(65536, max_output_bytes + 1 - len(output)),
-            )
-            if not chunk:
-                break
-            output.extend(chunk)
-            if len(output) > max_output_bytes:
-                process.kill()
-                raise StrfryError(
-                    f"Command output exceeds the {max_output_bytes}-byte safety limit"
-                )
-
-        remaining = max(0.1, deadline - time.monotonic())
+            if remaining <= 0:
+                raise StrfryError('Command timed out')
+            events = selector.select(remaining)
+            if not events:
+                raise StrfryError('Command timed out')
+            for key, _mask in events:
+                name, output, limit = streams[key.fd]
+                chunk = os.read(key.fd, min(65536, limit + 1 - len(output)))
+                if not chunk:
+                    selector.unregister(key.fileobj)
+                    continue
+                output.extend(chunk)
+                if len(output) > limit:
+                    raise StrfryError(
+                        f'Command {name} exceeds the {limit}-byte safety limit'
+                    )
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise StrfryError('Command timed out')
         return_code = process.wait(timeout=remaining)
+        stdout = next((bytes(value[1]) for value in streams.values() if value[0] == 'stdout'), b'')
+        stderr = next((bytes(value[1]) for value in streams.values() if value[0] == 'stderr'), b'')
         if return_code != 0:
-            stderr_file.seek(0)
-            error = stderr_file.read().decode('utf-8', errors='replace').strip()
-            raise StrfryError(error or f"Command failed with code {return_code}")
-        return output.decode('utf-8').strip()
-    except subprocess.TimeoutExpired as exc:
-        process.kill()
-        raise StrfryError("Command timed out") from exc
+            message = stderr.decode('utf-8', errors='replace').strip()
+            raise StrfryError(message or f'Command failed with code {return_code}')
+        return stdout.decode('utf-8', errors='strict')
+    except (subprocess.TimeoutExpired, UnicodeDecodeError) as exc:
+        raise StrfryError('Command timed out' if isinstance(exc, subprocess.TimeoutExpired) else 'Command output is not UTF-8') from exc
     finally:
         selector.close()
+        group_signaled = False
+        try:
+            os.killpg(process.pid, signal.SIGTERM)
+            group_signaled = True
+        except ProcessLookupError:
+            pass
         if process.poll() is None:
-            process.kill()
-        process.wait()
-        stderr_file.close()
+            try:
+                process.wait(timeout=Config.STRFRY_TERMINATE_GRACE_SECONDS)
+            except subprocess.TimeoutExpired:
+                if process.poll() is None:
+                    try:
+                        os.killpg(process.pid, signal.SIGKILL)
+                    except ProcessLookupError:
+                        pass
+                    process.wait()
+        elif group_signaled:
+            time.sleep(Config.STRFRY_TERMINATE_GRACE_SECONDS)
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        if process.stdout is not None:
+            process.stdout.close()
+        process.stderr.close()
+        if input_file is not None:
+            input_file.close()
 
 
 def scan_events(filter_json, limit=100, timeout=300):
     filter_with_limit = {**filter_json, 'limit': limit}
     filter_str = json.dumps(filter_with_limit)
     cmd = ['scan', filter_str]
-    output = run_strfry_command(cmd, timeout=timeout)
+    output = run_strfry_command_limited(cmd, Config.STRFRY_SCAN_MAX_BYTES, timeout=timeout)
     
     events = []
     if not output:
         return events
     for line in output.split('\n'):
         if line.strip():
+            if len(line.encode('utf-8')) > Config.STRFRY_SCAN_MAX_LINE_BYTES:
+                raise StrfryError('Scan event exceeds the line-size safety limit')
             try:
                 events.append(json.loads(line))
             except json.JSONDecodeError:
@@ -174,59 +218,8 @@ def scan_events(filter_json, limit=100, timeout=300):
 
 def iter_scan_events(filter_json, limit=100, timeout=300):
     """Stream events from a bounded local strfry scan."""
-    filter_with_limit = {**filter_json, 'limit': limit}
-    cmd = [Config.STRFRY_BINARY]
-    if Config.STRFRY_CONFIG:
-        cmd.extend(['--config', Config.STRFRY_CONFIG])
-    cmd.extend(['scan', json.dumps(filter_with_limit)])
-
-    stderr_file = tempfile.TemporaryFile(mode='w+t')
-    try:
-        process = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=stderr_file,
-            text=True,
-        )
-    except (FileNotFoundError, OSError) as exc:
-        stderr_file.close()
-        raise StrfryError(f"Failed to execute strfry: {exc}") from exc
-
-    selector = selectors.DefaultSelector()
-    selector.register(process.stdout, selectors.EVENT_READ)
-    deadline = time.monotonic() + timeout
-    yielded = 0
-    try:
-        while yielded < limit:
-            remaining = deadline - time.monotonic()
-            if remaining <= 0 or not selector.select(remaining):
-                process.kill()
-                raise StrfryError("Command timed out")
-            line = process.stdout.readline()
-            if not line:
-                break
-            try:
-                event = json.loads(line)
-            except json.JSONDecodeError:
-                continue
-            yielded += 1
-            yield event
-
-        remaining = max(0.1, deadline - time.monotonic())
-        return_code = process.wait(timeout=remaining)
-        if return_code != 0:
-            stderr_file.seek(0)
-            error = stderr_file.read().strip()
-            raise StrfryError(error or f"Command failed with code {return_code}")
-    except subprocess.TimeoutExpired as exc:
-        process.kill()
-        raise StrfryError("Command timed out") from exc
-    finally:
-        selector.close()
-        if process.poll() is None:
-            process.kill()
-            process.wait()
-        stderr_file.close()
+    for event in scan_events(filter_json, limit=limit, timeout=timeout):
+        yield event
 
 
 def count_events(filter_json):
@@ -304,28 +297,11 @@ def validate_jsonl(jsonl_data):
 @contextmanager
 def database_maintenance_lock():
     """Prevent overlapping GUI database writes across worker processes."""
-    lock_file = acquire_database_maintenance_lock()
     try:
-        yield
-    finally:
-        release_database_maintenance_lock(lock_file)
-
-
-def acquire_database_maintenance_lock():
-    lock_path = Config.DATABASE_MAINTENANCE_LOCK
-    os.makedirs(os.path.dirname(lock_path), exist_ok=True)
-    lock_file = open(lock_path, 'w')
-    try:
-        fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with file_lock(Config.DATABASE_MAINTENANCE_LOCK, blocking=False):
+            yield
     except BlockingIOError as exc:
-        lock_file.close()
         raise StrfryError("Another database maintenance operation is in progress") from exc
-    return lock_file
-
-
-def release_database_maintenance_lock(lock_file):
-    fcntl.flock(lock_file, fcntl.LOCK_UN)
-    lock_file.close()
 
 
 def compact_database(lock_file=None):
