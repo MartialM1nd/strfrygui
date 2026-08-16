@@ -15,6 +15,7 @@ from urllib.parse import urlsplit
 from flask import Flask, render_template, redirect, url_for, flash, request, jsonify, abort, make_response, g, session
 from flask_login import LoginManager, login_user, logout_user, login_required, current_user
 from flask_wtf import CSRFProtect, FlaskForm
+from flask_wtf.csrf import CSRFError
 from wtforms import BooleanField, StringField, SelectField, TextAreaField, IntegerField, HiddenField
 from wtforms.validators import DataRequired, InputRequired, Length, NumberRange, Optional, Regexp, ValidationError
 from flask_limiter import Limiter
@@ -3002,8 +3003,21 @@ def rotate_nostr_key():
     return jsonify({'redirect': url_for('login')})
 
 
+@app.errorhandler(CSRFError)
+def csrf_error(error):
+    if request.path.startswith('/api/'):
+        return jsonify({'error': 'Request validation failed.'}), 400
+    return _error_response(
+        400,
+        'Request validation failed',
+        'Reload the page and try again.',
+    )
+
+
 @app.errorhandler(404)
 def not_found_error(error):
+    if request.path.startswith('/api/'):
+        return jsonify({'error': 'The requested API endpoint does not exist.'}), 404
     return _error_response(
         404,
         'Page not found',
@@ -3022,9 +3036,22 @@ def request_too_large(error):
     )
 
 
+@app.errorhandler(429)
+def rate_limit_exceeded(error):
+    if request.path.startswith('/api/'):
+        return jsonify({'error': 'Too many requests. Please try again later.'}), 429
+    return _error_response(
+        429,
+        'Too many requests',
+        'Please wait before trying again.',
+    )
+
+
 @app.errorhandler(500)
 def internal_error(error):
     db.session.rollback()
+    if request.path.startswith('/api/'):
+        return jsonify({'error': 'The request could not be completed.'}), 500
     return _error_response(
         500,
         'Internal server error',

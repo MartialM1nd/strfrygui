@@ -1,5 +1,5 @@
 from functools import wraps
-from flask import redirect, url_for, flash
+from flask import flash, jsonify, redirect, request, url_for
 from flask_login import current_user, logout_user
 from config import Security
 
@@ -9,14 +9,20 @@ def role_required(*roles):
         @wraps(f)
         def decorated_function(*args, **kwargs):
             if not current_user.is_authenticated:
+                if request.path.startswith('/api/'):
+                    return jsonify({'error': 'Authentication required.'}), 401
                 return redirect(url_for('login'))
 
             if not current_user.is_active:
                 logout_user()
+                if request.path.startswith('/api/'):
+                    return jsonify({'error': 'Authentication required.'}), 401
                 flash('Your account has been deactivated.', 'danger')
                 return redirect(url_for('login'))
             
             if current_user.role not in roles:
+                if request.path.startswith('/api/'):
+                    return jsonify({'error': 'Permission denied.'}), 403
                 flash('You do not have permission to access this page.', 'danger')
                 return redirect(url_for('index'))
             
@@ -30,14 +36,20 @@ def permission_required(permission):
         @wraps(f)
         def decorated_function(*args, **kwargs):
             if not current_user.is_authenticated:
+                if request.path.startswith('/api/'):
+                    return jsonify({'error': 'Authentication required.'}), 401
                 return redirect(url_for('login'))
 
             if not current_user.is_active:
                 logout_user()
+                if request.path.startswith('/api/'):
+                    return jsonify({'error': 'Authentication required.'}), 401
                 flash('Your account has been deactivated.', 'danger')
                 return redirect(url_for('login'))
             
             if not Security.has_permission(current_user.role, permission):
+                if request.path.startswith('/api/'):
+                    return jsonify({'error': 'Permission denied.'}), 403
                 flash('You do not have permission to perform this action.', 'danger')
                 return redirect(url_for('index'))
             

@@ -39,8 +39,10 @@
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ action, next: shell.dataset.next || null, ...payload }),
             });
-            const challenge = await challengeResponse.json();
-            if (!challengeResponse.ok) throw new Error(challenge.error || 'Could not create a challenge.');
+            const challenge = await window.readJsonResponse(
+                challengeResponse,
+                'Could not create a challenge.'
+            );
 
             show('Approve the authentication request in your Nostr extension.', 'info');
             const signedEvent = await window.nostr.signEvent(challenge.event);
@@ -57,8 +59,10 @@
                 },
                 body: challenge.payload || '',
             });
-            const result = await verifyResponse.json();
-            if (!verifyResponse.ok) throw new Error(result.error || 'Nostr authentication failed.');
+            const result = await window.readJsonResponse(
+                verifyResponse,
+                'Nostr authentication failed.'
+            );
             show('Authentication successful. Redirecting...', 'success');
             window.location.assign(result.redirect);
         } catch (error) {

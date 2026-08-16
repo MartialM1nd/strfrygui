@@ -523,7 +523,9 @@ def test_plugins_page_manages_and_publishes_wot_policy(monkeypatch, tmp_path):
         session['_fresh'] = True
         session['_nostr_auth_version'] = 1
     assert viewer_client.get('/policy-log').status_code == 302
-    assert viewer_client.get('/api/write-policy-events').status_code == 302
+    denied_policy_log = viewer_client.get('/api/write-policy-events')
+    assert denied_policy_log.status_code == 403
+    assert denied_policy_log.get_json() == {'error': 'Permission denied.'}
     viewer_dashboard = viewer_client.get('/api/dashboard')
     assert viewer_dashboard.status_code == 200
     assert 'moderation' not in viewer_dashboard.get_json()

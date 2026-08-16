@@ -128,6 +128,66 @@ def test_password_login_and_change_routes_are_removed(legacy_app):
     assert client.post('/change-password/1').status_code == 404
 
 
+def test_protected_api_returns_json_when_session_is_missing(legacy_app):
+    _app_module, flask_app = legacy_app
+    response = flask_app.test_client().get('/api/dashboard')
+
+    assert response.status_code == 401
+    assert response.is_json
+    assert response.get_json() == {'error': 'Authentication required.'}
+
+
+def test_missing_api_route_returns_json(legacy_app):
+    _app_module, flask_app = legacy_app
+    response = flask_app.test_client().get('/api/not-a-route')
+
+    assert response.status_code == 404
+    assert response.is_json
+    assert response.get_json() == {'error': 'The requested API endpoint does not exist.'}
+
+
+def test_protected_api_returns_json_when_role_is_insufficient(legacy_app):
+    _app_module, flask_app = legacy_app
+    user_id = add_user(flask_app, role='viewer')
+    client = flask_app.test_client()
+    with client.session_transaction() as auth_session:
+        auth_session['_user_id'] = str(user_id)
+        auth_session['_fresh'] = True
+        auth_session['_nostr_auth_version'] = 1
+
+    response = client.get('/api/audit-logs')
+
+    assert response.status_code == 403
+    assert response.is_json
+    assert response.get_json() == {'error': 'Permission denied.'}
+
+
+def test_unhandled_api_error_returns_json(legacy_app, monkeypatch):
+    app_module, flask_app = legacy_app
+    user_id = add_user(flask_app)
+    client = flask_app.test_client()
+    with client.session_transaction() as auth_session:
+        auth_session['_user_id'] = str(user_id)
+        auth_session['_fresh'] = True
+        auth_session['_nostr_auth_version'] = 1
+
+    def fail_dashboard(**kwargs):
+        raise RuntimeError('private detail')
+
+    monkeypatch.setattr(app_module, 'dashboard_summary', fail_dashboard)
+    old_propagate = flask_app.config.get('PROPAGATE_EXCEPTIONS')
+    flask_app.config['PROPAGATE_EXCEPTIONS'] = False
+    try:
+        response = client.get('/api/dashboard')
+    finally:
+        flask_app.config['PROPAGATE_EXCEPTIONS'] = old_propagate
+
+    assert response.status_code == 500
+    assert response.is_json
+    assert response.get_json() == {'error': 'The request could not be completed.'}
+    assert b'private detail' not in response.data
+
+
 def test_trusted_proxy_identity_is_shared_by_audit_and_rate_limit(legacy_app, monkeypatch):
     app_module, flask_app = legacy_app
     app_module.limiter.reset()
@@ -168,6 +228,8 @@ def test_trusted_proxy_identity_is_shared_by_audit_and_rate_limit(legacy_app, mo
     assert failed_login.status_code == 401
     assert audit.ip_address == '198.51.100.10'
     assert limited.status_code == 429
+    assert limited.is_json
+    assert limited.get_json() == {'error': 'Too many requests. Please try again later.'}
     assert independent.status_code == 200
 
 
@@ -185,6 +247,23 @@ def test_oversized_api_body_is_rejected_before_json_parsing(legacy_app):
 
     assert response.status_code == 413
     assert response.get_json() == {'error': 'Request body is too large.'}
+
+
+def test_auth_api_csrf_rejection_is_json(legacy_app):
+    app_module, flask_app = legacy_app
+    app_module.limiter.reset()
+    flask_app.config['WTF_CSRF_ENABLED'] = True
+    try:
+        response = flask_app.test_client().post(
+            '/api/auth/challenge',
+            json={'action': 'login'},
+        )
+    finally:
+        flask_app.config['WTF_CSRF_ENABLED'] = False
+
+    assert response.status_code == 400
+    assert response.is_json
+    assert response.get_json() == {'error': 'Request validation failed.'}
 
 
 def test_oversized_body_is_rejected_even_when_route_does_not_read_it(legacy_app):

@@ -18,6 +18,25 @@
         return fetch(url, requestOptions);
     };
 
+    window.readJsonResponse = async function(response, fallbackMessage) {
+        const contentType = response.headers.get('content-type') || '';
+        if (!contentType.includes('application/json')) {
+            const status = response.status ? ` (HTTP ${response.status})` : '';
+            throw new Error(`${fallbackMessage}${status}`);
+        }
+        let data;
+        try {
+            data = await response.json();
+        } catch (error) {
+            throw new Error(fallbackMessage);
+        }
+        if (!response.ok) {
+            const message = data && typeof data.error === 'string' ? data.error : fallbackMessage;
+            throw new Error(message);
+        }
+        return data;
+    };
+
     const html = document.documentElement;
     const icon = document.getElementById('themeIcon');
     const toggle = document.getElementById('themeToggle');
