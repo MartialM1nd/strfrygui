@@ -50,8 +50,12 @@ def test_moderation_static_and_dynamic_reports_share_compact_structure():
 
 def test_moderation_report_details_link_to_and_preview_reported_event():
     assert "url_for('events', search_type='event_id', event_id=report.reported_event_id)" in MODERATION
+    assert "url_for('events', search_type='event_id', event_id=report.event_id)" in MODERATION
     assert 'class="moderation-event-link"' in MODERATION
     assert "node('a', 'moderation-event-link'" in MODERATION
+    assert 'data-event-id="{{ report.reported_event_id or report.event_id }}"' in MODERATION
+    assert "const previewEventId = report.reported_event_id || report.event_id;" in MODERATION
+    assert "report.reported_event_id ? 'Reported event preview' : 'Report event preview'" in MODERATION
     assert 'data-report-details' in MODERATION
     assert "event.target.closest('[data-report-details]')" in MODERATION
     assert 'loadReportEventPreview(detail)' in MODERATION

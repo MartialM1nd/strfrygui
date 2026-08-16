@@ -148,9 +148,9 @@
                     {% if report.reported_pubkey %}<button class="btn btn-sm btn-danger" type="button" data-report-action="ban" data-report-id="{{ report.id }}" data-pubkey="{{ report.reported_pubkey }}" data-report-type="{{ report.report_type or 'other' }}" data-event-id="{{ report.reported_event_id or '' }}"><i class="bi bi-slash-octagon"></i> Ban author</button>{% endif %}
                     {% endif %}
                 </div>
-                <div class="collapse moderation-report-detail" id="report-detail-{{ report.id }}" data-event-id="{{ report.reported_event_id or '' }}">
+                <div class="collapse moderation-report-detail" id="report-detail-{{ report.id }}" data-event-id="{{ report.reported_event_id or report.event_id }}">
                     <div class="moderation-detail-grid">
-                        <div><span class="dashboard-metric-label">Report event</span><code class="moderation-detail-identifier" title="{{ report.event_id }}">{{ report.event_id }}</code></div>
+                        <div><span class="dashboard-metric-label">Report event</span><a class="moderation-event-link" href="{{ url_for('events', search_type='event_id', event_id=report.event_id) }}" title="View report event {{ report.event_id }}"><code class="moderation-detail-identifier">{{ report.event_id }}</code></a></div>
                         <div><span class="dashboard-metric-label">Reported pubkey</span><code class="moderation-detail-identifier" title="{{ report.reported_pubkey or 'N/A' }}">{{ report.reported_pubkey or 'N/A' }}</code></div>
                         <div>
                             <span class="dashboard-metric-label">Reported event</span>
@@ -162,12 +162,10 @@
                         <div class="dashboard-metric-label mb-1">Full reporter note</div>
                         <pre class="moderation-content mb-0">{{ report.content or 'No explanation was included with this report.' }}</pre>
                     </div>
-                    {% if report.reported_event_id %}
                     <div class="mt-3">
-                        <div class="dashboard-metric-label mb-1">Reported event preview</div>
+                        <div class="dashboard-metric-label mb-1">{{ 'Reported event preview' if report.reported_event_id else 'Report event preview' }}</div>
                         <div class="moderation-event-preview" data-event-preview><span class="text-body-secondary">Open details to load the event.</span></div>
                     </div>
-                    {% endif %}
                     {% if report.reviewed or report.banned %}
                     <div class="moderation-history mt-3 small">
                         {% if report.reviewed %}<div><i class="bi bi-check-circle text-success"></i> Reviewed by user {{ report.reviewed_by }}{% if report.reviewed_at %} on {{ report.reviewed_at|datetime }}{% endif %}</div>{% endif %}
@@ -360,15 +358,15 @@ function detailValue(label, value) {
     return wrapper;
 }
 
-function eventDetailValue(eventId) {
-    if (!eventId) return detailValue('Reported event', null);
+function eventDetailValue(label, eventId) {
+    if (!eventId) return detailValue(label, null);
     const wrapper = node('div');
     const link = node('a', 'moderation-event-link');
     const params = new URLSearchParams({ search_type: 'event_id', event_id: eventId });
     link.href = '/events?' + params.toString();
     link.title = 'View event ' + eventId;
     link.appendChild(node('code', 'moderation-detail-identifier', eventId));
-    wrapper.append(node('span', 'dashboard-metric-label', 'Reported event'), link);
+    wrapper.append(node('span', 'dashboard-metric-label', label), link);
     return wrapper;
 }
 
@@ -426,25 +424,26 @@ function createReportCard(report) {
         if (report.reported_pubkey) actions.appendChild(actionButton('Ban author', 'btn-danger', 'bi-slash-octagon', 'ban', report));
     }
 
+    const previewEventId = report.reported_event_id || report.event_id;
     const detail = node('div', 'collapse moderation-report-detail');
     detail.id = 'report-detail-' + report.id;
-    detail.dataset.eventId = report.reported_event_id || '';
+    detail.dataset.eventId = previewEventId || '';
     const detailGrid = node('div', 'moderation-detail-grid');
     detailGrid.append(
-        detailValue('Report event', report.event_id),
+        eventDetailValue('Report event', report.event_id),
         detailValue('Reported pubkey', report.reported_pubkey),
-        eventDetailValue(report.reported_event_id)
+        eventDetailValue('Reported event', report.reported_event_id)
     );
     detail.appendChild(detailGrid);
     const note = node('div', 'mt-3');
     note.append(node('div', 'dashboard-metric-label mb-1', 'Full reporter note'), node('pre', 'moderation-content mb-0', report.content || 'No explanation was included with this report.'));
     detail.appendChild(note);
-    if (report.reported_event_id) {
+    if (previewEventId) {
         const previewWrapper = node('div', 'mt-3');
         const preview = node('div', 'moderation-event-preview');
         preview.dataset.eventPreview = '';
         preview.appendChild(node('span', 'text-body-secondary', 'Open details to load the event.'));
-        previewWrapper.append(node('div', 'dashboard-metric-label mb-1', 'Reported event preview'), preview);
+        previewWrapper.append(node('div', 'dashboard-metric-label mb-1', report.reported_event_id ? 'Reported event preview' : 'Report event preview'), preview);
         detail.appendChild(previewWrapper);
     }
     if (report.reviewed || report.banned) {

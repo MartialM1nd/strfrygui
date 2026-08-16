@@ -13,6 +13,7 @@ from models import (
     BannedDomain,
     BannedPubkey,
     MetadataRelay,
+    ModerationReport,
     PubkeyBanSource,
     User,
     db,
@@ -96,6 +97,7 @@ def clean_admin_data(admin_app):
         BannedPubkey.query.delete()
         BannedDomain.query.delete()
         MetadataRelay.query.delete()
+        ModerationReport.query.delete()
         User.query.filter(~User.id.in_(user_ids.values())).delete(synchronize_session=False)
         admin = db.session.get(User, user_ids['admin'])
         admin.username = 'admin-test'
@@ -613,6 +615,37 @@ def test_moderation_event_preview_endpoint_reports_missing_event(admin_app, monk
 
     assert response.status_code == 404
     assert response.get_json() == {'error': 'Event not found'}
+
+
+def test_pubkey_report_details_link_and_preview_the_report_event(admin_app, monkeypatch):
+    app_module, flask_app, users = admin_app
+    report_event_id = 'a' * 64
+    monkeypatch.setitem(flask_app.config, 'WTF_CSRF_ENABLED', True)
+    monkeypatch.setattr(
+        app_module,
+        'scan_events',
+        lambda *args, **kwargs: pytest.fail('rendering the queue must not scan events'),
+    )
+    with flask_app.app_context():
+        db.session.add(ModerationReport(
+            event_id=report_event_id,
+            reporter_pubkey='b' * 64,
+            reported_pubkey='c' * 64,
+            report_type='spam',
+            content='Profile report',
+            created_at=datetime.now(),
+        ))
+        db.session.commit()
+
+    response = _client_for(flask_app, users['moderator']).get('/moderation')
+
+    assert response.status_code == 200
+    assert f'data-event-id="{report_event_id}"'.encode() in response.data
+    assert (
+        f'href="/events?search_type=event_id&amp;event_id={report_event_id}"'.encode()
+        in response.data
+    )
+    assert b'Report event preview' in response.data
 
 
 def test_metadata_lookup_caps_relays_and_content_size(admin_app, monkeypatch):
