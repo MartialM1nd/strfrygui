@@ -293,7 +293,8 @@ if (confirmAction) confirmAction.addEventListener('click', async function() {
         return;
     }
     const reason = document.getElementById('eventBanReason').value.trim() || 'Banned from Event Explorer';
-    const body = new URLSearchParams({ pubkey: pendingEventAction.pubkey, reason });
+    const csrfToken = document.querySelector('meta[name="csrf-token"]')?.content || '';
+    const body = new URLSearchParams({ csrf_token: csrfToken, pubkey: pendingEventAction.pubkey, reason });
     const response = await csrfFetch('/moderation/ban-by-pubkey', {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },

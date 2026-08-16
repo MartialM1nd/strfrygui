@@ -33,6 +33,11 @@ def test_event_rows_keep_compact_content_identifiers_and_sensitive_details():
     assert 'data-event-action="ban"' in EVENTS
 
 
+def test_event_author_ban_posts_csrf_token_in_form_body():
+    assert "const csrfToken = document.querySelector('meta[name=\"csrf-token\"]')?.content || '';" in EVENTS
+    assert 'new URLSearchParams({ csrf_token: csrfToken, pubkey: pendingEventAction.pubkey, reason })' in EVENTS
+
+
 def test_moderation_static_and_dynamic_reports_share_compact_structure():
     assert 'class="moderation-kpi-strip mb-4"' in MODERATION
     assert 'class="moderation-filter-bar compact-toolbar mb-4"' in MODERATION

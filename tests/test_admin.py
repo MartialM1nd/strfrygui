@@ -1,5 +1,6 @@
 import importlib
 import json
+import re
 import sys
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -646,6 +647,59 @@ def test_pubkey_report_details_link_and_preview_the_report_event(admin_app, monk
         in response.data
     )
     assert b'Report event preview' in response.data
+
+
+def test_moderation_report_action_form_submits_valid_csrf_token(admin_app, monkeypatch):
+    _app_module, flask_app, users = admin_app
+    monkeypatch.setitem(flask_app.config, 'WTF_CSRF_ENABLED', True)
+    with flask_app.app_context():
+        report = ModerationReport(
+            event_id='a' * 64,
+            reporter_pubkey='b' * 64,
+            reported_pubkey='c' * 64,
+            reported_event_id='d' * 64,
+            report_type='spam',
+            content='Event report',
+            created_at=datetime.now(),
+        )
+        db.session.add(report)
+        db.session.commit()
+        report_id = report.id
+    client = _client_for(flask_app, users['moderator'])
+    page = client.get('/moderation')
+    token_match = re.search(
+        rb'<form method="POST" id="actionForm".*?name="csrf_token" value="([^"]+)"',
+        page.data,
+        re.DOTALL,
+    )
+
+    assert token_match is not None
+    response = client.post(
+        f'/moderation/report/{report_id}/delete-event',
+        data={'csrf_token': token_match.group(1).decode(), 'next': '/moderation'},
+    )
+
+    assert response.status_code == 302
+    assert response.headers['Location'].endswith('/moderation')
+
+
+def test_event_explorer_ban_accepts_meta_csrf_header(admin_app, monkeypatch):
+    _app_module, flask_app, users = admin_app
+    monkeypatch.setitem(flask_app.config, 'WTF_CSRF_ENABLED', True)
+    client = _client_for(flask_app, users['moderator'])
+    page = client.get('/events')
+    token = re.search(
+        rb'<meta name="csrf-token" content="([^"]+)">',
+        page.data,
+    ).group(1).decode()
+
+    response = client.post(
+        '/moderation/ban-by-pubkey',
+        data={'pubkey': 'c' * 64, 'reason': 'Spam'},
+        headers={'X-CSRFToken': token},
+    )
+
+    assert response.status_code == 200
 
 
 def test_metadata_lookup_caps_relays_and_content_size(admin_app, monkeypatch):
