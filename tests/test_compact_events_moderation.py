@@ -48,6 +48,15 @@ def test_moderation_static_and_dynamic_reports_share_compact_structure():
     assert "detailsButton.setAttribute('aria-expanded', 'false')" in MODERATION
 
 
+def test_moderation_report_details_link_to_and_preview_reported_event():
+    assert "url_for('events', search_type='event_id', event_id=report.reported_event_id)" in MODERATION
+    assert 'class="moderation-event-link"' in MODERATION
+    assert "node('a', 'moderation-event-link'" in MODERATION
+    assert 'data-report-details' in MODERATION
+    assert "event.target.closest('[data-report-details]')" in MODERATION
+    assert 'loadReportEventPreview(detail)' in MODERATION
+
+
 def test_compact_density_is_desktop_only_and_mobile_safeguards_remain():
     desktop_start = STYLES.index('@media (min-width: 992px)')
     desktop = STYLES[desktop_start:]

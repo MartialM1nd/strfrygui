@@ -576,6 +576,45 @@ def test_metadata_endpoint_rejects_invalid_pubkey_before_lookup(admin_app, monke
     assert response.status_code == 400
 
 
+def test_moderation_event_preview_endpoint_returns_reported_event(admin_app, monkeypatch):
+    app_module, flask_app, users = admin_app
+    event_id = 'a' * 64
+    relay_event = {
+        'id': event_id,
+        'pubkey': 'b' * 64,
+        'kind': 1,
+        'content': 'Reported content',
+        'tags': [['t', 'spam']],
+        'created_at': 1_700_000_000,
+        'sig': 'not exposed',
+    }
+    calls = []
+    monkeypatch.setattr(
+        app_module,
+        'scan_events',
+        lambda event_filter, limit: calls.append((event_filter, limit)) or [relay_event],
+    )
+
+    response = _client_for(flask_app, users['moderator']).get(f'/api/event/{event_id}')
+
+    assert response.status_code == 200
+    assert response.get_json() == {
+        key: relay_event[key]
+        for key in ('id', 'pubkey', 'kind', 'content', 'tags', 'created_at')
+    }
+    assert calls == [({'ids': [event_id]}, 1)]
+
+
+def test_moderation_event_preview_endpoint_reports_missing_event(admin_app, monkeypatch):
+    app_module, flask_app, users = admin_app
+    monkeypatch.setattr(app_module, 'scan_events', lambda event_filter, limit: [])
+
+    response = _client_for(flask_app, users['moderator']).get('/api/event/' + 'a' * 64)
+
+    assert response.status_code == 404
+    assert response.get_json() == {'error': 'Event not found'}
+
+
 def test_metadata_lookup_caps_relays_and_content_size(admin_app, monkeypatch):
     app_module, _flask_app, _users = admin_app
     calls = []

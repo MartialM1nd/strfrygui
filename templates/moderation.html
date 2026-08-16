@@ -139,7 +139,7 @@
                     </div>
                 </div>
                 <div class="moderation-report-actions" aria-label="Actions for report {{ report.id }}">
-                    <button class="btn btn-sm btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#report-detail-{{ report.id }}" aria-expanded="false" aria-controls="report-detail-{{ report.id }}"><i class="bi bi-eye"></i> Details</button>
+                    <button class="btn btn-sm btn-outline-secondary" type="button" data-report-details data-bs-toggle="collapse" data-bs-target="#report-detail-{{ report.id }}" aria-expanded="false" aria-controls="report-detail-{{ report.id }}"><i class="bi bi-eye"></i> Details</button>
                     {% if report.banned %}
                     <button class="btn btn-sm btn-outline-danger" type="button" data-report-action="delete" data-report-id="{{ report.id }}"><i class="bi bi-trash"></i> Delete report</button>
                     {% else %}
@@ -152,7 +152,11 @@
                     <div class="moderation-detail-grid">
                         <div><span class="dashboard-metric-label">Report event</span><code class="moderation-detail-identifier" title="{{ report.event_id }}">{{ report.event_id }}</code></div>
                         <div><span class="dashboard-metric-label">Reported pubkey</span><code class="moderation-detail-identifier" title="{{ report.reported_pubkey or 'N/A' }}">{{ report.reported_pubkey or 'N/A' }}</code></div>
-                        <div><span class="dashboard-metric-label">Reported event</span><code class="moderation-detail-identifier" title="{{ report.reported_event_id or 'N/A' }}">{{ report.reported_event_id or 'N/A' }}</code></div>
+                        <div>
+                            <span class="dashboard-metric-label">Reported event</span>
+                            {% if report.reported_event_id %}<a class="moderation-event-link" href="{{ url_for('events', search_type='event_id', event_id=report.reported_event_id) }}" title="View event {{ report.reported_event_id }}"><code class="moderation-detail-identifier">{{ report.reported_event_id }}</code></a>
+                            {% else %}<code class="moderation-detail-identifier" title="N/A">N/A</code>{% endif %}
+                        </div>
                     </div>
                     <div class="mt-3">
                         <div class="dashboard-metric-label mb-1">Full reporter note</div>
@@ -356,6 +360,18 @@ function detailValue(label, value) {
     return wrapper;
 }
 
+function eventDetailValue(eventId) {
+    if (!eventId) return detailValue('Reported event', null);
+    const wrapper = node('div');
+    const link = node('a', 'moderation-event-link');
+    const params = new URLSearchParams({ search_type: 'event_id', event_id: eventId });
+    link.href = '/events?' + params.toString();
+    link.title = 'View event ' + eventId;
+    link.appendChild(node('code', 'moderation-detail-identifier', eventId));
+    wrapper.append(node('span', 'dashboard-metric-label', 'Reported event'), link);
+    return wrapper;
+}
+
 function createReportCard(report) {
     const card = node('article', 'moderation-report-card compact-record');
     if (report.banned) card.classList.add('is-banned');
@@ -395,6 +411,7 @@ function createReportCard(report) {
     actions.setAttribute('aria-label', 'Actions for report ' + report.id);
     const detailsButton = node('button', 'btn btn-sm btn-outline-secondary');
     detailsButton.type = 'button';
+    detailsButton.dataset.reportDetails = '';
     detailsButton.dataset.bsToggle = 'collapse';
     detailsButton.dataset.bsTarget = '#report-detail-' + report.id;
     detailsButton.setAttribute('aria-expanded', 'false');
@@ -416,7 +433,7 @@ function createReportCard(report) {
     detailGrid.append(
         detailValue('Report event', report.event_id),
         detailValue('Reported pubkey', report.reported_pubkey),
-        detailValue('Reported event', report.reported_event_id)
+        eventDetailValue(report.reported_event_id)
     );
     detail.appendChild(detailGrid);
     const note = node('div', 'mt-3');
@@ -469,6 +486,12 @@ function submitReportAction(action, reportId, reason) {
 }
 
 reportList.addEventListener('click', function(event) {
+    const detailsButton = event.target.closest('[data-report-details]');
+    if (detailsButton) {
+        const detail = document.querySelector(detailsButton.dataset.bsTarget);
+        loadReportEventPreview(detail);
+        return;
+    }
     const button = event.target.closest('[data-report-action]');
     if (!button) return;
     const action = button.dataset.reportAction;
@@ -490,12 +513,11 @@ document.getElementById('confirmBanButton').addEventListener('click', function()
     submitReportAction('ban', reportId, reason);
 });
 
-document.addEventListener('show.bs.collapse', function(event) {
-    const detail = event.target;
-    if (!detail.classList.contains('moderation-report-detail') || !detail.dataset.eventId) return;
+function loadReportEventPreview(detail) {
+    if (!detail || !detail.classList.contains('moderation-report-detail') || !detail.dataset.eventId) return;
     const preview = detail.querySelector('[data-event-preview]');
     if (preview && !preview.dataset.loaded && !preview.dataset.loading) loadEventPreview(preview, detail.dataset.eventId);
-});
+}
 
 async function loadEventPreview(preview, eventId) {
     preview.dataset.loading = 'true';
