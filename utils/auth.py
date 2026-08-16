@@ -4,24 +4,33 @@ from flask_login import current_user, logout_user
 from config import Security
 
 
+def wants_json_response():
+    """Return whether the caller explicitly expects a JSON response."""
+    return (
+        request.path.startswith('/api/')
+        or request.accept_mimetypes['application/json']
+        > request.accept_mimetypes['text/html']
+    )
+
+
 def role_required(*roles):
     def decorator(f):
         @wraps(f)
         def decorated_function(*args, **kwargs):
             if not current_user.is_authenticated:
-                if request.path.startswith('/api/'):
+                if wants_json_response():
                     return jsonify({'error': 'Authentication required.'}), 401
                 return redirect(url_for('login'))
 
             if not current_user.is_active:
                 logout_user()
-                if request.path.startswith('/api/'):
+                if wants_json_response():
                     return jsonify({'error': 'Authentication required.'}), 401
                 flash('Your account has been deactivated.', 'danger')
                 return redirect(url_for('login'))
             
             if current_user.role not in roles:
-                if request.path.startswith('/api/'):
+                if wants_json_response():
                     return jsonify({'error': 'Permission denied.'}), 403
                 flash('You do not have permission to access this page.', 'danger')
                 return redirect(url_for('index'))
@@ -36,19 +45,19 @@ def permission_required(permission):
         @wraps(f)
         def decorated_function(*args, **kwargs):
             if not current_user.is_authenticated:
-                if request.path.startswith('/api/'):
+                if wants_json_response():
                     return jsonify({'error': 'Authentication required.'}), 401
                 return redirect(url_for('login'))
 
             if not current_user.is_active:
                 logout_user()
-                if request.path.startswith('/api/'):
+                if wants_json_response():
                     return jsonify({'error': 'Authentication required.'}), 401
                 flash('Your account has been deactivated.', 'danger')
                 return redirect(url_for('login'))
             
             if not Security.has_permission(current_user.role, permission):
-                if request.path.startswith('/api/'):
+                if wants_json_response():
                     return jsonify({'error': 'Permission denied.'}), 403
                 flash('You do not have permission to perform this action.', 'danger')
                 return redirect(url_for('index'))

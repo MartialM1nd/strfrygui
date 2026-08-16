@@ -39,7 +39,13 @@ from utils.strfry import (
     validate_filter_json, hex_to_npub, npub_to_hex,
 )
 from utils.metrics import get_summary, MetricsError
-from utils.auth import admin_required, moderator_required, viewer_or_higher, permission_required
+from utils.auth import (
+    admin_required,
+    moderator_required,
+    permission_required,
+    viewer_or_higher,
+    wants_json_response,
+)
 from utils.nostr_auth import NostrAuthError, issue_challenge, normalize_pubkey, verify_request
 from utils.moderation import ModerationDecisions, ModerationError
 from utils.moderation_reports import sync_moderation_reports
@@ -294,10 +300,14 @@ def _username_in_use(username, user_id=None):
 
 app = Flask(__name__)
 app.config.from_object(Config)
-app.wsgi_app = ProxyFix(app.wsgi_app, x_for=app.config['TRUSTED_PROXY_COUNT'])
+app.wsgi_app = ProxyFix(
+    app.wsgi_app,
+    x_for=app.config['TRUSTED_PROXY_COUNT'],
+    x_proto=app.config['TRUSTED_PROXY_COUNT'],
+)
 
 db.init_app(app)
-csrf = CSRFProtect(app)
+csrf = CSRFProtect()
 
 login_manager = LoginManager(app)
 login_manager.login_view = 'login'
@@ -328,6 +338,9 @@ def apply_request_limits():
         raise RequestEntityTooLarge()
     if request.content_length is None and request.environ.get('HTTP_TRANSFER_ENCODING'):
         request.get_data(cache=True)
+
+
+csrf.init_app(app)
 
 
 @app.after_request
@@ -2636,6 +2649,8 @@ def ban_by_pubkey():
     reason = request.form.get('reason', '').strip() or 'Banned from events page'
     
     if not pubkey:
+        if wants_json_response():
+            return jsonify({'error': 'No pubkey provided'}), 400
         return 'No pubkey provided', 400
     
     try:
@@ -2644,9 +2659,14 @@ def ban_by_pubkey():
         message = 'Ban recorded.'
         if outcome.warnings:
             message += ' ' + ' '.join(outcome.warnings)
+        if wants_json_response():
+            return jsonify({'message': message})
         return message, 200
     except ModerationError as e:
-        return f'Failed to ban user: {e}', 500
+        message = f'Failed to ban user: {e}'
+        if wants_json_response():
+            return jsonify({'error': message}), 500
+        return message, 500
 
 
 @app.route('/moderation/domain', methods=['POST'])
@@ -3024,7 +3044,13 @@ def rotate_nostr_key():
 
 @app.errorhandler(CSRFError)
 def csrf_error(error):
-    if request.path.startswith('/api/'):
+    app.logger.warning(
+        'CSRF validation failed for %s %s: %s',
+        request.method,
+        request.path,
+        error.description,
+    )
+    if wants_json_response():
         return jsonify({'error': 'Request validation failed.'}), 400
     return _error_response(
         400,
@@ -3035,7 +3061,7 @@ def csrf_error(error):
 
 @app.errorhandler(404)
 def not_found_error(error):
-    if request.path.startswith('/api/'):
+    if wants_json_response():
         return jsonify({'error': 'The requested API endpoint does not exist.'}), 404
     return _error_response(
         404,
@@ -3046,7 +3072,7 @@ def not_found_error(error):
 
 @app.errorhandler(RequestEntityTooLarge)
 def request_too_large(error):
-    if request.path.startswith('/api/'):
+    if wants_json_response():
         return jsonify({'error': 'Request body is too large.'}), 413
     return _error_response(
         413,
@@ -3057,7 +3083,7 @@ def request_too_large(error):
 
 @app.errorhandler(429)
 def rate_limit_exceeded(error):
-    if request.path.startswith('/api/'):
+    if wants_json_response():
         return jsonify({'error': 'Too many requests. Please try again later.'}), 429
     return _error_response(
         429,
@@ -3069,7 +3095,7 @@ def rate_limit_exceeded(error):
 @app.errorhandler(500)
 def internal_error(error):
     db.session.rollback()
-    if request.path.startswith('/api/'):
+    if wants_json_response():
         return jsonify({'error': 'The request could not be completed.'}), 500
     return _error_response(
         500,

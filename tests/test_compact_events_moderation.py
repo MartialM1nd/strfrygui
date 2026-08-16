@@ -36,6 +36,8 @@ def test_event_rows_keep_compact_content_identifiers_and_sensitive_details():
 def test_event_author_ban_posts_csrf_token_in_form_body():
     assert "const csrfToken = document.querySelector('meta[name=\"csrf-token\"]')?.content || '';" in EVENTS
     assert 'new URLSearchParams({ csrf_token: csrfToken, pubkey: pendingEventAction.pubkey, reason })' in EVENTS
+    assert "headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'application/json' }" in EVENTS
+    assert 'await readJsonResponse(response' in EVENTS
 
 
 def test_moderation_static_and_dynamic_reports_share_compact_structure():

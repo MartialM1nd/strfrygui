@@ -683,7 +683,7 @@ def test_moderation_report_action_form_submits_valid_csrf_token(admin_app, monke
     assert response.headers['Location'].endswith('/moderation')
 
 
-def test_event_explorer_ban_accepts_meta_csrf_header(admin_app, monkeypatch):
+def test_event_explorer_ban_accepts_csrf_body_and_returns_json(admin_app, monkeypatch):
     _app_module, flask_app, users = admin_app
     monkeypatch.setitem(flask_app.config, 'WTF_CSRF_ENABLED', True)
     client = _client_for(flask_app, users['moderator'])
@@ -695,11 +695,53 @@ def test_event_explorer_ban_accepts_meta_csrf_header(admin_app, monkeypatch):
 
     response = client.post(
         '/moderation/ban-by-pubkey',
-        data={'pubkey': 'c' * 64, 'reason': 'Spam'},
-        headers={'X-CSRFToken': token},
+        data={'csrf_token': token, 'pubkey': 'c' * 64, 'reason': 'Spam'},
+        headers={'Accept': 'application/json', 'X-CSRFToken': token},
     )
 
     assert response.status_code == 200
+    assert response.is_json
+    assert response.get_json()['message'].startswith('Ban recorded.')
+
+
+def test_event_explorer_ban_returns_json_for_csrf_failure(admin_app, monkeypatch):
+    _app_module, flask_app, users = admin_app
+    monkeypatch.setitem(flask_app.config, 'WTF_CSRF_ENABLED', True)
+
+    response = _client_for(flask_app, users['moderator']).post(
+        '/moderation/ban-by-pubkey',
+        data={'pubkey': 'c' * 64, 'reason': 'Spam'},
+        headers={'Accept': 'application/json'},
+    )
+
+    assert response.status_code == 400
+    assert response.is_json
+    assert response.get_json() == {'error': 'Request validation failed.'}
+
+
+def test_event_explorer_ban_returns_json_when_authentication_expires(admin_app, monkeypatch):
+    _app_module, flask_app, users = admin_app
+    monkeypatch.setitem(flask_app.config, 'WTF_CSRF_ENABLED', True)
+    client = _client_for(flask_app, users['moderator'])
+    page = client.get('/events')
+    token = re.search(
+        rb'<meta name="csrf-token" content="([^"]+)">',
+        page.data,
+    ).group(1).decode()
+    with flask_app.app_context():
+        user = db.session.get(User, users['moderator'])
+        user.auth_version += 1
+        db.session.commit()
+
+    response = client.post(
+        '/moderation/ban-by-pubkey',
+        data={'csrf_token': token, 'pubkey': 'c' * 64, 'reason': 'Spam'},
+        headers={'Accept': 'application/json'},
+    )
+
+    assert response.status_code == 401
+    assert response.is_json
+    assert response.get_json() == {'error': 'Authentication required.'}
 
 
 def test_metadata_lookup_caps_relays_and_content_size(admin_app, monkeypatch):

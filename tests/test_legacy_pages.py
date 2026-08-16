@@ -313,6 +313,29 @@ def test_oversized_api_body_is_rejected_before_json_parsing(legacy_app):
     assert response.get_json() == {'error': 'Request body is too large.'}
 
 
+def test_request_limit_runs_before_csrf_form_parsing(legacy_app):
+    _app_module, flask_app = legacy_app
+    original_limit = flask_app.config['REQUEST_MAX_BYTES']
+    flask_app.config['REQUEST_MAX_BYTES'] = 1024
+    flask_app.config['WTF_CSRF_ENABLED'] = True
+    try:
+        response = flask_app.test_client().post(
+            '/logout',
+            data={'padding': 'x' * 2048},
+        )
+    finally:
+        flask_app.config['WTF_CSRF_ENABLED'] = False
+        flask_app.config['REQUEST_MAX_BYTES'] = original_limit
+
+    assert response.status_code == 413
+
+
+def test_proxy_fix_trusts_forwarded_proto_from_configured_proxy(legacy_app):
+    _app_module, flask_app = legacy_app
+
+    assert flask_app.wsgi_app.x_proto == Config.TRUSTED_PROXY_COUNT
+
+
 def test_protected_api_csrf_rejection_is_json(legacy_app):
     app_module, flask_app = legacy_app
     app_module.limiter.reset()
